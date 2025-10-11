@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+serialport = "4.7.3"
+
+eframe = { version = "0.32.3", features = ["serde", "persistence"] }
+serde = { version = "1.0", features = ["derive"] }
+
