@@ -12,6 +12,9 @@ use std::{
 
 /// Main entry point
 fn main() {
+    // Initialize env_logger for debugging
+    env_logger::init();
+
     let (to_ui_tx, to_ui_rx) = mpsc::channel::<app_state::MessageToUi>();
     let (to_serial_tx, to_serial_rx) = mpsc::channel::<app_state::MessageToSerial>();
 

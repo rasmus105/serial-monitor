@@ -1,4 +1,4 @@
-// TODO: Add log crate to Cargo.toml for proper logging
+use log::{debug, error, info, warn};
 use std::{io, thread::sleep, time::Duration};
 
 use crate::app_state::{self, MessageToUi};
@@ -28,7 +28,7 @@ fn handle_rx(state: &mut SerialState, message: app_state::MessageToSerial) {
     match message {
         app_state::MessageToSerial::Connect(device) => {
             if let ConnectionStatus::Connected(_) = state.status {
-                eprintln!("Invalid message to serial! (can not connect when already connected)");
+                error!("Invalid message to serial! (can not connect when already connected)");
                 return;
             }
 
@@ -44,19 +44,19 @@ fn handle_rx(state: &mut SerialState, message: app_state::MessageToSerial) {
                         .to_ui_tx
                         .send(app_state::MessageToUi::ConnectionError(e.to_string()))
                     {
-                        eprintln!("Failed to send connection error to UI: {}", send_err);
+                        error!("Failed to send connection error to UI: {}", send_err);
                     }
                 }
             }
         }
         app_state::MessageToSerial::Disconnect => {
             if let ConnectionStatus::NotConnected = state.status {
-                eprintln!("Invalid message to serial! (can not disconnect when not connected)");
+                error!("Invalid message to serial! (can not disconnect when not connected)");
                 return;
             }
 
             state.status = ConnectionStatus::NotConnected;
-            println!("Serial port disconnected");
+            info!("Serial port disconnected");
         }
     }
 }
@@ -67,7 +67,7 @@ fn connected_loop(state: &mut SerialState) {
     loop {
         // Check if we should disconnect
         if let ConnectionStatus::NotConnected = state.status {
-            println!("Connection lost, exiting connected loop");
+            debug!("Connection lost, exiting connected loop");
             break;
         }
 
@@ -96,7 +96,7 @@ fn connected_loop(state: &mut SerialState) {
                                     .to_ui_tx
                                     .send(MessageToUi::UTF8Traffic(complete_lines))
                                 {
-                                    eprintln!("Failed to send UTF8 traffic to UI: {}", e);
+                                    error!("Failed to send UTF8 traffic to UI: {}", e);
                                 }
 
                                 // Keep the last incomplete line
@@ -106,7 +106,7 @@ fn connected_loop(state: &mut SerialState) {
 
                         if state.settings.parse_raw {
                             if let Err(e) = state.to_ui_tx.send(MessageToUi::RawTraffic(buf)) {
-                                eprintln!("Failed to send raw traffic to UI: {}", e);
+                                error!("Failed to send raw traffic to UI: {}", e);
                             }
                         }
                     }
@@ -115,12 +115,12 @@ fn connected_loop(state: &mut SerialState) {
                     // Timeout is expected, continue
                 }
                 Err(e) => {
-                    eprintln!("Serial read error: {}", e);
+                    error!("Serial read error: {}", e);
                     if let Err(send_err) = state
                         .to_ui_tx
                         .send(MessageToUi::ConnectionError(e.to_string()))
                     {
-                        eprintln!("Failed to send read error to UI: {}", send_err);
+                        error!("Failed to send read error to UI: {}", send_err);
                     }
                     state.status = ConnectionStatus::NotConnected;
                     break;
@@ -215,7 +215,7 @@ pub fn serial_thread(
                 .to_ui_tx
                 .send(app_state::MessageToUi::AvailableDevices(port_names))
             {
-                eprintln!("Failed to send available devices to UI: {}", e);
+                error!("Failed to send available devices to UI: {}", e);
             }
         }
 
