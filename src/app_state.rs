@@ -5,12 +5,17 @@ use serde::{Deserialize, Serialize};
 /// UI thread)
 pub enum MessageToUi {
     LostConnection,
-    Connected(String), // contains device which was connected to
+    ConnectionError(String),       // contains error description
+    Connected(String),             // contains device which was connected to
+    AvailableDevices(Vec<String>), // contains list of device names connected to
+    UTF8Traffic(Vec<String>),
+    RawTraffic(Vec<u8>),
 }
 
 /// Messages to Serial Connection thread (contains all possible data that
 /// can be sent to the serial thread)
 pub enum MessageToSerial {
+    Disconnect,
     Connect(String), // request a connection to a specific device
 }
 
