@@ -17,6 +17,7 @@ use crate::app::{
     App, ConfigField, ConnectionState, HexGrouping, InputMode, PortSelectFocus, TrafficConfigField,
     TrafficFocus, View, WrapMode,
 };
+use crate::command::{GlobalNavCommand, PortSelectCommand, TrafficCommand};
 use crate::settings::{AnyCommand, SettingsTab};
 use crate::wrap::{truncate_line, wrap_line, GutterConfig};
 
@@ -51,7 +52,7 @@ fn format_hex_grouped(hex: &str, grouping: HexGrouping) -> String {
             let compact: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
             let bytes_per_group = grouping.bytes_per_group();
             let chars_per_group = bytes_per_group * 2; // 2 hex chars per byte
-            
+
             compact
                 .as_bytes()
                 .chunks(chars_per_group)
@@ -85,6 +86,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render settings panel as overlay if open
     if app.settings_panel.open {
         render_settings_panel(frame, app);
+    }
+
+    // Render quit confirmation dialog as overlay if showing
+    if app.traffic.quit_confirm {
+        render_quit_confirm_dialog(frame);
     }
 }
 
@@ -144,10 +150,17 @@ fn render_port_list(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
+    // Build dynamic title with actual keybindings
+    let path_key = app.settings.keybindings.port_select.shortcut_hint(PortSelectCommand::EnterPortPath).unwrap_or_else(|| ":".to_string());
+    let refresh_key = app.settings.keybindings.port_select.shortcut_hint(PortSelectCommand::RefreshPorts).unwrap_or_else(|| "r".to_string());
+    let toggle_key = app.settings.keybindings.port_select.shortcut_hint(PortSelectCommand::ToggleConfigPanel).unwrap_or_else(|| "t".to_string());
+    let nav_keys = app.settings.keybindings.global_nav.shortcut_hint(GlobalNavCommand::Down).unwrap_or_else(|| "j".to_string());
+    let confirm_key = app.settings.keybindings.global_nav.shortcut_hint(GlobalNavCommand::Confirm).unwrap_or_else(|| "Enter".to_string());
+
     let title = if app.port_select.ports.is_empty() {
-        " Select Port [:: path, r: refresh, t: toggle config] "
+        format!(" Select Port [{}: path, {}: refresh, {}: toggle config] ", path_key, refresh_key, toggle_key)
     } else {
-        " Select Port [j/k: nav, Enter: connect, :: path, r: refresh] "
+        format!(" Select Port [{}: nav, {}: connect, {}: path, {}: refresh] ", nav_keys, confirm_key, path_key, refresh_key)
     };
 
     let border_style = if is_focused {
@@ -176,8 +189,13 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
+    // Build dynamic title
+    let confirm_key = app.settings.keybindings.global_nav.shortcut_hint(GlobalNavCommand::Confirm).unwrap_or_else(|| "Enter".to_string());
+    let toggle_key = app.settings.keybindings.port_select.shortcut_hint(PortSelectCommand::ToggleConfigPanel).unwrap_or_else(|| "t".to_string());
+    let title = format!(" Config [{}: select, {}: toggle] ", confirm_key, toggle_key);
+
     let block = Block::default()
-        .title(" Config [Enter: select, t: toggle] ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(border_style);
 
@@ -187,7 +205,8 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     // Build config lines using ConfigField iterator
     let lines: Vec<Line> = ConfigField::iter()
         .map(|field| {
-            let is_selected = app.port_select.config_field == field && (is_focused || dropdown_open);
+            let is_selected =
+                app.port_select.config_field == field && (is_focused || dropdown_open);
             let prefix = if is_selected { "> " } else { "  " };
 
             let label_style = if is_selected {
@@ -306,23 +325,29 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_focused = app.traffic.focus == TrafficFocus::Traffic;
 
+    // Get dynamic keybinding hints
+    let search_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::EnterSearchMode).unwrap_or_else(|| "/".to_string());
+    let next_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::NextMatch).unwrap_or_else(|| "n".to_string());
+    let prev_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::PrevMatch).unwrap_or_else(|| "N".to_string());
+    let config_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::ToggleConfigPanel).unwrap_or_else(|| "c".to_string());
+    let send_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::EnterSendMode).unwrap_or_else(|| "i".to_string());
+
     let title = if app.file_send.handle.is_some() {
         // Show file send in progress
         let progress = app.file_send.progress.as_ref();
-        let pct = progress.map(|p| (p.percentage() * 100.0) as u8).unwrap_or(0);
-        format!(
-            " Traffic [{}] [Sending: {}%] ",
-            app.traffic.encoding, pct
-        )
+        let pct = progress
+            .map(|p| (p.percentage() * 100.0) as u8)
+            .unwrap_or(0);
+        format!(" Traffic [{}] [Sending: {}%] ", app.traffic.encoding, pct)
     } else if app.search.pattern.is_some() {
         format!(
-            " Traffic [{}] [/: search, n/N: next/prev] ",
-            app.traffic.encoding
+            " Traffic [{}] [{}: search, {}/{}: next/prev] ",
+            app.traffic.encoding, search_key, next_key, prev_key
         )
     } else {
         format!(
-            " Traffic [{}] [c: config, /: search, e: enc, i: send] ",
-            app.traffic.encoding
+            " Traffic [{}] [{}: config, {}: search, {}: send] ",
+            app.traffic.encoding, config_key, search_key, send_key
         )
     };
 
@@ -360,8 +385,7 @@ fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 "No data matches current filters (check Show TX/RX settings)"
             };
-            let paragraph =
-                Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
+            let paragraph = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
             frame.render_widget(paragraph, inner);
             // Update cached values for scroll logic
             app.traffic.total_rows = 0;
@@ -439,7 +463,11 @@ fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
                 },
                 line_number_width,
                 timestamp: if app.traffic.show_timestamps {
-                    Some(app.traffic.timestamp_format.format(chunk.timestamp, session_start))
+                    Some(
+                        app.traffic
+                            .timestamp_format
+                            .format(chunk.timestamp, session_start),
+                    )
                 } else {
                     None
                 },
@@ -520,8 +548,8 @@ fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
             let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
 
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("▲"))
-                .end_symbol(Some("▼"))
+                .begin_symbol(Some("┐"))
+                .end_symbol(Some("┘"))
                 .track_symbol(Some("│"))
                 .thumb_symbol("█");
 
@@ -540,8 +568,13 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
+    // Build dynamic title
+    let back_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::FocusTraffic).unwrap_or_else(|| "h".to_string());
+    let close_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::ToggleConfigPanel).unwrap_or_else(|| "c".to_string());
+    let title = format!(" Config [{}: back, {}: close] ", back_key, close_key);
+
     let block = Block::default()
-        .title(" Config [h: back, c: close] ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(border_style);
 
@@ -567,7 +600,9 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         // Header: Connection Info (read-only)
         Line::from(Span::styled(
             connection_sep,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
             Span::styled("  Port: ", Style::default().fg(Color::DarkGray)),
@@ -581,7 +616,9 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         // Header: Settings
         Line::from(Span::styled(
             settings_sep,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         )),
     ];
 
@@ -854,7 +891,12 @@ fn render_keybindings_tab(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     let mut current_category = "";
 
-    for (idx, cmd) in all_commands.iter().enumerate().skip(start).take(end - start) {
+    for (idx, cmd) in all_commands
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(end - start)
+    {
         let category = cmd.category();
 
         // Add category header if changed
@@ -916,11 +958,11 @@ fn render_keybindings_tab(frame: &mut Frame, app: &App, area: Rect) {
     // Render scrollbar if needed
     if all_commands.len() > visible_height {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("↑"))
-            .end_symbol(Some("↓"));
+            .begin_symbol(Some("┐"))
+            .end_symbol(Some("┘"));
 
-        let mut scrollbar_state = ScrollbarState::new(all_commands.len())
-            .position(app.settings_panel.selected_command);
+        let mut scrollbar_state =
+            ScrollbarState::new(all_commands.len()).position(app.settings_panel.selected_command);
 
         let scrollbar_area = Rect {
             x: area.x + area.width.saturating_sub(1),
@@ -947,3 +989,53 @@ fn render_settings_help(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(help, area);
 }
 
+// =============================================================================
+// Quit Confirmation Dialog
+// =============================================================================
+
+fn render_quit_confirm_dialog(frame: &mut Frame) {
+    // Create a small centered dialog
+    let area = frame.area();
+    
+    // Dialog dimensions
+    let dialog_width = 40u16;
+    let dialog_height = 5u16;
+    
+    // Center the dialog
+    let x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(dialog_height)) / 2;
+    
+    let dialog_area = Rect {
+        x,
+        y,
+        width: dialog_width.min(area.width),
+        height: dialog_height.min(area.height),
+    };
+
+    // Clear the area behind the dialog
+    frame.render_widget(Clear, dialog_area);
+
+    // Create the dialog block
+    let block = Block::default()
+        .title(" Disconnect? ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Black));
+
+    let inner = block.inner(dialog_area);
+    frame.render_widget(block, dialog_area);
+
+    // Render the dialog content
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(": Yes    "),
+            Span::styled("N/q/Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(": Cancel"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(paragraph, inner);
+}

@@ -470,6 +470,20 @@ impl SettingsPanelState {
         }
     }
 
+    /// Go to top (first command)
+    pub fn go_to_top(&mut self) {
+        self.selected_command = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Go to bottom (last command)
+    pub fn go_to_bottom(&mut self, visible_height: usize) {
+        let max = AnyCommand::all().len().saturating_sub(1);
+        self.selected_command = max;
+        // Adjust scroll to show bottom
+        self.scroll_offset = max.saturating_sub(visible_height.saturating_sub(1));
+    }
+
     /// Start recording a new key binding
     pub fn start_recording(&mut self) {
         self.recording_key = true;
@@ -642,8 +656,8 @@ pub enum SettingsCommand {
 /// Note: Navigation (j/k, Ctrl+u/d) is handled by GlobalNavCommand first
 pub fn map_settings_key(event: &KeyEvent) -> Option<SettingsCommand> {
     match event.code {
-        // Esc and Enter are also handled by GlobalNavCommand, but kept here as fallback
-        KeyCode::Esc => Some(SettingsCommand::Close),
+        // Esc, q, and Enter are also handled by GlobalNavCommand, but kept here as fallback
+        KeyCode::Esc | KeyCode::Char('q') => Some(SettingsCommand::Close),
         KeyCode::Tab if event.modifiers.contains(KeyModifiers::SHIFT) => {
             Some(SettingsCommand::PrevTab)
         }

@@ -687,6 +687,8 @@ pub struct TrafficState {
     pub total_rows: usize,
     /// Visible height (cached during render)
     pub visible_height: usize,
+    /// Whether quit confirmation dialog is showing
+    pub quit_confirm: bool,
 }
 
 impl Default for TrafficState {
@@ -712,6 +714,7 @@ impl Default for TrafficState {
             hex_grouping: HexGrouping::default(),
             total_rows: 0,
             visible_height: 0,
+            quit_confirm: false,
         }
     }
 }
@@ -1087,8 +1090,14 @@ impl App {
                     self.needs_full_clear = true;
                     return;
                 }
-                // Top/Bottom not used in settings panel (could add later)
-                GlobalNavCommand::Top | GlobalNavCommand::Bottom => {}
+                GlobalNavCommand::Top => {
+                    self.settings_panel.go_to_top();
+                    return;
+                }
+                GlobalNavCommand::Bottom => {
+                    self.settings_panel.go_to_bottom(visible_height);
+                    return;
+                }
             }
         }
 
@@ -1300,6 +1309,12 @@ impl App {
     }
 
     fn handle_key_traffic(&mut self, key: KeyEvent) {
+        // Handle quit confirmation dialog first
+        if self.traffic.quit_confirm {
+            self.handle_key_quit_confirm(key);
+            return;
+        }
+
         let config_visible = self.traffic.config_panel_visible;
         let config_focused = self.traffic.focus == TrafficFocus::Config;
 
@@ -1405,10 +1420,7 @@ impl App {
 
         match cmd {
             TrafficCommand::Disconnect => {
-                self.disconnect();
-                self.view = View::PortSelect;
-                self.needs_full_clear = true;
-                self.status = "Disconnected.".to_string();
+                self.traffic.quit_confirm = true;
             }
             TrafficCommand::CycleEncoding => {
                 self.traffic.encoding = self.traffic.encoding.cycle_next();
@@ -1474,6 +1486,26 @@ impl App {
                     "Timestamps: OFF".to_string()
                 };
             }
+        }
+    }
+
+    fn handle_key_quit_confirm(&mut self, key: KeyEvent) {
+        match key.code {
+            // Y/y confirms disconnect
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.traffic.quit_confirm = false;
+                self.disconnect();
+                self.view = View::PortSelect;
+                self.needs_full_clear = true;
+                self.status = "Disconnected.".to_string();
+            }
+            // n/N/q/Escape cancels
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') | KeyCode::Esc => {
+                self.traffic.quit_confirm = false;
+                self.status = "Disconnect cancelled.".to_string();
+            }
+            // Any other key is ignored
+            _ => {}
         }
     }
 
