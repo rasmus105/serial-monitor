@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
+        ScrollbarState, Tabs,
     },
     Frame,
 };
@@ -17,8 +17,8 @@ use crate::app::{
     App, ConfigField, ConnectionState, HexGrouping, InputMode, PortSelectFocus, TrafficConfigField,
     TrafficFocus, View, WrapMode,
 };
-use crate::command::Command;
-use crate::wrap::{wrap_line, truncate_line, GutterConfig};
+use crate::settings::{AnyCommand, SettingsTab};
+use crate::wrap::{truncate_line, wrap_line, GutterConfig};
 
 /// Create a centered separator line like "──── Title ────" that spans the full width
 fn create_separator(title: &str, width: usize) -> String {
@@ -81,6 +81,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     }
 
     render_status_bar(frame, app, chunks[1]);
+
+    // Render settings panel as overlay if open
+    if app.settings_panel.open {
+        render_settings_panel(frame, app);
+    }
 }
 
 fn render_port_select(frame: &mut Frame, app: &App, area: Rect) {
@@ -614,9 +619,11 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(value, value_style)
         };
 
-        // Build label with optional shortcut hint (from associated command)
+        // Build label with optional shortcut hint (from configurable keybindings)
         let shortcut_style = Style::default().fg(Color::DarkGray);
-        let shortcut_hint = field.associated_command().and_then(|cmd| cmd.shortcut_hint());
+        let shortcut_hint = field
+            .associated_command()
+            .and_then(|cmd| app.settings.keybindings.traffic.shortcut_hint(cmd));
         let label_with_shortcut = if let Some(key) = shortcut_hint {
             vec![
                 Span::styled(prefix, label_style),
@@ -733,3 +740,210 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 }
+
+// =============================================================================
+// Settings Panel
+// =============================================================================
+
+/// Calculate centered rect with given percentage of the area
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn render_settings_panel(frame: &mut Frame, app: &App) {
+    // Create a centered floating panel (80% width, 80% height)
+    let area = centered_rect(80, 80, frame.area());
+
+    // Clear the area behind the panel
+    frame.render_widget(Clear, area);
+
+    // Create the outer block with title
+    let title = if app.settings_panel.recording_key {
+        " Settings - Press a key to bind (Esc to cancel) "
+    } else {
+        " Settings "
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    frame.render_widget(block, area);
+
+    // Inner area for content
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+
+    // Split into tabs and content
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Tabs
+            Constraint::Min(1),    // Content
+            Constraint::Length(2), // Help line
+        ])
+        .split(inner);
+
+    // Render tabs
+    render_settings_tabs(frame, app, chunks[0]);
+
+    // Render tab content
+    match app.settings_panel.tab {
+        SettingsTab::Keybindings => render_keybindings_tab(frame, app, chunks[1]),
+    }
+
+    // Render help line
+    render_settings_help(frame, app, chunks[2]);
+}
+
+fn render_settings_tabs(frame: &mut Frame, app: &App, area: Rect) {
+    let tab_titles: Vec<Line> = SettingsTab::all()
+        .iter()
+        .map(|t| Line::from(t.name()))
+        .collect();
+
+    let selected_idx = SettingsTab::all()
+        .iter()
+        .position(|&t| t == app.settings_panel.tab)
+        .unwrap_or(0);
+
+    let tabs = Tabs::new(tab_titles)
+        .select(selected_idx)
+        .style(Style::default().fg(Color::DarkGray))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .divider(" | ");
+
+    frame.render_widget(tabs, area);
+}
+
+fn render_keybindings_tab(frame: &mut Frame, app: &App, area: Rect) {
+    let all_commands = AnyCommand::all();
+    let visible_height = area.height as usize;
+
+    // Calculate visible range based on scroll offset
+    let scroll_offset = app.settings_panel.scroll_offset;
+    let start = scroll_offset;
+    let end = (scroll_offset + visible_height).min(all_commands.len());
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut current_category = "";
+
+    for (idx, cmd) in all_commands.iter().enumerate().skip(start).take(end - start) {
+        let category = cmd.category();
+
+        // Add category header if changed
+        if category != current_category {
+            current_category = category;
+            // Add empty line before category (except first)
+            if !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(vec![Span::styled(
+                format!("── {} ──", category),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )]));
+        }
+
+        // Build the command line
+        let is_selected = idx == app.settings_panel.selected_command;
+        let bindings = app.settings.get_bindings(*cmd);
+        let bindings_str = if bindings.is_empty() {
+            "<none>".to_string()
+        } else {
+            bindings
+                .iter()
+                .map(|b| b.display())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        let prefix = if is_selected { "▶ " } else { "  " };
+        let name_style = if is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let bindings_style = if is_selected {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        // Create line with command name and bindings
+        let name_width = 25;
+        let name_padded = format!("{:<width$}", cmd.name(), width = name_width);
+
+        lines.push(Line::from(vec![
+            Span::styled(prefix, name_style),
+            Span::styled(name_padded, name_style),
+            Span::styled(bindings_str, bindings_style),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
+
+    // Render scrollbar if needed
+    if all_commands.len() > visible_height {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"));
+
+        let mut scrollbar_state = ScrollbarState::new(all_commands.len())
+            .position(app.settings_panel.selected_command);
+
+        let scrollbar_area = Rect {
+            x: area.x + area.width.saturating_sub(1),
+            y: area.y,
+            width: 1,
+            height: area.height,
+        };
+
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+    }
+}
+
+fn render_settings_help(frame: &mut Frame, app: &App, area: Rect) {
+    let help_text = if app.settings_panel.recording_key {
+        "Press any key to add binding | Esc: Cancel"
+    } else {
+        "j/k: Navigate | Ctrl+u/d: Page | a: Add | d: Delete | r: Reset | Esc: Close"
+    };
+
+    let help = Paragraph::new(help_text)
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    frame.render_widget(help, area);
+}
+

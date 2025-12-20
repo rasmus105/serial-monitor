@@ -10,9 +10,9 @@ use serial_core::{
 };
 use strum::{EnumCount, EnumIter, IntoEnumIterator};
 
-use crate::command::{
-    map_dropdown_key, map_port_select_key, map_traffic_key, DropdownCommand, PortSelectCommand,
-    TrafficCommand,
+use crate::command::{map_global_nav_key, DropdownCommand, GlobalNavCommand, PortSelectCommand, TrafficCommand};
+use crate::settings::{
+    key_event_to_binding, map_settings_key, Settings, SettingsCommand, SettingsPanelState,
 };
 
 // =============================================================================
@@ -950,6 +950,10 @@ pub struct App {
     pub search: SearchState,
     /// File send state
     pub file_send: FileSendState,
+    /// Application settings (including keybindings)
+    pub settings: Settings,
+    /// Settings panel state
+    pub settings_panel: SettingsPanelState,
 
     /// Tokio runtime handle for async operations
     runtime: tokio::runtime::Handle,
@@ -980,6 +984,8 @@ impl App {
             traffic: TrafficState::default(),
             search: SearchState::default(),
             file_send: FileSendState::default(),
+            settings: Settings::default(),
+            settings_panel: SettingsPanelState::default(),
             runtime,
         }
     }
@@ -991,6 +997,19 @@ impl App {
 
     /// Handle a key event
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // Settings panel takes priority when open
+        if self.settings_panel.open {
+            self.handle_key_settings(key);
+            return;
+        }
+
+        // Check for settings toggle key (? works everywhere)
+        if key.code == KeyCode::Char('?') {
+            self.settings_panel.open();
+            self.needs_full_clear = true;
+            return;
+        }
+
         match self.input.mode {
             InputMode::Normal => match self.view {
                 View::PortSelect => self.handle_key_port_select(key),
@@ -1005,8 +1024,198 @@ impl App {
         }
     }
 
+    fn handle_key_settings(&mut self, key: KeyEvent) {
+        // If recording a key binding, capture the key
+        if self.settings_panel.recording_key {
+            // Escape cancels recording
+            if key.code == KeyCode::Esc {
+                self.settings_panel.stop_recording();
+                self.status = "Key binding cancelled.".to_string();
+                return;
+            }
+
+            // Record the binding
+            let binding = key_event_to_binding(&key);
+            if let Some(cmd) = self.settings_panel.selected_any_command() {
+                if let Some(edit_idx) = self.settings_panel.editing_binding_index {
+                    // Replace existing binding
+                    let mut bindings = self.settings.get_bindings(cmd);
+                    if edit_idx < bindings.len() {
+                        bindings[edit_idx] = binding;
+                        self.settings.set_bindings(cmd, bindings);
+                    }
+                } else {
+                    // Add new binding
+                    self.settings.add_binding(cmd, binding);
+                }
+                self.status = format!("Added binding: {}", binding.display());
+            }
+            self.settings_panel.stop_recording();
+            return;
+        }
+
+        // Use visible height for scroll calculations (approximate, will be set properly by render)
+        let visible_height = self.settings_panel_visible_height();
+
+        // First check for global navigation commands (j/k, Ctrl+u/d, etc.)
+        if let Some(nav_cmd) = map_global_nav_key(&key) {
+            match nav_cmd {
+                GlobalNavCommand::Up => {
+                    self.settings_panel.move_up(visible_height);
+                    return;
+                }
+                GlobalNavCommand::Down => {
+                    self.settings_panel.move_down(visible_height);
+                    return;
+                }
+                GlobalNavCommand::PageUp => {
+                    self.settings_panel.page_up(visible_height);
+                    return;
+                }
+                GlobalNavCommand::PageDown => {
+                    self.settings_panel.page_down(visible_height);
+                    return;
+                }
+                GlobalNavCommand::Confirm => {
+                    // Start recording to add a binding
+                    self.settings_panel.start_recording();
+                    self.status = "Press a key to add binding (Esc to cancel)...".to_string();
+                    return;
+                }
+                GlobalNavCommand::Cancel => {
+                    self.settings_panel.close();
+                    self.needs_full_clear = true;
+                    return;
+                }
+                // Top/Bottom not used in settings panel (could add later)
+                GlobalNavCommand::Top | GlobalNavCommand::Bottom => {}
+            }
+        }
+
+        // Then check for settings-specific commands
+        let Some(cmd) = map_settings_key(&key) else {
+            return;
+        };
+
+        match cmd {
+            SettingsCommand::Close => {
+                self.settings_panel.close();
+                self.needs_full_clear = true;
+            }
+            SettingsCommand::NextTab => {
+                self.settings_panel.tab = self.settings_panel.tab.next();
+            }
+            SettingsCommand::PrevTab => {
+                self.settings_panel.tab = self.settings_panel.tab.prev();
+            }
+            // Navigation is handled by global commands above, but keep as fallback
+            SettingsCommand::MoveUp => {
+                self.settings_panel.move_up(visible_height);
+            }
+            SettingsCommand::MoveDown => {
+                self.settings_panel.move_down(visible_height);
+            }
+            SettingsCommand::AddBinding => {
+                self.settings_panel.start_recording();
+                self.status = "Press a key to add binding (Esc to cancel)...".to_string();
+            }
+            SettingsCommand::DeleteBinding => {
+                // Delete the last binding for the selected command
+                if let Some(cmd) = self.settings_panel.selected_any_command() {
+                    let bindings = self.settings.get_bindings(cmd);
+                    if !bindings.is_empty() {
+                        let last = *bindings.last().unwrap();
+                        self.settings.remove_binding(cmd, &last);
+                        self.status = format!("Removed binding: {}", last.display());
+                    } else {
+                        self.status = "No bindings to remove.".to_string();
+                    }
+                }
+            }
+            SettingsCommand::ResetToDefault => {
+                if let Some(cmd) = self.settings_panel.selected_any_command() {
+                    self.settings.reset_command(cmd);
+                    self.status = format!("Reset {} to defaults.", cmd.name());
+                }
+            }
+            SettingsCommand::Confirm => {
+                // Start recording to replace/add a binding
+                self.settings_panel.start_recording();
+                self.status = "Press a key to add binding (Esc to cancel)...".to_string();
+            }
+        }
+    }
+
+    /// Get approximate visible height for settings panel
+    /// This is used for scroll calculations before rendering
+    fn settings_panel_visible_height(&self) -> usize {
+        // Approximate: 80% of terminal height minus borders/tabs/help
+        // A more accurate value gets set during rendering
+        20
+    }
+
     fn handle_key_port_select(&mut self, key: KeyEvent) {
-        let cmd = map_port_select_key(key, self.port_select.config_panel_visible);
+        // First check global navigation commands
+        if let Some(nav_cmd) = map_global_nav_key(&key) {
+            match nav_cmd {
+                GlobalNavCommand::Up => {
+                    match self.port_select.focus {
+                        PortSelectFocus::PortList => {
+                            if self.port_select.selected_port > 0 {
+                                self.port_select.selected_port -= 1;
+                            }
+                        }
+                        PortSelectFocus::Config => {
+                            self.port_select.config_field = self.port_select.config_field.prev();
+                        }
+                    }
+                    return;
+                }
+                GlobalNavCommand::Down => {
+                    match self.port_select.focus {
+                        PortSelectFocus::PortList => {
+                            if !self.port_select.ports.is_empty()
+                                && self.port_select.selected_port < self.port_select.ports.len() - 1
+                            {
+                                self.port_select.selected_port += 1;
+                            }
+                        }
+                        PortSelectFocus::Config => {
+                            self.port_select.config_field = self.port_select.config_field.next();
+                        }
+                    }
+                    return;
+                }
+                GlobalNavCommand::Confirm => {
+                    match self.port_select.focus {
+                        PortSelectFocus::PortList => {
+                            if !self.port_select.ports.is_empty() {
+                                self.connect_to_selected_port();
+                            }
+                        }
+                        PortSelectFocus::Config => {
+                            self.port_select.open_dropdown();
+                            self.input.mode = InputMode::ConfigDropdown;
+                        }
+                    }
+                    return;
+                }
+                // PageUp/PageDown/Top/Bottom/Cancel not used in port select
+                _ => {}
+            }
+        }
+
+        // Then check context-specific commands
+        let cmd = self.settings.keybindings.port_select.find_command(&key);
+
+        // Handle context-sensitive commands
+        let cmd = match cmd {
+            Some(PortSelectCommand::FocusPortList) if !self.port_select.config_panel_visible => {
+                None
+            }
+            Some(PortSelectCommand::FocusConfig) if !self.port_select.config_panel_visible => None,
+            other => other,
+        };
 
         let Some(cmd) = cmd else { return };
 
@@ -1027,66 +1236,53 @@ impl App {
             PortSelectCommand::FocusConfig => {
                 self.port_select.focus = PortSelectFocus::Config;
             }
-            PortSelectCommand::MoveUp => match self.port_select.focus {
-                PortSelectFocus::PortList => {
-                    if self.port_select.selected_port > 0 {
-                        self.port_select.selected_port -= 1;
-                    }
-                }
-                PortSelectFocus::Config => {
-                    self.port_select.config_field = self.port_select.config_field.prev();
-                }
-            },
-            PortSelectCommand::MoveDown => match self.port_select.focus {
-                PortSelectFocus::PortList => {
-                    if !self.port_select.ports.is_empty()
-                        && self.port_select.selected_port < self.port_select.ports.len() - 1
-                    {
-                        self.port_select.selected_port += 1;
-                    }
-                }
-                PortSelectFocus::Config => {
-                    self.port_select.config_field = self.port_select.config_field.next();
-                }
-            },
-            PortSelectCommand::Confirm => match self.port_select.focus {
-                PortSelectFocus::PortList => {
-                    if !self.port_select.ports.is_empty() {
-                        self.connect_to_selected_port();
-                    }
-                }
-                PortSelectFocus::Config => {
-                    self.port_select.open_dropdown();
-                    self.input.mode = InputMode::ConfigDropdown;
-                }
-            },
+            PortSelectCommand::Confirm => {
+                // Handled by global nav above
+            }
         }
     }
 
     fn handle_key_config_dropdown(&mut self, key: KeyEvent) {
-        let Some(cmd) = map_dropdown_key(key) else {
-            return;
-        };
-
         let options_count = self.port_select.get_options_count();
 
-        match cmd {
-            DropdownCommand::MoveUp => {
-                if self.port_select.dropdown_index > 0 {
-                    self.port_select.dropdown_index -= 1;
+        // Use global navigation for dropdown
+        if let Some(nav_cmd) = map_global_nav_key(&key) {
+            match nav_cmd {
+                GlobalNavCommand::Up => {
+                    if self.port_select.dropdown_index > 0 {
+                        self.port_select.dropdown_index -= 1;
+                    }
+                    return;
                 }
-            }
-            DropdownCommand::MoveDown => {
-                if self.port_select.dropdown_index < options_count - 1 {
-                    self.port_select.dropdown_index += 1;
+                GlobalNavCommand::Down => {
+                    if self.port_select.dropdown_index < options_count - 1 {
+                        self.port_select.dropdown_index += 1;
+                    }
+                    return;
                 }
+                GlobalNavCommand::Confirm => {
+                    self.port_select.apply_dropdown_selection();
+                    self.input.mode = InputMode::Normal;
+                    return;
+                }
+                GlobalNavCommand::Cancel => {
+                    self.input.mode = InputMode::Normal;
+                    return;
+                }
+                _ => {}
             }
-            DropdownCommand::Confirm => {
-                self.port_select.apply_dropdown_selection();
-                self.input.mode = InputMode::Normal;
-            }
-            DropdownCommand::Cancel => {
-                self.input.mode = InputMode::Normal;
+        }
+
+        // Fall back to dropdown-specific bindings
+        if let Some(cmd) = self.settings.keybindings.dropdown.find_command(&key) {
+            match cmd {
+                DropdownCommand::Confirm => {
+                    self.port_select.apply_dropdown_selection();
+                    self.input.mode = InputMode::Normal;
+                }
+                DropdownCommand::Cancel => {
+                    self.input.mode = InputMode::Normal;
+                }
             }
         }
     }
@@ -1106,9 +1302,106 @@ impl App {
     fn handle_key_traffic(&mut self, key: KeyEvent) {
         let config_visible = self.traffic.config_panel_visible;
         let config_focused = self.traffic.focus == TrafficFocus::Config;
-        let Some(cmd) = map_traffic_key(key, config_visible, config_focused) else {
-            return;
+
+        // First check global navigation commands (j/k, Ctrl+u/d, g, G, etc.)
+        if let Some(nav_cmd) = map_global_nav_key(&key) {
+            match nav_cmd {
+                GlobalNavCommand::Up => {
+                    if config_focused {
+                        // Move up in config panel
+                        self.traffic.config_field = self.traffic.config_field.prev();
+                    } else {
+                        // Scroll up in traffic
+                        self.traffic.was_at_bottom = false;
+                        self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_sub(1);
+                    }
+                    return;
+                }
+                GlobalNavCommand::Down => {
+                    if config_focused {
+                        // Move down in config panel
+                        self.traffic.config_field = self.traffic.config_field.next();
+                    } else {
+                        // Scroll down in traffic
+                        self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_add(1);
+                    }
+                    return;
+                }
+                GlobalNavCommand::Top => {
+                    if !config_focused {
+                        self.traffic.was_at_bottom = false;
+                        self.traffic.scroll_offset = 0;
+                    }
+                    return;
+                }
+                GlobalNavCommand::Bottom => {
+                    if !config_focused {
+                        self.traffic.was_at_bottom = true;
+                        self.traffic.scroll_offset = usize::MAX;
+                    }
+                    return;
+                }
+                GlobalNavCommand::PageUp => {
+                    if !config_focused {
+                        self.traffic.was_at_bottom = false;
+                        self.traffic.scroll_offset =
+                            self.traffic.scroll_offset.saturating_sub(self.page_size());
+                    }
+                    return;
+                }
+                GlobalNavCommand::PageDown => {
+                    if !config_focused {
+                        self.traffic.scroll_offset =
+                            self.traffic.scroll_offset.saturating_add(self.page_size());
+                    }
+                    return;
+                }
+                GlobalNavCommand::Confirm => {
+                    if config_focused {
+                        // Toggle or open dropdown for config field
+                        if self.traffic.config_field.is_toggle() {
+                            self.traffic.toggle_setting();
+                            self.status = format!(
+                                "{}: {}",
+                                self.traffic.config_field.label(),
+                                self.traffic.get_config_display(self.traffic.config_field)
+                            );
+                            self.needs_full_clear = true;
+                        } else {
+                            self.traffic.open_dropdown();
+                            self.input.mode = InputMode::TrafficConfigDropdown;
+                        }
+                    }
+                    return;
+                }
+                GlobalNavCommand::Cancel => {
+                    if config_focused {
+                        // When config panel is focused, Esc returns focus to traffic
+                        self.traffic.focus = TrafficFocus::Traffic;
+                    } else if self.search.pattern.is_some() {
+                        self.search.clear();
+                        self.status = "Search cleared.".to_string();
+                    } else {
+                        self.disconnect();
+                        self.view = View::PortSelect;
+                        self.needs_full_clear = true;
+                        self.status = "Disconnected.".to_string();
+                    }
+                    return;
+                }
+            }
+        }
+
+        // Then check context-specific traffic commands
+        let cmd = self.settings.keybindings.traffic.find_command(&key);
+
+        // Handle context-sensitive commands
+        let cmd = match cmd {
+            Some(TrafficCommand::FocusConfig) if !config_visible => None,
+            other => other,
         };
+
+        let Some(cmd) = cmd else { return };
 
         match cmd {
             TrafficCommand::Disconnect => {
@@ -1116,31 +1409,6 @@ impl App {
                 self.view = View::PortSelect;
                 self.needs_full_clear = true;
                 self.status = "Disconnected.".to_string();
-            }
-            TrafficCommand::ScrollUp => {
-                // User is scrolling up, disable auto-scroll tracking
-                self.traffic.was_at_bottom = false;
-                self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_sub(1);
-            }
-            TrafficCommand::ScrollDown => {
-                self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_add(1);
-            }
-            TrafficCommand::ScrollToTop => {
-                self.traffic.was_at_bottom = false;
-                self.traffic.scroll_offset = 0;
-            }
-            TrafficCommand::ScrollToBottom => {
-                self.traffic.was_at_bottom = true;
-                self.traffic.scroll_offset = usize::MAX;
-            }
-            TrafficCommand::PageUp => {
-                self.traffic.was_at_bottom = false;
-                self.traffic.scroll_offset =
-                    self.traffic.scroll_offset.saturating_sub(self.page_size());
-            }
-            TrafficCommand::PageDown => {
-                self.traffic.scroll_offset =
-                    self.traffic.scroll_offset.saturating_add(self.page_size());
             }
             TrafficCommand::CycleEncoding => {
                 self.traffic.encoding = self.traffic.encoding.cycle_next();
@@ -1190,28 +1458,6 @@ impl App {
                     self.traffic.focus = TrafficFocus::Config;
                 }
             }
-            TrafficCommand::MoveUp => {
-                // Only when config panel is focused
-                self.traffic.config_field = self.traffic.config_field.prev();
-            }
-            TrafficCommand::MoveDown => {
-                self.traffic.config_field = self.traffic.config_field.next();
-            }
-            TrafficCommand::Confirm => {
-                // Toggle or open dropdown for config field
-                if self.traffic.config_field.is_toggle() {
-                    self.traffic.toggle_setting();
-                    self.status = format!(
-                        "{}: {}",
-                        self.traffic.config_field.label(),
-                        self.traffic.get_config_display(self.traffic.config_field)
-                    );
-                    self.needs_full_clear = true;
-                } else {
-                    self.traffic.open_dropdown();
-                    self.input.mode = InputMode::TrafficConfigDropdown;
-                }
-            }
             TrafficCommand::ToggleLineNumbers => {
                 self.traffic.show_line_numbers = !self.traffic.show_line_numbers;
                 self.status = if self.traffic.show_line_numbers {
@@ -1228,53 +1474,62 @@ impl App {
                     "Timestamps: OFF".to_string()
                 };
             }
-            TrafficCommand::EscapeOrClear => {
-                if config_focused {
-                    // When config panel is focused, Esc returns focus to traffic
-                    self.traffic.focus = TrafficFocus::Traffic;
-                } else if self.search.pattern.is_some() {
-                    self.search.clear();
-                    self.status = "Search cleared.".to_string();
-                } else {
-                    self.disconnect();
-                    self.view = View::PortSelect;
-                    self.needs_full_clear = true;
-                    self.status = "Disconnected.".to_string();
-                }
-            }
         }
     }
 
     fn handle_key_traffic_config_dropdown(&mut self, key: KeyEvent) {
-        let Some(cmd) = map_dropdown_key(key) else {
-            return;
-        };
-
         let options_count = self.traffic.get_options_count();
 
-        match cmd {
-            DropdownCommand::MoveUp => {
-                if self.traffic.dropdown_index > 0 {
-                    self.traffic.dropdown_index -= 1;
+        // Use global navigation for dropdown
+        if let Some(nav_cmd) = map_global_nav_key(&key) {
+            match nav_cmd {
+                GlobalNavCommand::Up => {
+                    if self.traffic.dropdown_index > 0 {
+                        self.traffic.dropdown_index -= 1;
+                    }
+                    return;
                 }
-            }
-            DropdownCommand::MoveDown => {
-                if self.traffic.dropdown_index < options_count.saturating_sub(1) {
-                    self.traffic.dropdown_index += 1;
+                GlobalNavCommand::Down => {
+                    if self.traffic.dropdown_index < options_count.saturating_sub(1) {
+                        self.traffic.dropdown_index += 1;
+                    }
+                    return;
                 }
+                GlobalNavCommand::Confirm => {
+                    self.traffic.apply_dropdown_selection();
+                    self.input.mode = InputMode::Normal;
+                    self.needs_full_clear = true;
+                    self.status = format!(
+                        "{}: {}",
+                        self.traffic.config_field.label(),
+                        self.traffic.get_config_display(self.traffic.config_field)
+                    );
+                    return;
+                }
+                GlobalNavCommand::Cancel => {
+                    self.input.mode = InputMode::Normal;
+                    return;
+                }
+                _ => {}
             }
-            DropdownCommand::Confirm => {
-                self.traffic.apply_dropdown_selection();
-                self.input.mode = InputMode::Normal;
-                self.needs_full_clear = true;
-                self.status = format!(
-                    "{}: {}",
-                    self.traffic.config_field.label(),
-                    self.traffic.get_config_display(self.traffic.config_field)
-                );
-            }
-            DropdownCommand::Cancel => {
-                self.input.mode = InputMode::Normal;
+        }
+
+        // Fall back to dropdown-specific bindings
+        if let Some(cmd) = self.settings.keybindings.dropdown.find_command(&key) {
+            match cmd {
+                DropdownCommand::Confirm => {
+                    self.traffic.apply_dropdown_selection();
+                    self.input.mode = InputMode::Normal;
+                    self.needs_full_clear = true;
+                    self.status = format!(
+                        "{}: {}",
+                        self.traffic.config_field.label(),
+                        self.traffic.get_config_display(self.traffic.config_field)
+                    );
+                }
+                DropdownCommand::Cancel => {
+                    self.input.mode = InputMode::Normal;
+                }
             }
         }
     }

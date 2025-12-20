@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod command;
+pub mod settings;
 pub mod ui;
 pub mod wrap;
 

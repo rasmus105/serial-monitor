@@ -106,11 +106,121 @@ pub trait Command: Copy {
 }
 
 // =============================================================================
+// Global Navigation Commands
+// =============================================================================
+
+/// Global navigation commands that work uniformly across all contexts
+/// These provide consistent keybindings for scrolling/navigation throughout the app
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GlobalNavCommand {
+    /// Move up / scroll up one line
+    Up,
+    /// Move down / scroll down one line  
+    Down,
+    /// Jump to top / first item
+    Top,
+    /// Jump to bottom / last item
+    Bottom,
+    /// Half page up
+    PageUp,
+    /// Half page down
+    PageDown,
+    /// Confirm / select
+    Confirm,
+    /// Cancel / escape
+    Cancel,
+}
+
+impl Command for GlobalNavCommand {
+    fn default_keys(&self) -> &'static [KeyBinding] {
+        use GlobalNavCommand::*;
+        use KeyBinding::*;
+
+        match self {
+            Up => &[Char('k'), Key(KeyCode::Up)],
+            Down => &[Char('j'), Key(KeyCode::Down)],
+            Top => &[Char('g')],
+            Bottom => &[Char('G')],
+            PageUp => &[Modified(KeyCode::Char('u'), KeyModifiers::CONTROL)],
+            PageDown => &[Modified(KeyCode::Char('d'), KeyModifiers::CONTROL)],
+            Confirm => &[Key(KeyCode::Enter)],
+            Cancel => &[Key(KeyCode::Esc)],
+        }
+    }
+}
+
+impl GlobalNavCommand {
+    /// Get the display name for this command
+    pub fn name(&self) -> &'static str {
+        match self {
+            GlobalNavCommand::Up => "Move Up",
+            GlobalNavCommand::Down => "Move Down",
+            GlobalNavCommand::Top => "Go to Top",
+            GlobalNavCommand::Bottom => "Go to Bottom",
+            GlobalNavCommand::PageUp => "Page Up",
+            GlobalNavCommand::PageDown => "Page Down",
+            GlobalNavCommand::Confirm => "Confirm",
+            GlobalNavCommand::Cancel => "Cancel",
+        }
+    }
+
+    /// Get the description for this command
+    pub fn description(&self) -> &'static str {
+        match self {
+            GlobalNavCommand::Up => "Move up one item or scroll up one line",
+            GlobalNavCommand::Down => "Move down one item or scroll down one line",
+            GlobalNavCommand::Top => "Jump to the first item or top of content",
+            GlobalNavCommand::Bottom => "Jump to the last item or bottom of content",
+            GlobalNavCommand::PageUp => "Move up half a page",
+            GlobalNavCommand::PageDown => "Move down half a page",
+            GlobalNavCommand::Confirm => "Confirm selection or action",
+            GlobalNavCommand::Cancel => "Cancel or close",
+        }
+    }
+}
+
+/// Map a key event to a global navigation command
+pub fn map_global_nav_key(event: &KeyEvent) -> Option<GlobalNavCommand> {
+    use GlobalNavCommand::*;
+
+    // Check Ctrl+u/d first (modifiers take priority)
+    if event.modifiers.contains(KeyModifiers::CONTROL) {
+        match event.code {
+            KeyCode::Char('u') => return Some(PageUp),
+            KeyCode::Char('d') => return Some(PageDown),
+            _ => {}
+        }
+    }
+
+    // Then check regular keys (without Ctrl/Alt)
+    if !event.modifiers.contains(KeyModifiers::CONTROL)
+        && !event.modifiers.contains(KeyModifiers::ALT)
+    {
+        match event.code {
+            KeyCode::Char('k') | KeyCode::Up => return Some(Up),
+            KeyCode::Char('j') | KeyCode::Down => return Some(Down),
+            KeyCode::Char('g') => return Some(Top),
+            KeyCode::Char('G') => return Some(Bottom),
+            KeyCode::Enter => return Some(Confirm),
+            KeyCode::Esc => return Some(Cancel),
+            _ => {}
+        }
+    }
+
+    // Arrow keys work regardless of modifiers
+    match event.code {
+        KeyCode::Up => Some(Up),
+        KeyCode::Down => Some(Down),
+        _ => None,
+    }
+}
+
+// =============================================================================
 // Commands
 // =============================================================================
 
 /// Commands available in port selection view
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortSelectCommand {
     /// Quit the application
     Quit,
@@ -124,31 +234,15 @@ pub enum PortSelectCommand {
     FocusPortList,
     /// Focus the config panel
     FocusConfig,
-    /// Move selection up (in current focus)
-    MoveUp,
-    /// Move selection down (in current focus)
-    MoveDown,
-    /// Confirm selection (connect or open dropdown)
+    /// Confirm selection (connect or open dropdown) - also handled by GlobalNavCommand
     Confirm,
 }
 
 /// Commands available in traffic view
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrafficCommand {
     /// Disconnect and return to port selection
     Disconnect,
-    /// Scroll up one line
-    ScrollUp,
-    /// Scroll down one line
-    ScrollDown,
-    /// Scroll to top
-    ScrollToTop,
-    /// Scroll to bottom
-    ScrollToBottom,
-    /// Scroll up half page
-    PageUp,
-    /// Scroll down half page
-    PageDown,
     /// Cycle to next encoding
     CycleEncoding,
     /// Enter send input mode
@@ -171,23 +265,11 @@ pub enum TrafficCommand {
     FocusTraffic,
     /// Focus the config panel
     FocusConfig,
-    /// Move selection up (in config panel)
-    MoveUp,
-    /// Move selection down (in config panel)
-    MoveDown,
-    /// Confirm selection (toggle or open dropdown in config panel)
-    Confirm,
-    /// Clear search or disconnect (context-dependent)
-    EscapeOrClear,
 }
 
 /// Commands available in config dropdown
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DropdownCommand {
-    /// Move selection up
-    MoveUp,
-    /// Move selection down
-    MoveDown,
     /// Confirm selection
     Confirm,
     /// Cancel and close dropdown
@@ -210,9 +292,7 @@ impl Command for PortSelectCommand {
             ToggleConfigPanel => &[Char('t')],
             FocusPortList => &[Char('h'), Key(KeyCode::Left)],
             FocusConfig => &[Char('l'), Key(KeyCode::Right)],
-            MoveUp => &[Char('k'), Key(KeyCode::Up)],
-            MoveDown => &[Char('j'), Key(KeyCode::Down)],
-            Confirm => &[Key(KeyCode::Enter)],
+            Confirm => &[], // Handled by GlobalNavCommand
         }
     }
 }
@@ -224,12 +304,6 @@ impl Command for TrafficCommand {
 
         match self {
             Disconnect => &[Char('q')],
-            ScrollUp => &[Char('k'), Key(KeyCode::Up)],
-            ScrollDown => &[Char('j'), Key(KeyCode::Down)],
-            ScrollToTop => &[Char('g')],
-            ScrollToBottom => &[Char('G')],
-            PageUp => &[Modified(KeyCode::Char('u'), KeyModifiers::CONTROL)],
-            PageDown => &[Modified(KeyCode::Char('d'), KeyModifiers::CONTROL)],
             CycleEncoding => &[Char('e')],
             EnterSendMode => &[Char('i')],
             EnterSearchMode => &[Char('/')],
@@ -242,10 +316,6 @@ impl Command for TrafficCommand {
             ToggleConfigPanel => &[Char('c')],
             FocusTraffic => &[Char('h'), Key(KeyCode::Left)],
             FocusConfig => &[Char('l'), Key(KeyCode::Right)],
-            MoveUp => &[Char('k'), Key(KeyCode::Up)],
-            MoveDown => &[Char('j'), Key(KeyCode::Down)],
-            Confirm => &[Key(KeyCode::Enter), Char(' ')],
-            EscapeOrClear => &[Key(KeyCode::Esc)],
         }
     }
 }
@@ -253,19 +323,17 @@ impl Command for TrafficCommand {
 impl Command for DropdownCommand {
     fn default_keys(&self) -> &'static [KeyBinding] {
         use DropdownCommand::*;
-        use KeyBinding::*;
 
         match self {
-            MoveUp => &[Char('k'), Key(KeyCode::Up)],
-            MoveDown => &[Char('j'), Key(KeyCode::Down)],
-            Confirm => &[Key(KeyCode::Enter)],
-            Cancel => &[Key(KeyCode::Esc)],
+            // Navigation is now handled by GlobalNavCommand
+            Confirm => &[], // Handled by GlobalNavCommand
+            Cancel => &[],  // Handled by GlobalNavCommand
         }
     }
 }
 
 // =============================================================================
-// Key Mapping
+// Key Mapping (legacy, kept for fallback)
 // =============================================================================
 
 /// Maps a key event to a port selection command
@@ -280,9 +348,7 @@ pub fn map_port_select_key(key: KeyEvent, config_visible: bool) -> Option<PortSe
         KeyCode::Char('t') => Some(ToggleConfigPanel),
         KeyCode::Left | KeyCode::Char('h') if config_visible => Some(FocusPortList),
         KeyCode::Right | KeyCode::Char('l') if config_visible => Some(FocusConfig),
-        KeyCode::Up | KeyCode::Char('k') => Some(MoveUp),
-        KeyCode::Down | KeyCode::Char('j') => Some(MoveDown),
-        KeyCode::Enter => Some(Confirm),
+        // Navigation is now handled by GlobalNavCommand
         _ => None,
     }
 }
@@ -291,16 +357,13 @@ pub fn map_port_select_key(key: KeyEvent, config_visible: bool) -> Option<PortSe
 pub fn map_traffic_key(key: KeyEvent, config_visible: bool, config_focused: bool) -> Option<TrafficCommand> {
     use TrafficCommand::*;
 
-    // When config panel is focused, handle navigation differently
+    // When config panel is focused, fewer commands available
     if config_focused {
         return match key.code {
             KeyCode::Char('q') => Some(Disconnect),
             KeyCode::Char('c') => Some(ToggleConfigPanel),
             KeyCode::Left | KeyCode::Char('h') => Some(FocusTraffic),
-            KeyCode::Up | KeyCode::Char('k') => Some(MoveUp),
-            KeyCode::Down | KeyCode::Char('j') => Some(MoveDown),
-            KeyCode::Enter | KeyCode::Char(' ') => Some(Confirm),
-            KeyCode::Esc => Some(EscapeOrClear),
+            // Navigation is now handled by GlobalNavCommand
             _ => None,
         };
     }
@@ -309,19 +372,13 @@ pub fn map_traffic_key(key: KeyEvent, config_visible: bool, config_focused: bool
         KeyCode::Char('q') => Some(Disconnect),
         KeyCode::Char('c') => Some(ToggleConfigPanel),
         KeyCode::Right | KeyCode::Char('l') if config_visible => Some(FocusConfig),
-        KeyCode::Up | KeyCode::Char('k') => Some(ScrollUp),
-        KeyCode::Down | KeyCode::Char('j') => Some(ScrollDown),
-        KeyCode::Char('g') => Some(ScrollToTop),
-        KeyCode::Char('G') => Some(ScrollToBottom),
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(PageUp),
-        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(PageDown),
         KeyCode::Char('e') => Some(CycleEncoding),
         KeyCode::Char('i') => Some(EnterSendMode),
         KeyCode::Char('/') => Some(EnterSearchMode),
         KeyCode::Char('n') => Some(NextMatch),
         KeyCode::Char('N') => Some(PrevMatch),
         KeyCode::Char('f') => Some(ToggleFileSend),
-        KeyCode::Esc => Some(EscapeOrClear),
+        // Navigation is now handled by GlobalNavCommand
         _ => None,
     }
 }
@@ -331,8 +388,7 @@ pub fn map_dropdown_key(key: KeyEvent) -> Option<DropdownCommand> {
     use DropdownCommand::*;
 
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => Some(MoveUp),
-        KeyCode::Down | KeyCode::Char('j') => Some(MoveDown),
+        // Navigation is now handled by GlobalNavCommand
         KeyCode::Enter => Some(Confirm),
         KeyCode::Esc => Some(Cancel),
         _ => None,
