@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
-use tokio_serial::SerialPortBuilderExt;
+use tokio_serial::{ClearBuffer, SerialPort, SerialPortBuilderExt};
 
 use crate::buffer::{DataBuffer, DataChunk, Direction};
 use crate::error::{Error, Result};
@@ -131,6 +131,10 @@ impl Session {
             .stop_bits(config.stop_bits)
             .flow_control(config.flow_control)
             .open_native_async()?;
+
+        // Clear any data buffered by the OS before we opened the port
+        // This ensures we only see data that arrives after connecting
+        port.clear(ClearBuffer::Input)?;
 
         // Create shared buffer
         let buffer = Arc::new(RwLock::new(DataBuffer::with_max_size(buffer_size)));
