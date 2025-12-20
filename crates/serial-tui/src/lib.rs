@@ -3,6 +3,7 @@
 //! This crate provides a terminal user interface for the serial monitor.
 
 pub mod app;
+pub mod command;
 pub mod ui;
 pub mod wrap;
 

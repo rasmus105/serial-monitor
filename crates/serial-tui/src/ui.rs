@@ -375,51 +375,26 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    match app.input.mode {
-        InputMode::Normal => {
-            let status =
-                Paragraph::new(app.status.as_str()).style(Style::default().fg(Color::White));
-            frame.render_widget(status, area);
-        }
-        InputMode::PortInput => {
+    match app.input.mode.style() {
+        Some(style) => {
+            // Text input mode - show prefix, buffer, and cursor
             let input_line = Line::from(vec![
-                Span::styled(":", Style::default().fg(Color::Yellow)),
+                Span::styled(style.prefix, Style::default().fg(style.color)),
                 Span::raw(&app.input.buffer),
-                Span::styled("_", Style::default().fg(Color::Yellow)),
+                Span::styled("_", Style::default().fg(style.color)),
             ]);
             let input = Paragraph::new(input_line).style(Style::default().fg(Color::White));
             frame.render_widget(input, area);
         }
-        InputMode::SendInput => {
-            let input_line = Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::Green)),
-                Span::raw(&app.input.buffer),
-                Span::styled("_", Style::default().fg(Color::Green)),
-            ]);
-            let input = Paragraph::new(input_line).style(Style::default().fg(Color::White));
-            frame.render_widget(input, area);
-        }
-        InputMode::SearchInput => {
-            let input_line = Line::from(vec![
-                Span::styled("/", Style::default().fg(Color::Magenta)),
-                Span::raw(&app.input.buffer),
-                Span::styled("_", Style::default().fg(Color::Magenta)),
-            ]);
-            let input = Paragraph::new(input_line).style(Style::default().fg(Color::White));
-            frame.render_widget(input, area);
-        }
-        InputMode::FilePathInput => {
-            let input_line = Line::from(vec![
-                Span::styled("File: ", Style::default().fg(Color::Blue)),
-                Span::raw(&app.input.buffer),
-                Span::styled("_", Style::default().fg(Color::Blue)),
-            ]);
-            let input = Paragraph::new(input_line).style(Style::default().fg(Color::White));
-            frame.render_widget(input, area);
-        }
-        InputMode::ConfigDropdown => {
-            let status = Paragraph::new("j/k: navigate, Enter: select, Esc: cancel")
-                .style(Style::default().fg(Color::Cyan));
+        None => {
+            // Normal mode or special modes without text input
+            let (text, color) = match app.input.mode {
+                InputMode::ConfigDropdown => {
+                    (app.input.mode.entry_prompt(), Color::Cyan)
+                }
+                _ => (app.status.as_str(), Color::White),
+            };
+            let status = Paragraph::new(text).style(Style::default().fg(color));
             frame.render_widget(status, area);
         }
     }

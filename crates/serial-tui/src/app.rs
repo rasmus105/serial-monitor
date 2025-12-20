@@ -10,6 +10,11 @@ use serial_core::{
 };
 use strum::{EnumCount, EnumIter, IntoEnumIterator};
 
+use crate::command::{
+    map_dropdown_key, map_port_select_key, map_traffic_key, DropdownCommand, PortSelectCommand,
+    TrafficCommand,
+};
+
 // =============================================================================
 // ConfigOption Trait - Abstraction for serial config enum options
 // =============================================================================
@@ -187,6 +192,54 @@ pub enum InputMode {
     FilePathInput,
     /// Config dropdown is open
     ConfigDropdown,
+}
+
+/// Visual properties for rendering an input mode in the status bar
+#[derive(Debug, Clone, Copy)]
+pub struct InputModeStyle {
+    /// Prefix shown before the input buffer (e.g., ":", "/", "> ")
+    pub prefix: &'static str,
+    /// Color for the prefix and cursor
+    pub color: ratatui::style::Color,
+}
+
+impl InputMode {
+    /// Get the prompt shown in the status bar when entering this mode
+    pub fn entry_prompt(&self) -> &'static str {
+        match self {
+            InputMode::Normal => "",
+            InputMode::PortInput => "Enter port path (e.g., /dev/pts/5):",
+            InputMode::SendInput => "Type to send (Enter: send with newline, Esc: cancel)",
+            InputMode::SearchInput => "Search: ",
+            InputMode::FilePathInput => "Enter file path to send:",
+            InputMode::ConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
+        }
+    }
+
+    /// Get the visual style for rendering this input mode
+    pub fn style(&self) -> Option<InputModeStyle> {
+        use ratatui::style::Color;
+        match self {
+            InputMode::Normal => None,
+            InputMode::PortInput => Some(InputModeStyle {
+                prefix: ":",
+                color: Color::Yellow,
+            }),
+            InputMode::SendInput => Some(InputModeStyle {
+                prefix: "> ",
+                color: Color::Green,
+            }),
+            InputMode::SearchInput => Some(InputModeStyle {
+                prefix: "/",
+                color: Color::Magenta,
+            }),
+            InputMode::FilePathInput => Some(InputModeStyle {
+                prefix: "File: ",
+                color: Color::Blue,
+            }),
+            InputMode::ConfigDropdown => None, // Uses special rendering
+        }
+    }
 }
 
 /// Connection state
@@ -387,6 +440,53 @@ pub struct InputState {
     pub buffer: String,
 }
 
+/// Result of handling a text input key event
+#[derive(Debug, PartialEq)]
+pub enum TextInputResult {
+    /// User submitted the input (Enter pressed with non-empty buffer)
+    Submit(String),
+    /// User cancelled the input (Esc pressed)
+    Cancel,
+    /// Input buffer was modified, continue editing
+    Continue,
+}
+
+impl InputState {
+    /// Handle a key event for generic text input.
+    /// Returns what action should be taken by the caller.
+    pub fn handle_text_input(&mut self, key: KeyEvent) -> TextInputResult {
+        match key.code {
+            KeyCode::Enter => {
+                if !self.buffer.is_empty() {
+                    let value = self.buffer.clone();
+                    self.buffer.clear();
+                    self.mode = InputMode::Normal;
+                    TextInputResult::Submit(value)
+                } else {
+                    self.mode = InputMode::Normal;
+                    TextInputResult::Cancel
+                }
+            }
+            KeyCode::Esc => {
+                self.mode = InputMode::Normal;
+                self.buffer.clear();
+                TextInputResult::Cancel
+            }
+            KeyCode::Backspace => {
+                self.buffer.pop();
+                TextInputResult::Continue
+            }
+            KeyCode::Char(c) => {
+                if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.buffer.push(c);
+                }
+                TextInputResult::Continue
+            }
+            _ => TextInputResult::Continue,
+        }
+    }
+}
+
 // =============================================================================
 // Main App Struct
 // =============================================================================
@@ -469,31 +569,28 @@ impl App {
     }
 
     fn handle_key_port_select(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.should_quit = true;
-            }
-            KeyCode::Char('r') => self.refresh_ports(),
-            KeyCode::Char(':') => {
+        let cmd = map_port_select_key(key, self.port_select.config_panel_visible);
+
+        let Some(cmd) = cmd else { return };
+
+        match cmd {
+            PortSelectCommand::Quit => self.should_quit = true,
+            PortSelectCommand::RefreshPorts => self.refresh_ports(),
+            PortSelectCommand::EnterPortPath => {
                 self.input.mode = InputMode::PortInput;
                 self.input.buffer.clear();
-                self.status = "Enter port path (e.g., /dev/pts/5):".to_string();
+                self.status = InputMode::PortInput.entry_prompt().to_string();
             }
-            KeyCode::Char('t') => {
+            PortSelectCommand::ToggleConfigPanel => {
                 self.port_select.config_panel_visible = !self.port_select.config_panel_visible;
             }
-            KeyCode::Left | KeyCode::Char('h') => {
-                if self.port_select.config_panel_visible {
-                    self.port_select.focus = PortSelectFocus::PortList;
-                }
+            PortSelectCommand::FocusPortList => {
+                self.port_select.focus = PortSelectFocus::PortList;
             }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if self.port_select.config_panel_visible {
-                    self.port_select.focus = PortSelectFocus::Config;
-                }
+            PortSelectCommand::FocusConfig => {
+                self.port_select.focus = PortSelectFocus::Config;
             }
-            KeyCode::Up | KeyCode::Char('k') => match self.port_select.focus {
+            PortSelectCommand::MoveUp => match self.port_select.focus {
                 PortSelectFocus::PortList => {
                     if self.port_select.selected_port > 0 {
                         self.port_select.selected_port -= 1;
@@ -503,7 +600,7 @@ impl App {
                     self.port_select.config_field = self.port_select.config_field.prev();
                 }
             },
-            KeyCode::Down | KeyCode::Char('j') => match self.port_select.focus {
+            PortSelectCommand::MoveDown => match self.port_select.focus {
                 PortSelectFocus::PortList => {
                     if !self.port_select.ports.is_empty()
                         && self.port_select.selected_port < self.port_select.ports.len() - 1
@@ -515,7 +612,7 @@ impl App {
                     self.port_select.config_field = self.port_select.config_field.next();
                 }
             },
-            KeyCode::Enter => match self.port_select.focus {
+            PortSelectCommand::Confirm => match self.port_select.focus {
                 PortSelectFocus::PortList => {
                     if !self.port_select.ports.is_empty() {
                         self.connect_to_selected_port();
@@ -526,89 +623,82 @@ impl App {
                     self.input.mode = InputMode::ConfigDropdown;
                 }
             },
-            _ => {}
         }
     }
 
     fn handle_key_config_dropdown(&mut self, key: KeyEvent) {
+        let Some(cmd) = map_dropdown_key(key) else {
+            return;
+        };
+
         let options_count = self.port_select.get_options_count();
 
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+        match cmd {
+            DropdownCommand::MoveUp => {
                 if self.port_select.dropdown_index > 0 {
                     self.port_select.dropdown_index -= 1;
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            DropdownCommand::MoveDown => {
                 if self.port_select.dropdown_index < options_count - 1 {
                     self.port_select.dropdown_index += 1;
                 }
             }
-            KeyCode::Enter => {
+            DropdownCommand::Confirm => {
                 self.port_select.apply_dropdown_selection();
                 self.input.mode = InputMode::Normal;
             }
-            KeyCode::Esc => {
+            DropdownCommand::Cancel => {
                 self.input.mode = InputMode::Normal;
             }
-            _ => {}
         }
     }
 
     fn handle_key_port_input(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Enter => {
-                if !self.input.buffer.is_empty() {
-                    let port_path = self.input.buffer.clone();
-                    self.input.mode = InputMode::Normal;
-                    self.input.buffer.clear();
-                    self.connect_to_port(&port_path);
-                }
+        match self.input.handle_text_input(key) {
+            TextInputResult::Submit(port_path) => {
+                self.connect_to_port(&port_path);
             }
-            KeyCode::Esc => {
-                self.input.mode = InputMode::Normal;
-                self.input.buffer.clear();
+            TextInputResult::Cancel => {
                 self.status = "Cancelled.".to_string();
             }
-            KeyCode::Backspace => {
-                self.input.buffer.pop();
-            }
-            KeyCode::Char(c) => {
-                if !key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.input.buffer.push(c);
-                }
-            }
-            _ => {}
+            TextInputResult::Continue => {}
         }
     }
 
     fn handle_key_traffic(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') => {
+        let Some(cmd) = map_traffic_key(key) else {
+            return;
+        };
+
+        match cmd {
+            TrafficCommand::Disconnect => {
                 self.disconnect();
                 self.view = View::PortSelect;
                 self.needs_full_clear = true;
                 self.status = "Disconnected.".to_string();
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            TrafficCommand::ScrollUp => {
                 self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            TrafficCommand::ScrollDown => {
                 self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_add(1);
             }
-            KeyCode::Char('g') => {
+            TrafficCommand::ScrollToTop => {
                 self.traffic.scroll_offset = 0;
             }
-            KeyCode::Char('G') => {
+            TrafficCommand::ScrollToBottom => {
                 self.traffic.scroll_offset = usize::MAX;
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_sub(self.page_size());
+            TrafficCommand::PageUp => {
+                self.traffic.scroll_offset =
+                    self.traffic.scroll_offset.saturating_sub(self.page_size());
             }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_add(self.page_size());
+            TrafficCommand::PageDown => {
+                self.traffic.scroll_offset =
+                    self.traffic.scroll_offset.saturating_add(self.page_size());
             }
-            KeyCode::Char('e') => {
+            TrafficCommand::CycleEncoding => {
                 self.traffic.encoding = self.traffic.encoding.cycle_next();
                 self.status = format!("Encoding: {}", self.traffic.encoding);
                 self.needs_full_clear = true;
@@ -616,32 +706,32 @@ impl App {
                     self.update_search_matches();
                 }
             }
-            KeyCode::Char('i') => {
+            TrafficCommand::EnterSendMode => {
                 self.input.mode = InputMode::SendInput;
                 self.input.buffer.clear();
-                self.status = "Type to send (Enter: send with newline, Esc: cancel)".to_string();
+                self.status = InputMode::SendInput.entry_prompt().to_string();
             }
-            KeyCode::Char('/') => {
+            TrafficCommand::EnterSearchMode => {
                 self.input.mode = InputMode::SearchInput;
                 self.input.buffer.clear();
-                self.status = "Search: ".to_string();
+                self.status = InputMode::SearchInput.entry_prompt().to_string();
             }
-            KeyCode::Char('n') => {
+            TrafficCommand::NextMatch => {
                 self.goto_next_match();
             }
-            KeyCode::Char('N') => {
+            TrafficCommand::PrevMatch => {
                 self.goto_prev_match();
             }
-            KeyCode::Char('f') => {
+            TrafficCommand::ToggleFileSend => {
                 if self.file_send.handle.is_some() {
                     self.cancel_file_send();
                 } else {
                     self.input.mode = InputMode::FilePathInput;
                     self.input.buffer.clear();
-                    self.status = "Enter file path to send:".to_string();
+                    self.status = InputMode::FilePathInput.entry_prompt().to_string();
                 }
             }
-            KeyCode::Esc => {
+            TrafficCommand::EscapeOrClear => {
                 if self.search.pattern.is_some() {
                     self.search.clear();
                     self.status = "Search cleared.".to_string();
@@ -652,38 +742,20 @@ impl App {
                     self.status = "Disconnected.".to_string();
                 }
             }
-            _ => {}
         }
     }
 
     fn handle_key_search_input(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Enter => {
-                if !self.input.buffer.is_empty() {
-                    self.search.pattern = Some(self.input.buffer.clone());
-                    self.input.buffer.clear();
-                    self.input.mode = InputMode::Normal;
-                    self.update_search_matches();
-                    self.goto_next_match();
-                } else {
-                    self.input.mode = InputMode::Normal;
-                    self.status = "Search cancelled.".to_string();
-                }
+        match self.input.handle_text_input(key) {
+            TextInputResult::Submit(pattern) => {
+                self.search.pattern = Some(pattern);
+                self.update_search_matches();
+                self.goto_next_match();
             }
-            KeyCode::Esc => {
-                self.input.mode = InputMode::Normal;
-                self.input.buffer.clear();
+            TextInputResult::Cancel => {
                 self.status = "Search cancelled.".to_string();
             }
-            KeyCode::Backspace => {
-                self.input.buffer.pop();
-            }
-            KeyCode::Char(c) => {
-                if !key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.input.buffer.push(c);
-                }
-            }
-            _ => {}
+            TextInputResult::Continue => {}
         }
     }
 
@@ -777,32 +849,14 @@ impl App {
     }
 
     fn handle_key_file_path_input(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Enter => {
-                if !self.input.buffer.is_empty() {
-                    let path = self.input.buffer.clone();
-                    self.input.buffer.clear();
-                    self.input.mode = InputMode::Normal;
-                    self.start_file_send(&path);
-                } else {
-                    self.input.mode = InputMode::Normal;
-                    self.status = "File send cancelled.".to_string();
-                }
+        match self.input.handle_text_input(key) {
+            TextInputResult::Submit(path) => {
+                self.start_file_send(&path);
             }
-            KeyCode::Esc => {
-                self.input.mode = InputMode::Normal;
-                self.input.buffer.clear();
+            TextInputResult::Cancel => {
                 self.status = "File send cancelled.".to_string();
             }
-            KeyCode::Backspace => {
-                self.input.buffer.pop();
-            }
-            KeyCode::Char(c) => {
-                if !key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.input.buffer.push(c);
-                }
-            }
-            _ => {}
+            TextInputResult::Continue => {}
         }
     }
 
@@ -858,6 +912,8 @@ impl App {
     }
 
     fn handle_key_send_input(&mut self, key: KeyEvent) {
+        // Send input is special: Enter sends with newline but stays in input mode,
+        // Ctrl+J sends without newline, Esc exits
         match key.code {
             KeyCode::Enter => {
                 if !self.input.buffer.is_empty() {
@@ -875,16 +931,16 @@ impl App {
             KeyCode::Backspace => {
                 self.input.buffer.pop();
             }
-            KeyCode::Char(c) => {
-                if c == 'j' && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if !self.input.buffer.is_empty() {
-                        let data = self.input.buffer.clone();
-                        self.send_data(data.into_bytes());
-                        self.input.buffer.clear();
-                    }
-                } else if !key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.input.buffer.push(c);
+            KeyCode::Char(c) if c == 'j' && key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+J: send without newline
+                if !self.input.buffer.is_empty() {
+                    let data = self.input.buffer.clone();
+                    self.send_data(data.into_bytes());
+                    self.input.buffer.clear();
                 }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input.buffer.push(c);
             }
             _ => {}
         }
