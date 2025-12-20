@@ -23,6 +23,10 @@ enum Mode {
     Sensor,
     /// Echo back received data
     Echo,
+    /// Random UTF-8 strings with emojis and special characters
+    Utf8,
+    /// High-speed ASCII flood for stress testing
+    Flood,
 }
 
 fn print_usage() {
@@ -37,11 +41,15 @@ MODES:
     ascii    Readable ASCII text lines  
     sensor   Simulated sensor data (temp, humidity, pressure)
     echo     Echo back any received data
+    utf8     Random UTF-8 strings with emojis and special characters
+    flood    High-speed ASCII flood for stress testing
 
 EXAMPLES:
     serial-test           # Start with random hex data
     serial-test sensor    # Start with sensor simulation
     serial-test echo      # Echo mode for testing TX
+    serial-test utf8      # UTF-8 mode with emojis and special chars
+    serial-test flood     # Stress test with high-speed data
 
 The program will print the PTY path to connect to.
 Press Ctrl+C to stop.
@@ -63,6 +71,8 @@ fn parse_args() -> Option<Mode> {
             "ascii" => Some(Mode::Ascii),
             "sensor" => Some(Mode::Sensor),
             "echo" => Some(Mode::Echo),
+            "utf8" => Some(Mode::Utf8),
+            "flood" => Some(Mode::Flood),
             "-h" | "--help" => {
                 print_usage();
                 None
@@ -89,7 +99,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // socat outputs the PTY names to stderr
     let mut socat = Command::new("socat")
         .args([
-            "-d", "-d", // Debug output to see PTY names
+            "-d",
+            "-d", // Debug output to see PTY names
             "pty,raw,echo=0",
             "pty,raw,echo=0",
         ])
@@ -154,6 +165,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Mode::Hex => run_hex(writer).await?,
         Mode::Ascii => run_ascii(writer).await?,
         Mode::Sensor => run_sensor(writer).await?,
+        Mode::Utf8 => run_utf8(writer).await?,
+        Mode::Flood => run_flood(writer).await?,
     }
 
     // Clean up
@@ -203,7 +216,7 @@ async fn run_hex(
         writer.write_all(&data).await?;
 
         // Wait 500ms-2s between chunks
-        let delay = rng.random_range(500..=2000);
+        let delay = rng.random_range(200..=1000);
         tokio::time::sleep(Duration::from_millis(delay)).await;
     }
 }
@@ -238,7 +251,7 @@ async fn run_ascii(
         idx = (idx + 1) % lines.len();
 
         // Wait 500ms-1.5s between lines
-        let delay = rng.random_range(500..=1500);
+        let delay = rng.random_range(10..=200);
         tokio::time::sleep(Duration::from_millis(delay)).await;
     }
 }
@@ -279,6 +292,321 @@ async fn run_sensor(
         writer.write_all(line.as_bytes()).await?;
 
         // Send every 1 second
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn run_utf8(
+    mut writer: tokio::io::WriteHalf<tokio::fs::File>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("[utf8] Sending random UTF-8 strings...");
+
+    let mut rng = rand::rng();
+
+    // Emojis
+    let emojis = [
+        "😀", "😂", "🤣", "😊", "😍", "🥰", "😎", "🤔", "🤯", "😱", "🎉", "🎊", "🎁", "🎈", "🎯",
+        "🚀", "🌟", "⭐", "✨", "💫", "❤️", "💙", "💚", "💛", "🧡", "💜", "🖤", "🤍", "💔", "💕",
+        "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🦁", "🍎", "🍐", "🍊", "🍋", "🍌",
+        "🍉", "🍇", "🍓", "🫐", "🍒", "🌍", "🌎", "🌏", "🌙", "☀️", "⛅", "🌈", "🔥", "💧", "❄️",
+        "👍", "👎", "👋", "🤝", "🙏", "💪", "🦾", "🖖", "✌️", "🤞", "🏠", "🏡", "🏢", "🏭", "🏥",
+        "🏦", "🏪", "🏫", "🏰", "🗼",
+    ];
+
+    // Various scripts and special characters
+    let scripts = [
+        // Latin with diacritics
+        "Ñoño",
+        "Ånström",
+        "naïve",
+        "café",
+        "résumé",
+        "über",
+        "Müller",
+        // Greek
+        "Ελληνικά",
+        "αβγδ",
+        "ΩΨΧΦ",
+        "πρόγραμμα",
+        // Cyrillic
+        "Привет",
+        "Русский",
+        "АБВГД",
+        "мир",
+        // Arabic
+        "مرحبا",
+        "العربية",
+        "سلام",
+        // Hebrew
+        "שלום",
+        "עברית",
+        // Japanese (Hiragana, Katakana, Kanji)
+        "こんにちは",
+        "カタカナ",
+        "日本語",
+        "漢字",
+        // Chinese
+        "你好",
+        "中文",
+        "世界",
+        // Korean
+        "안녕하세요",
+        "한국어",
+        // Thai
+        "สวัสดี",
+        "ภาษาไทย",
+        // Hindi/Devanagari
+        "नमस्ते",
+        "हिन्दी",
+        // Tamil
+        "வணக்கம்",
+        // Emoji sequences
+        "👨‍👩‍👧‍👦",
+        "🏳️‍🌈",
+        "👩‍💻",
+        "🧑‍🚀",
+    ];
+
+    // Math and symbols
+    let symbols = [
+        "∀∃∄∅∆∇",
+        "∈∉∊∋∌∍",
+        "∏∐∑−∓∔",
+        "√∛∜∝∞∟",
+        "∠∡∢∣∤∥",
+        "∧∨∩∪∫∬",
+        "≠≡≢≣≤≥",
+        "≦≧≨≩≪≫",
+        "⊂⊃⊄⊅⊆⊇",
+        "①②③④⑤",
+        "⑥⑦⑧⑨⑩",
+        "ⅠⅡⅢⅣⅤ",
+        "←↑→↓↔↕",
+        "↖↗↘↙↚↛",
+        "⇐⇑⇒⇓⇔⇕",
+        "♠♡♢♣♤♥",
+        "♦♧★☆☉☊",
+        "☎☏☐☑☒☓",
+        "⌘⌥⌃⇧⏎⌫",
+        "⎋⏏⏩⏪⏫⏬",
+        "⏭⏮⏯⏰⏱⏲",
+    ];
+
+    // Box drawing and blocks
+    let box_drawing = [
+        "┌─┬─┐",
+        "│ │ │",
+        "├─┼─┤",
+        "└─┴─┘",
+        "╔═╦═╗",
+        "║ ║ ║",
+        "╠═╬═╣",
+        "╚═╩═╝",
+        "░▒▓█▄▀",
+        "▁▂▃▄▅▆▇█",
+        "▉▊▋▌▍▎▏",
+        "◢◣◤◥",
+        "●○◎◉◌",
+        "■□▢▣▤▥",
+    ];
+
+    // Zalgo-style combining characters (be careful - these stack!)
+    let combining = ["h̷e̸l̵l̶o̷", "ẅ̈ö̈r̈l̈d̈", "t̲e̲s̲t̲", "s̶t̶r̶i̶k̶e̶", "u͎n͎d͎e͎r͎"];
+
+    // Full-width characters
+    let fullwidth = ["ＦＵＬＬ　ＷＩＤＴＨ", "１２３４５", "ａｂｃｄｅ"];
+
+    // Currency symbols
+    let currency = ["$€£¥₹₽₿", "₩₪₫₭₮₯", "₰₱₲₳₴₵"];
+
+    // Musical symbols
+    let music = ["♩♪♫♬♭♮♯", "𝄞𝄢𝄪𝄫"];
+
+    // Misc fun strings
+    let misc = [
+        "¯\\_(ツ)_/¯",
+        "(╯°□°)╯︵ ┻━┻",
+        "┬─┬ノ( º _ ºノ)",
+        "( ͡° ͜ʖ ͡°)",
+        "ʕ•ᴥ•ʔ",
+        "（＾▽＾）",
+        "٩(◕‿◕｡)۶",
+        "☆*:.｡.o(≧▽≦)o.｡.:*☆",
+        "♪(´ε` )",
+        "The quick brown 🦊 jumps over the lazy 🐶",
+        "Ťĥé qùíçk ḃŕöẃñ fôx",
+        "🅣🅗🅔 🅠🅤🅘🅒🅚 🅑🅡🅞🅦🅝 🅕🅞🅧",
+    ];
+
+    loop {
+        // Randomly select a category and item
+        let category = rng.random_range(0..8);
+        let line = match category {
+            0 => {
+                // Random emoji sequence (1-5 emojis)
+                let count = rng.random_range(1..=5);
+                let mut s = String::new();
+                for _ in 0..count {
+                    let idx = rng.random_range(0..emojis.len());
+                    s.push_str(emojis[idx]);
+                }
+                s
+            }
+            1 => {
+                let idx = rng.random_range(0..scripts.len());
+                scripts[idx].to_string()
+            }
+            2 => {
+                let idx = rng.random_range(0..symbols.len());
+                symbols[idx].to_string()
+            }
+            3 => {
+                let idx = rng.random_range(0..box_drawing.len());
+                box_drawing[idx].to_string()
+            }
+            4 => {
+                let idx = rng.random_range(0..combining.len());
+                combining[idx].to_string()
+            }
+            5 => {
+                let idx = rng.random_range(0..fullwidth.len());
+                fullwidth[idx].to_string()
+            }
+            6 => {
+                // Mix: currency + music
+                let c_idx = rng.random_range(0..currency.len());
+                let m_idx = rng.random_range(0..music.len());
+                format!("{} {}", currency[c_idx], music[m_idx])
+            }
+            _ => {
+                let idx = rng.random_range(0..misc.len());
+                misc[idx].to_string()
+            }
+        };
+
+        println!("[utf8] TX: {}", line);
+        let output = format!("{}\r\n", line);
+        writer.write_all(output.as_bytes()).await?;
+
+        // Wait 200ms-800ms between lines
+        let delay = rng.random_range(200..=800);
+        tokio::time::sleep(Duration::from_millis(delay)).await;
+    }
+}
+
+async fn run_flood(
+    mut writer: tokio::io::WriteHalf<tokio::fs::File>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("[flood] Starting high-speed ASCII flood...");
+    println!("[flood] WARNING: This will generate a LOT of data!");
+
+    let mut rng = rand::rng();
+    let mut line_count: u64 = 0;
+    let mut byte_count: u64 = 0;
+    let start = std::time::Instant::now();
+
+    // Pre-generate some words for variety
+    let words = [
+        "the",
+        "quick",
+        "brown",
+        "fox",
+        "jumps",
+        "over",
+        "lazy",
+        "dog",
+        "hello",
+        "world",
+        "serial",
+        "monitor",
+        "test",
+        "data",
+        "flood",
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon",
+        "zeta",
+        "eta",
+        "lorem",
+        "ipsum",
+        "dolor",
+        "sit",
+        "amet",
+        "consectetur",
+        "async",
+        "await",
+        "rust",
+        "tokio",
+        "buffer",
+        "stream",
+        "port",
+        "error",
+        "warning",
+        "info",
+        "debug",
+        "trace",
+        "log",
+        "message",
+        "packet",
+        "frame",
+        "byte",
+        "bit",
+        "signal",
+        "noise",
+        "channel",
+        "input",
+        "output",
+        "read",
+        "write",
+        "open",
+        "close",
+        "connect",
+    ];
+
+    // Buffer to batch writes for better throughput
+    let mut buffer = String::with_capacity(8192);
+
+    loop {
+        buffer.clear();
+
+        // Generate a batch of lines
+        for _ in 0..100 {
+            line_count += 1;
+
+            // Generate a line with random words (5-15 words per line)
+            let word_count = rng.random_range(5..=15);
+            buffer.push_str(&format!("[{:08}] ", line_count));
+
+            for i in 0..word_count {
+                let idx = rng.random_range(0..words.len());
+                buffer.push_str(words[idx]);
+                if i < word_count - 1 {
+                    buffer.push(' ');
+                }
+            }
+            buffer.push_str("\r\n");
+        }
+
+        byte_count += buffer.len() as u64;
+        writer.write_all(buffer.as_bytes()).await?;
+
+        // Print stats every 10000 lines
+        if line_count % 10000 == 0 {
+            let elapsed = start.elapsed().as_secs_f64();
+            let lines_per_sec = line_count as f64 / elapsed;
+            let kb_per_sec = (byte_count as f64 / 1024.0) / elapsed;
+            println!(
+                "[flood] {} lines, {:.1} KB ({:.0} lines/s, {:.1} KB/s)",
+                line_count,
+                byte_count as f64 / 1024.0,
+                lines_per_sec,
+                kb_per_sec
+            );
+        }
+
+        // Tiny yield to prevent complete CPU starvation, but keep it fast
+        tokio::task::yield_now().await;
     }
 }
