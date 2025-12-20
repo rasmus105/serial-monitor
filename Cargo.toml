@@ -1,7 +1,22 @@
-[package]
-name = "serial-monitor"
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
-[dependencies]
-serialport = "4.7.3"
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "io-util"] }
+
+# Serial port
+tokio-serial = "5.4"
+serialport = "4.7"
+
+# Error handling
+thiserror = "2"
+
+# Internal crates
+serial-core = { path = "crates/serial-core" }
