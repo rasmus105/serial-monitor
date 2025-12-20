@@ -416,8 +416,9 @@ fn render_port_list(frame: &mut Frame, app: &App, area: Rect) {
 fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.port_select.focus == PortSelectFocus::Config;
     let dropdown_open = app.input.mode == InputMode::ConfigDropdown;
+    let text_input_open = app.input.mode == InputMode::ConfigTextInput;
 
-    let border_style = if is_focused || dropdown_open {
+    let border_style = if is_focused || dropdown_open || text_input_open {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
@@ -436,38 +437,59 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Build config lines using ConfigField iterator
-    let lines: Vec<Line> = ConfigField::iter()
-        .map(|field| {
-            let is_selected =
-                app.port_select.config_field == field && (is_focused || dropdown_open);
-            let prefix = if is_selected { "> " } else { "  " };
+    // Build config lines using ConfigField iterator, grouping by section
+    let panel_width = inner.width as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    let mut in_file_save_section = false;
 
-            let label_style = if is_selected {
+    for field in ConfigField::iter() {
+        // Add separator before file saving section
+        if field.is_file_saving_field() && !in_file_save_section {
+            in_file_save_section = true;
+            lines.push(Line::from("")); // Spacer
+            lines.push(Line::from(Span::styled(
+                create_separator("File Saving", panel_width),
                 Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
 
-            let value_style = if is_selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Cyan)
-            };
+        let is_selected =
+            app.port_select.config_field == field && (is_focused || dropdown_open || text_input_open);
+        let prefix = if is_selected { "> " } else { "  " };
 
-            let value = app.port_select.get_config_display(field);
+        let label_style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
 
-            Line::from(vec![
-                Span::styled(prefix, label_style),
-                Span::styled(format!("{}: ", field.label()), label_style),
-                Span::styled(value, value_style),
-            ])
-        })
-        .collect();
+        let value_style = if is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+
+        let value = app.port_select.get_config_display(field);
+
+        // For text input fields being edited, show the input buffer
+        let display_value = if text_input_open && is_selected && field.is_text_input() {
+            format!("{}▌", app.input.buffer)
+        } else {
+            value
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(prefix, label_style),
+            Span::styled(format!("{}: ", field.label()), label_style),
+            Span::styled(display_value, value_style),
+        ]));
+    }
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
@@ -772,8 +794,9 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
 fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.traffic.focus == TrafficFocus::Config;
     let dropdown_open = app.input.mode == InputMode::TrafficConfigDropdown;
+    let text_input_open = app.input.mode == InputMode::TrafficConfigTextInput;
 
-    let border_style = if is_focused || dropdown_open {
+    let border_style = if is_focused || dropdown_open || text_input_open {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
@@ -806,6 +829,7 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     let panel_width = inner.width as usize;
     let connection_sep = create_separator("Connection", panel_width);
     let settings_sep = create_separator("Settings", panel_width);
+    let file_save_sep = create_separator("File Saving", panel_width);
 
     let mut lines: Vec<Line> = vec![
         // Header: Connection Info (read-only)
@@ -834,8 +858,22 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     ];
 
     // Build config lines using TrafficConfigField iterator
+    let mut in_file_save_section = false;
+
     for field in TrafficConfigField::iter() {
-        let is_selected = app.traffic.config_field == field && (is_focused || dropdown_open);
+        // Add separator before file saving section
+        if field.is_file_saving_field() && !in_file_save_section {
+            in_file_save_section = true;
+            lines.push(Line::from("")); // Spacer
+            lines.push(Line::from(Span::styled(
+                file_save_sep.clone(),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+
+        let is_selected = app.traffic.config_field == field && (is_focused || dropdown_open || text_input_open);
         let prefix = if is_selected { "> " } else { "  " };
 
         let label_style = if is_selected {
@@ -847,6 +885,14 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         };
 
         let value = app.traffic.get_config_display(field);
+
+        // For text input fields being edited, show the input buffer with cursor
+        let is_editing_this_field = text_input_open && is_selected && field.is_text_input();
+        let display_value = if is_editing_this_field {
+            format!("{}▌", app.input.buffer)
+        } else {
+            value.clone()
+        };
 
         // For boolean toggles, show a checkbox-style indicator
         let value_span = if field.is_toggle() {
@@ -864,7 +910,7 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default().fg(Color::Cyan)
             };
-            Span::styled(value, value_style)
+            Span::styled(display_value, value_style)
         };
 
         // Build label with optional shortcut hint (from configurable keybindings)
@@ -978,9 +1024,9 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         None => {
             // Normal mode or special modes without text input
             let (text, color) = match app.input.mode {
-                InputMode::ConfigDropdown | InputMode::TrafficConfigDropdown => {
-                    (app.input.mode.entry_prompt(), Color::Cyan)
-                }
+                InputMode::ConfigDropdown
+                | InputMode::TrafficConfigDropdown
+                | InputMode::SettingsDropdown => (app.input.mode.entry_prompt(), Color::Cyan),
                 _ => (app.status.as_str(), Color::White),
             };
             let status = Paragraph::new(text).style(Style::default().fg(color));
@@ -1059,6 +1105,7 @@ fn render_settings_panel(frame: &mut Frame, app: &App) {
 
     // Render tab content
     match app.settings_panel.tab {
+        SettingsTab::General => render_general_settings_tab(frame, app, chunks[1]),
         SettingsTab::Keybindings => render_keybindings_tab(frame, app, chunks[1]),
     }
 
@@ -1088,6 +1135,108 @@ fn render_settings_tabs(frame: &mut Frame, app: &App, area: Rect) {
         .divider(" | ");
 
     frame.render_widget(tabs, area);
+}
+
+fn render_general_settings_tab(frame: &mut Frame, app: &App, area: Rect) {
+    let dropdown_open = app.input.mode == InputMode::SettingsDropdown;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Section header
+    lines.push(Line::from(vec![Span::styled(
+        "── Search ──",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )]));
+    lines.push(Line::from(""));
+
+    // Search mode as a compact combobox-style setting
+    let prefix = "> ";
+    let mode_display = format!("[ {} ]", app.search.mode.name());
+    let label_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let value_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+
+    lines.push(Line::from(vec![
+        Span::styled(prefix, label_style),
+        Span::styled("Search mode: ", label_style),
+        Span::styled(mode_display, value_style),
+    ]));
+
+    // Hint for the current mode
+    lines.push(Line::from(vec![
+        Span::raw("               "),
+        Span::styled(
+            app.search.mode.description(),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
+
+    // Render dropdown popup if open
+    if dropdown_open {
+        render_settings_dropdown(frame, app, area);
+    }
+}
+
+fn render_settings_dropdown(frame: &mut Frame, app: &App, settings_area: Rect) {
+    let options = ["Regex", "Normal"];
+    let dropdown_height = (options.len() + 2) as u16; // +2 for borders
+    let dropdown_width = options.iter().map(|s| s.len()).max().unwrap_or(10) as u16 + 6; // +6 for padding and borders
+
+    // Position the dropdown next to the "Search mode:" line (line 2 in the content area)
+    let dropdown_y = settings_area.y + 2; // After section header and empty line
+    let dropdown_x = settings_area.x + 18; // After "> Search mode: "
+
+    // Ensure dropdown fits on screen
+    let available_height = frame.area().height.saturating_sub(dropdown_y);
+    let actual_height = dropdown_height.min(available_height).max(3);
+
+    let dropdown_area = Rect::new(
+        dropdown_x.min(settings_area.x + settings_area.width.saturating_sub(dropdown_width)),
+        dropdown_y,
+        dropdown_width.min(settings_area.width),
+        actual_height,
+    );
+
+    // Clear the dropdown area first
+    frame.render_widget(Clear, dropdown_area);
+
+    // Build dropdown items
+    let items: Vec<ListItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, option)| {
+            let is_selected = i == app.settings_panel.dropdown_index;
+            let prefix = if is_selected { "> " } else { "  " };
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            ListItem::new(format!("{}{}", prefix, option)).style(style)
+        })
+        .collect();
+
+    let dropdown_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    let dropdown_list = List::new(items).block(dropdown_block);
+
+    frame.render_widget(dropdown_list, dropdown_area);
 }
 
 fn render_keybindings_tab(frame: &mut Frame, app: &App, area: Rect) {
@@ -1187,10 +1336,15 @@ fn render_keybindings_tab(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_settings_help(frame: &mut Frame, app: &App, area: Rect) {
-    let help_text = if app.settings_panel.recording_key {
-        "Press any key to add binding | Esc: Cancel"
-    } else {
-        "j/k: Navigate | Ctrl+u/d: Page | a: Add | d: Delete | r: Reset | Esc: Close"
+    let help_text = match app.settings_panel.tab {
+        SettingsTab::General => "Space/Enter: Toggle | h/l: Switch tab | Esc: Close",
+        SettingsTab::Keybindings => {
+            if app.settings_panel.recording_key {
+                "Press any key to add binding | Esc: Cancel"
+            } else {
+                "j/k: Navigate | Ctrl+u/d: Page | a: Add | d: Delete | r: Reset | Esc: Close"
+            }
+        }
     };
 
     let help = Paragraph::new(help_text)

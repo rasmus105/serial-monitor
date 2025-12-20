@@ -3,16 +3,18 @@
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use regex::Regex;
 use serial_core::{
-    encode, list_ports, send_file, DataBits, Encoding, FileSendConfig, FileSendHandle,
-    FileSendProgress, FlowControl, Parity, PortInfo, SerialConfig, Session, SessionEvent,
-    SessionHandle, StopBits,
+    encode, list_ports, send_file, start_file_saver, DataBits, DataChunk, Encoding, FileSendConfig,
+    FileSendHandle, FileSendProgress, FileSaveConfig, FileSaverHandle, FlowControl, Parity,
+    PortInfo, SaveFormat, SerialConfig, Session, SessionEvent, SessionHandle, StopBits,
 };
 use strum::{EnumCount, EnumIter, IntoEnumIterator};
 
 use crate::command::{map_global_nav_key, DropdownCommand, GlobalNavCommand, PortSelectCommand, TrafficCommand};
 use crate::settings::{
     key_event_to_binding, map_settings_key, Settings, SettingsCommand, SettingsPanelState,
+    SettingsTab,
 };
 use crate::ui::format_hex_grouped;
 
@@ -125,6 +127,21 @@ impl ConfigOption for Encoding {
             Encoding::Utf8 => "UTF-8",
             Encoding::Ascii => "ASCII",
             Encoding::Binary => "Binary",
+        }
+    }
+}
+
+impl ConfigOption for SaveFormat {
+    fn all_variants() -> &'static [Self] {
+        SaveFormat::all()
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            SaveFormat::Utf8 => "UTF-8",
+            SaveFormat::Ascii => "ASCII",
+            SaveFormat::Hex => "HEX",
+            SaveFormat::Raw => "Raw",
         }
     }
 }
@@ -404,6 +421,11 @@ pub enum ConfigField {
     Parity,
     StopBits,
     FlowControl,
+    // File saving fields
+    SaveEnabled,
+    SaveFormat,
+    SaveFilename,
+    SaveDirectory,
 }
 
 /// Which configuration field is selected in traffic view config panel
@@ -420,6 +442,11 @@ pub enum TrafficConfigField {
     ShowTx,
     ShowRx,
     HexGrouping,
+    // File saving fields
+    SaveEnabled,
+    SaveFormat,
+    SaveFilename,
+    SaveDirectory,
 }
 
 impl TrafficConfigField {
@@ -452,10 +479,14 @@ impl TrafficConfigField {
             TrafficConfigField::ShowTx => "Show TX",
             TrafficConfigField::ShowRx => "Show RX",
             TrafficConfigField::HexGrouping => "Hex Grouping",
+            TrafficConfigField::SaveEnabled => "Save to File",
+            TrafficConfigField::SaveFormat => "Save Format",
+            TrafficConfigField::SaveFilename => "Filename",
+            TrafficConfigField::SaveDirectory => "Directory",
         }
     }
 
-    /// Whether this field is a simple toggle (vs a dropdown)
+    /// Whether this field is a simple toggle (vs a dropdown or text input)
     pub fn is_toggle(&self) -> bool {
         matches!(
             self,
@@ -465,6 +496,15 @@ impl TrafficConfigField {
                 | TrafficConfigField::LockToBottom
                 | TrafficConfigField::ShowTx
                 | TrafficConfigField::ShowRx
+                | TrafficConfigField::SaveEnabled
+        )
+    }
+
+    /// Whether this field is a text input field
+    pub fn is_text_input(&self) -> bool {
+        matches!(
+            self,
+            TrafficConfigField::SaveFilename | TrafficConfigField::SaveDirectory
         )
     }
 
@@ -477,6 +517,17 @@ impl TrafficConfigField {
             TrafficConfigField::Encoding => Some(TrafficCommand::CycleEncoding),
             _ => None,
         }
+    }
+
+    /// Check if this is a file saving field (for section grouping)
+    pub fn is_file_saving_field(&self) -> bool {
+        matches!(
+            self,
+            TrafficConfigField::SaveEnabled
+                | TrafficConfigField::SaveFormat
+                | TrafficConfigField::SaveFilename
+                | TrafficConfigField::SaveDirectory
+        )
     }
 }
 
@@ -505,7 +556,84 @@ impl ConfigField {
             ConfigField::Parity => "Parity",
             ConfigField::StopBits => "Stop Bits",
             ConfigField::FlowControl => "Flow Ctrl",
+            ConfigField::SaveEnabled => "Save to File",
+            ConfigField::SaveFormat => "Save Format",
+            ConfigField::SaveFilename => "Filename",
+            ConfigField::SaveDirectory => "Directory",
         }
+    }
+
+    /// Whether this field is a text input field
+    pub fn is_text_input(&self) -> bool {
+        matches!(
+            self,
+            ConfigField::SaveFilename | ConfigField::SaveDirectory
+        )
+    }
+
+    /// Whether this field is a simple toggle
+    pub fn is_toggle(&self) -> bool {
+        matches!(self, ConfigField::SaveEnabled)
+    }
+
+    /// Check if this is a file saving field (for section grouping)
+    pub fn is_file_saving_field(&self) -> bool {
+        matches!(
+            self,
+            ConfigField::SaveEnabled
+                | ConfigField::SaveFormat
+                | ConfigField::SaveFilename
+                | ConfigField::SaveDirectory
+        )
+    }
+
+    /// Check if this is a serial config field
+    pub fn is_serial_field(&self) -> bool {
+        !self.is_file_saving_field()
+    }
+}
+
+/// Which file saving configuration field is selected in port selection config panel
+#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount)]
+pub enum FileSaveConfigField {
+    #[default]
+    SaveFormat,
+    SaveFilename,
+    SaveDirectory,
+}
+
+impl FileSaveConfigField {
+    pub fn next(self) -> Self {
+        let variants: Vec<_> = Self::iter().collect();
+        let idx = variants.iter().position(|&v| v == self).unwrap_or(0);
+        variants[(idx + 1) % variants.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        let variants: Vec<_> = Self::iter().collect();
+        let idx = variants.iter().position(|&v| v == self).unwrap_or(0);
+        variants[(idx + variants.len() - 1) % variants.len()]
+    }
+
+    pub fn index(self) -> usize {
+        Self::iter().position(|v| v == self).unwrap_or(0)
+    }
+
+    /// Get the label for this config field
+    pub fn label(&self) -> &'static str {
+        match self {
+            FileSaveConfigField::SaveFormat => "Save Format",
+            FileSaveConfigField::SaveFilename => "Filename",
+            FileSaveConfigField::SaveDirectory => "Directory",
+        }
+    }
+
+    /// Whether this field is a text input field
+    pub fn is_text_input(&self) -> bool {
+        matches!(
+            self,
+            FileSaveConfigField::SaveFilename | FileSaveConfigField::SaveDirectory
+        )
     }
 }
 
@@ -527,12 +655,18 @@ pub enum InputMode {
     ConfigDropdown,
     /// Traffic config dropdown is open
     TrafficConfigDropdown,
+    /// Settings dropdown is open (General tab)
+    SettingsDropdown,
     /// Waiting for window command after Ctrl+W
     WindowCommand,
     /// Command line mode (after pressing :)
     CommandLine,
     /// Split selection mode (choosing which content to split with)
     SplitSelect,
+    /// Editing a config text field (port selection)
+    ConfigTextInput,
+    /// Editing a traffic config text field
+    TrafficConfigTextInput,
 }
 
 /// Visual properties for rendering an input mode in the status bar
@@ -555,9 +689,12 @@ impl InputMode {
             InputMode::FilePathInput => "Enter file path to send:",
             InputMode::ConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::TrafficConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
+            InputMode::SettingsDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::WindowCommand => "Ctrl+W: v=vsplit, q=close, h/l=navigate",
             InputMode::CommandLine => "",
             InputMode::SplitSelect => "", // Dynamic based on available splits
+            InputMode::ConfigTextInput => "Enter value (Enter: confirm, Esc: cancel)",
+            InputMode::TrafficConfigTextInput => "Enter value (Enter: confirm, Esc: cancel)",
         }
     }
 
@@ -584,12 +721,21 @@ impl InputMode {
             }),
             InputMode::ConfigDropdown => None,         // Uses special rendering
             InputMode::TrafficConfigDropdown => None,  // Uses special rendering
+            InputMode::SettingsDropdown => None,       // Uses special rendering
             InputMode::WindowCommand => None,          // Uses status bar message
             InputMode::CommandLine => Some(InputModeStyle {
                 prefix: ":",
                 color: Color::Yellow,
             }),
             InputMode::SplitSelect => None,            // Uses status bar message
+            InputMode::ConfigTextInput => Some(InputModeStyle {
+                prefix: "",
+                color: Color::Cyan,
+            }),
+            InputMode::TrafficConfigTextInput => Some(InputModeStyle {
+                prefix: "",
+                color: Color::Cyan,
+            }),
         }
     }
 }
@@ -622,6 +768,15 @@ pub struct PortSelectState {
     pub serial_config: SerialConfig,
     /// Dropdown selection index (when dropdown is open)
     pub dropdown_index: usize,
+    // File saving configuration (pre-connection)
+    /// Whether file saving should start on connect
+    pub save_enabled: bool,
+    /// Save format
+    pub save_format: SaveFormat,
+    /// Custom filename (None = auto-generated)
+    pub save_filename: String,
+    /// Save directory
+    pub save_directory: String,
 }
 
 impl Default for PortSelectState {
@@ -634,8 +789,19 @@ impl Default for PortSelectState {
             config_panel_visible: true,
             serial_config: SerialConfig::default(),
             dropdown_index: 0,
+            save_enabled: false,
+            save_format: SaveFormat::default(),
+            save_filename: String::new(), // Empty = auto-generated
+            save_directory: default_save_directory(),
         }
     }
+}
+
+/// Get the default save directory (user's home directory or current directory)
+fn default_save_directory() -> String {
+    std::env::var("HOME")
+        .map(|h| format!("{}/serial-logs", h))
+        .unwrap_or_else(|_| ".".to_string())
 }
 
 impl PortSelectState {
@@ -675,6 +841,12 @@ impl PortSelectState {
                 .into_iter()
                 .map(String::from)
                 .collect(),
+            ConfigField::SaveFormat => SaveFormat::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            // Toggle and text input fields don't have dropdown options
+            ConfigField::SaveEnabled | ConfigField::SaveFilename | ConfigField::SaveDirectory => vec![],
         }
     }
 
@@ -689,6 +861,8 @@ impl PortSelectState {
             ConfigField::Parity => self.serial_config.parity.index(),
             ConfigField::StopBits => self.serial_config.stop_bits.index(),
             ConfigField::FlowControl => self.serial_config.flow_control.index(),
+            ConfigField::SaveFormat => self.save_format.index(),
+            ConfigField::SaveEnabled | ConfigField::SaveFilename | ConfigField::SaveDirectory => 0,
         }
     }
 
@@ -700,6 +874,18 @@ impl PortSelectState {
             ConfigField::Parity => self.serial_config.parity.display_name().to_string(),
             ConfigField::StopBits => self.serial_config.stop_bits.display_name().to_string(),
             ConfigField::FlowControl => self.serial_config.flow_control.display_name().to_string(),
+            ConfigField::SaveEnabled => {
+                if self.save_enabled { "ON" } else { "OFF" }.to_string()
+            }
+            ConfigField::SaveFormat => self.save_format.display_name().to_string(),
+            ConfigField::SaveFilename => {
+                if self.save_filename.is_empty() {
+                    "(auto)".to_string()
+                } else {
+                    self.save_filename.clone()
+                }
+            }
+            ConfigField::SaveDirectory => self.save_directory.clone(),
         }
     }
 
@@ -728,6 +914,11 @@ impl PortSelectState {
             ConfigField::FlowControl => {
                 self.serial_config.flow_control = FlowControl::from_index(self.dropdown_index);
             }
+            ConfigField::SaveFormat => {
+                self.save_format = SaveFormat::from_index(self.dropdown_index);
+            }
+            // Toggle and text input fields don't use dropdown
+            ConfigField::SaveEnabled | ConfigField::SaveFilename | ConfigField::SaveDirectory => {}
         }
     }
 
@@ -739,6 +930,38 @@ impl PortSelectState {
             ConfigField::Parity => Parity::all_variants().len(),
             ConfigField::StopBits => StopBits::all_variants().len(),
             ConfigField::FlowControl => FlowControl::all_variants().len(),
+            ConfigField::SaveFormat => SaveFormat::all_variants().len(),
+            ConfigField::SaveEnabled | ConfigField::SaveFilename | ConfigField::SaveDirectory => 0,
+        }
+    }
+
+    /// Toggle a boolean setting
+    pub fn toggle_setting(&mut self) {
+        match self.config_field {
+            ConfigField::SaveEnabled => self.save_enabled = !self.save_enabled,
+            _ => {}
+        }
+    }
+
+    /// Apply text input value to the appropriate field
+    pub fn apply_text_input(&mut self, value: String) {
+        match self.config_field {
+            ConfigField::SaveFilename => {
+                self.save_filename = value;
+            }
+            ConfigField::SaveDirectory => {
+                self.save_directory = value;
+            }
+            _ => {}
+        }
+    }
+
+    /// Get the current text value for text input fields
+    pub fn get_text_value(&self) -> String {
+        match self.config_field {
+            ConfigField::SaveFilename => self.save_filename.clone(),
+            ConfigField::SaveDirectory => self.save_directory.clone(),
+            _ => String::new(),
         }
     }
 }
@@ -945,6 +1168,15 @@ pub struct TrafficState {
     pub visible_height: usize,
     /// Whether quit confirmation dialog is showing
     pub quit_confirm: bool,
+    // File saving state
+    /// Whether file saving is enabled
+    pub save_enabled: bool,
+    /// Save format
+    pub save_format: SaveFormat,
+    /// Custom filename (empty = auto-generated)
+    pub save_filename: String,
+    /// Save directory
+    pub save_directory: String,
 }
 
 impl Default for TrafficState {
@@ -971,6 +1203,11 @@ impl Default for TrafficState {
             total_rows: 0,
             visible_height: 0,
             quit_confirm: false,
+            // File saving defaults
+            save_enabled: false,
+            save_format: SaveFormat::default(),
+            save_filename: String::new(),
+            save_directory: default_save_directory(),
         }
     }
 }
@@ -1001,6 +1238,18 @@ impl TrafficState {
                 if self.show_rx { "ON" } else { "OFF" }.to_string()
             }
             TrafficConfigField::HexGrouping => self.hex_grouping.display_name().to_string(),
+            TrafficConfigField::SaveEnabled => {
+                if self.save_enabled { "ON" } else { "OFF" }.to_string()
+            }
+            TrafficConfigField::SaveFormat => self.save_format.display_name().to_string(),
+            TrafficConfigField::SaveFilename => {
+                if self.save_filename.is_empty() {
+                    "(auto)".to_string()
+                } else {
+                    self.save_filename.clone()
+                }
+            }
+            TrafficConfigField::SaveDirectory => self.save_directory.clone(),
         }
     }
 
@@ -1023,7 +1272,11 @@ impl TrafficState {
                 .into_iter()
                 .map(String::from)
                 .collect(),
-            // Toggle fields don't have dropdowns
+            TrafficConfigField::SaveFormat => SaveFormat::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            // Toggle and text input fields don't have dropdowns
             _ => vec![],
         }
     }
@@ -1035,6 +1288,7 @@ impl TrafficState {
             TrafficConfigField::Encoding => self.encoding.index(),
             TrafficConfigField::WrapMode => self.wrap_mode.index(),
             TrafficConfigField::HexGrouping => self.hex_grouping.index(),
+            TrafficConfigField::SaveFormat => self.save_format.index(),
             _ => 0,
         }
     }
@@ -1046,6 +1300,7 @@ impl TrafficState {
             TrafficConfigField::Encoding => Encoding::all_variants().len(),
             TrafficConfigField::WrapMode => WrapMode::all_variants().len(),
             TrafficConfigField::HexGrouping => HexGrouping::all_variants().len(),
+            TrafficConfigField::SaveFormat => SaveFormat::all_variants().len(),
             _ => 0,
         }
     }
@@ -1070,6 +1325,9 @@ impl TrafficState {
             TrafficConfigField::HexGrouping => {
                 self.hex_grouping = HexGrouping::from_index(self.dropdown_index);
             }
+            TrafficConfigField::SaveFormat => {
+                self.save_format = SaveFormat::from_index(self.dropdown_index);
+            }
             _ => {}
         }
     }
@@ -1083,7 +1341,30 @@ impl TrafficState {
             TrafficConfigField::LockToBottom => self.lock_to_bottom = !self.lock_to_bottom,
             TrafficConfigField::ShowTx => self.show_tx = !self.show_tx,
             TrafficConfigField::ShowRx => self.show_rx = !self.show_rx,
+            TrafficConfigField::SaveEnabled => self.save_enabled = !self.save_enabled,
             _ => {}
+        }
+    }
+
+    /// Apply text input value to the appropriate field
+    pub fn apply_text_input(&mut self, value: String) {
+        match self.config_field {
+            TrafficConfigField::SaveFilename => {
+                self.save_filename = value;
+            }
+            TrafficConfigField::SaveDirectory => {
+                self.save_directory = value;
+            }
+            _ => {}
+        }
+    }
+
+    /// Get the current text value for text input fields
+    pub fn get_text_value(&self) -> String {
+        match self.config_field {
+            TrafficConfigField::SaveFilename => self.save_filename.clone(),
+            TrafficConfigField::SaveDirectory => self.save_directory.clone(),
+            _ => String::new(),
         }
     }
 
@@ -1108,6 +1389,39 @@ pub struct SearchMatch {
     pub byte_end: usize,
 }
 
+/// Search mode - determines how the search pattern is interpreted
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchMode {
+    /// Regex search (default) - pattern is interpreted as a regular expression
+    #[default]
+    Regex,
+    /// Normal search - pattern is interpreted as a literal string (case-insensitive)
+    Normal,
+}
+
+impl SearchMode {
+    pub fn name(&self) -> &'static str {
+        match self {
+            SearchMode::Regex => "Regex",
+            SearchMode::Normal => "Normal",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            SearchMode::Regex => "Pattern is interpreted as a regular expression",
+            SearchMode::Normal => "Pattern is interpreted as a literal string (case-insensitive)",
+        }
+    }
+
+    pub fn toggle(&self) -> Self {
+        match self {
+            SearchMode::Regex => SearchMode::Normal,
+            SearchMode::Normal => SearchMode::Regex,
+        }
+    }
+}
+
 /// State for search functionality
 #[derive(Debug, Default)]
 pub struct SearchState {
@@ -1117,6 +1431,10 @@ pub struct SearchState {
     pub matches: Vec<SearchMatch>,
     /// Index into `matches` for the current match (0-based)
     pub current_match: Option<usize>,
+    /// Search mode (regex or normal)
+    pub mode: SearchMode,
+    /// Error message from regex compilation (if any)
+    pub error: Option<String>,
 }
 
 impl SearchState {
@@ -1125,6 +1443,7 @@ impl SearchState {
         self.pattern = None;
         self.matches.clear();
         self.current_match = None;
+        self.error = None;
     }
 
     /// Get the total number of matches
@@ -1236,6 +1555,8 @@ pub struct App {
     pub settings: Settings,
     /// Settings panel state
     pub settings_panel: SettingsPanelState,
+    /// File saver handle (if saving is active)
+    pub file_saver: Option<FileSaverHandle>,
 
     /// Tokio runtime handle for async operations
     runtime: tokio::runtime::Handle,
@@ -1269,6 +1590,7 @@ impl App {
             file_send: FileSendState::default(),
             settings: Settings::default(),
             settings_panel: SettingsPanelState::default(),
+            file_saver: None,
             runtime,
         }
     }
@@ -1304,9 +1626,12 @@ impl App {
             InputMode::FilePathInput => self.handle_key_file_path_input(key),
             InputMode::ConfigDropdown => self.handle_key_config_dropdown(key),
             InputMode::TrafficConfigDropdown => self.handle_key_traffic_config_dropdown(key),
+            InputMode::SettingsDropdown => self.handle_key_settings_dropdown(key),
             InputMode::WindowCommand => self.handle_key_window_command(key),
             InputMode::CommandLine => self.handle_key_command_line(key),
             InputMode::SplitSelect => self.handle_key_split_select(key),
+            InputMode::ConfigTextInput => self.handle_key_config_text_input(key),
+            InputMode::TrafficConfigTextInput => self.handle_key_traffic_config_text_input(key),
         }
     }
 
@@ -1342,6 +1667,32 @@ impl App {
 
         // Use visible height for scroll calculations (approximate, will be set properly by render)
         let visible_height = self.settings_panel_visible_height();
+
+        // Handle General tab separately - it has simpler controls
+        if self.settings_panel.tab == SettingsTab::General {
+            match key.code {
+                KeyCode::Esc => {
+                    self.settings_panel.close();
+                    self.needs_full_clear = true;
+                }
+                KeyCode::Char(' ') | KeyCode::Enter => {
+                    // Open dropdown for search mode selection
+                    self.settings_panel.dropdown_index = match self.search.mode {
+                        SearchMode::Regex => 0,
+                        SearchMode::Normal => 1,
+                    };
+                    self.input.mode = InputMode::SettingsDropdown;
+                }
+                KeyCode::Char('l') | KeyCode::Tab => {
+                    self.settings_panel.tab = self.settings_panel.tab.next();
+                }
+                KeyCode::Char('h') | KeyCode::BackTab => {
+                    self.settings_panel.tab = self.settings_panel.tab.prev();
+                }
+                _ => {}
+            }
+            return;
+        }
 
         // First check for global navigation commands (j/k, Ctrl+u/d, etc.)
         if let Some(nav_cmd) = map_global_nav_key(&key) {
@@ -1486,8 +1837,24 @@ impl App {
                             }
                         }
                         PortSelectFocus::Config => {
-                            self.port_select.open_dropdown();
-                            self.input.mode = InputMode::ConfigDropdown;
+                            // Check if it's a toggle field
+                            if self.port_select.config_field.is_toggle() {
+                                self.port_select.toggle_setting();
+                                self.status = format!(
+                                    "{}: {}",
+                                    self.port_select.config_field.label(),
+                                    self.port_select.get_config_display(self.port_select.config_field)
+                                );
+                            } else if self.port_select.config_field.is_text_input() {
+                                // Text input field
+                                self.input.buffer = self.port_select.get_text_value();
+                                self.input.mode = InputMode::ConfigTextInput;
+                                self.status = InputMode::ConfigTextInput.entry_prompt().to_string();
+                            } else {
+                                // Dropdown field
+                                self.port_select.open_dropdown();
+                                self.input.mode = InputMode::ConfigDropdown;
+                            }
                         }
                     }
                     return;
@@ -1588,6 +1955,68 @@ impl App {
         }
     }
 
+    fn handle_key_settings_dropdown(&mut self, key: KeyEvent) {
+        const OPTIONS_COUNT: usize = 2; // Regex, Normal
+
+        // Use global navigation for dropdown
+        if let Some(nav_cmd) = map_global_nav_key(&key) {
+            match nav_cmd {
+                GlobalNavCommand::Up => {
+                    if self.settings_panel.dropdown_index > 0 {
+                        self.settings_panel.dropdown_index -= 1;
+                    }
+                    return;
+                }
+                GlobalNavCommand::Down => {
+                    if self.settings_panel.dropdown_index < OPTIONS_COUNT - 1 {
+                        self.settings_panel.dropdown_index += 1;
+                    }
+                    return;
+                }
+                GlobalNavCommand::Confirm => {
+                    // Apply selection
+                    self.search.mode = match self.settings_panel.dropdown_index {
+                        0 => SearchMode::Regex,
+                        _ => SearchMode::Normal,
+                    };
+                    self.status = format!("Search mode: {}", self.search.mode.name());
+                    // Re-run search if there's an active pattern
+                    if self.search.pattern.is_some() {
+                        self.update_search_matches();
+                    }
+                    self.input.mode = InputMode::Normal;
+                    return;
+                }
+                GlobalNavCommand::Cancel => {
+                    self.input.mode = InputMode::Normal;
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Fall back to dropdown-specific bindings
+        if let Some(cmd) = self.settings.keybindings.dropdown.find_command(&key) {
+            match cmd {
+                DropdownCommand::Confirm => {
+                    // Apply selection
+                    self.search.mode = match self.settings_panel.dropdown_index {
+                        0 => SearchMode::Regex,
+                        _ => SearchMode::Normal,
+                    };
+                    self.status = format!("Search mode: {}", self.search.mode.name());
+                    if self.search.pattern.is_some() {
+                        self.update_search_matches();
+                    }
+                    self.input.mode = InputMode::Normal;
+                }
+                DropdownCommand::Cancel => {
+                    self.input.mode = InputMode::Normal;
+                }
+            }
+        }
+    }
+
     fn handle_key_port_input(&mut self, key: KeyEvent) {
         match self.input.handle_text_input(key) {
             TextInputResult::Submit(port_path) => {
@@ -1665,15 +2094,13 @@ impl App {
                 }
                 GlobalNavCommand::Confirm => {
                     if config_focused {
-                        // Toggle or open dropdown for config field
+                        // Toggle or open dropdown/text input for config field
                         if self.traffic.config_field.is_toggle() {
-                            self.traffic.toggle_setting();
-                            self.status = format!(
-                                "{}: {}",
-                                self.traffic.config_field.label(),
-                                self.traffic.get_config_display(self.traffic.config_field)
-                            );
-                            self.needs_full_clear = true;
+                            self.handle_traffic_toggle();
+                        } else if self.traffic.config_field.is_text_input() {
+                            self.input.buffer = self.traffic.get_text_value();
+                            self.input.mode = InputMode::TrafficConfigTextInput;
+                            self.status = InputMode::TrafficConfigTextInput.entry_prompt().to_string();
                         } else {
                             self.traffic.open_dropdown();
                             self.input.mode = InputMode::TrafficConfigDropdown;
@@ -1881,13 +2308,11 @@ impl App {
                 }
                 GlobalNavCommand::Confirm => {
                     if self.traffic.config_field.is_toggle() {
-                        self.traffic.toggle_setting();
-                        self.status = format!(
-                            "{}: {}",
-                            self.traffic.config_field.label(),
-                            self.traffic.get_config_display(self.traffic.config_field)
-                        );
-                        self.needs_full_clear = true;
+                        self.handle_traffic_toggle();
+                    } else if self.traffic.config_field.is_text_input() {
+                        self.input.buffer = self.traffic.get_text_value();
+                        self.input.mode = InputMode::TrafficConfigTextInput;
+                        self.status = InputMode::TrafficConfigTextInput.entry_prompt().to_string();
                     } else {
                         self.traffic.open_dropdown();
                         self.input.mode = InputMode::TrafficConfigDropdown;
@@ -2323,60 +2748,146 @@ impl App {
         }
     }
 
+    fn handle_key_config_text_input(&mut self, key: KeyEvent) {
+        match self.input.handle_text_input(key) {
+            TextInputResult::Submit(value) => {
+                self.port_select.apply_text_input(value.clone());
+                self.status = format!(
+                    "{}: {}",
+                    self.port_select.config_field.label(),
+                    self.port_select.get_config_display(self.port_select.config_field)
+                );
+            }
+            TextInputResult::Cancel => {
+                self.status = "Input cancelled.".to_string();
+            }
+            TextInputResult::Continue => {}
+        }
+    }
+
+    fn handle_key_traffic_config_text_input(&mut self, key: KeyEvent) {
+        match self.input.handle_text_input(key) {
+            TextInputResult::Submit(value) => {
+                self.traffic.apply_text_input(value.clone());
+                self.status = format!(
+                    "{}: {}",
+                    self.traffic.config_field.label(),
+                    self.traffic.get_config_display(self.traffic.config_field)
+                );
+            }
+            TextInputResult::Cancel => {
+                self.status = "Input cancelled.".to_string();
+            }
+            TextInputResult::Continue => {}
+        }
+    }
+
     /// Find all match occurrences across all chunks
-    fn find_all_matches(&self) -> Vec<SearchMatch> {
+    /// Returns Ok(matches) on success, or Err(error_message) if regex is invalid
+    fn find_all_matches(&self) -> Result<Vec<SearchMatch>, String> {
         let pattern = match &self.search.pattern {
             Some(p) if !p.is_empty() => p,
-            _ => return vec![],
+            _ => return Ok(vec![]),
         };
 
-        let pattern_lower = pattern.to_lowercase();
         let mut matches = Vec::new();
 
-        if let ConnectionState::Connected(ref handle) = self.connection {
-            let buffer = handle.buffer();
-            for (chunk_idx, chunk) in buffer.chunks().enumerate() {
-                let encoded = encode(&chunk.data, self.traffic.encoding);
-                // Apply hex grouping if in hex mode (same as rendering)
-                let encoded = if self.traffic.encoding == serial_core::Encoding::Hex {
-                    format_hex_grouped(&encoded, self.traffic.hex_grouping)
-                } else {
-                    encoded
-                };
-                let encoded_lower = encoded.to_lowercase();
+        match self.search.mode {
+            SearchMode::Regex => {
+                // Compile the regex pattern
+                let regex = Regex::new(pattern).map_err(|e| format!("Invalid regex: {}", e))?;
 
-                // Find all occurrences within this chunk
-                let mut search_start = 0;
-                while let Some(rel_pos) = encoded_lower[search_start..].find(&pattern_lower) {
-                    let byte_start = search_start + rel_pos;
-                    let byte_end = byte_start + pattern.len();
-                    matches.push(SearchMatch {
-                        chunk_index: chunk_idx,
-                        byte_start,
-                        byte_end,
-                    });
-                    search_start = byte_end;
+                if let ConnectionState::Connected(ref handle) = self.connection {
+                    let buffer = handle.buffer();
+                    for (chunk_idx, chunk) in buffer.chunks().enumerate() {
+                        let encoded = encode(&chunk.data, self.traffic.encoding);
+                        // Apply hex grouping if in hex mode (same as rendering)
+                        let encoded = if self.traffic.encoding == serial_core::Encoding::Hex {
+                            format_hex_grouped(&encoded, self.traffic.hex_grouping)
+                        } else {
+                            encoded
+                        };
+
+                        // Find all regex matches within this chunk
+                        for mat in regex.find_iter(&encoded) {
+                            matches.push(SearchMatch {
+                                chunk_index: chunk_idx,
+                                byte_start: mat.start(),
+                                byte_end: mat.end(),
+                            });
+                        }
+                    }
+                }
+            }
+            SearchMode::Normal => {
+                // Case-insensitive literal search (original behavior)
+                let pattern_lower = pattern.to_lowercase();
+
+                if let ConnectionState::Connected(ref handle) = self.connection {
+                    let buffer = handle.buffer();
+                    for (chunk_idx, chunk) in buffer.chunks().enumerate() {
+                        let encoded = encode(&chunk.data, self.traffic.encoding);
+                        // Apply hex grouping if in hex mode (same as rendering)
+                        let encoded = if self.traffic.encoding == serial_core::Encoding::Hex {
+                            format_hex_grouped(&encoded, self.traffic.hex_grouping)
+                        } else {
+                            encoded
+                        };
+                        let encoded_lower = encoded.to_lowercase();
+
+                        // Find all occurrences within this chunk
+                        let mut search_start = 0;
+                        while let Some(rel_pos) = encoded_lower[search_start..].find(&pattern_lower)
+                        {
+                            let byte_start = search_start + rel_pos;
+                            let byte_end = byte_start + pattern.len();
+                            matches.push(SearchMatch {
+                                chunk_index: chunk_idx,
+                                byte_start,
+                                byte_end,
+                            });
+                            search_start = byte_end;
+                        }
+                    }
                 }
             }
         }
 
-        matches
+        Ok(matches)
     }
 
     fn update_search_matches(&mut self) {
-        self.search.matches = self.find_all_matches();
-        self.search.current_match = None;
+        // Clear any previous error
+        self.search.error = None;
 
-        if self.search.matches.is_empty() {
-            if let Some(ref pattern) = self.search.pattern {
-                self.status = format!("Pattern not found: {}", pattern);
+        match self.find_all_matches() {
+            Ok(found_matches) => {
+                self.search.matches = found_matches;
+                self.search.current_match = None;
+
+                if self.search.matches.is_empty() {
+                    if let Some(ref pattern) = self.search.pattern {
+                        self.status = format!("Pattern not found: {}", pattern);
+                    }
+                } else {
+                    self.status = format!(
+                        "Found {} match{}",
+                        self.search.match_count(),
+                        if self.search.match_count() == 1 {
+                            ""
+                        } else {
+                            "es"
+                        }
+                    );
+                }
             }
-        } else {
-            self.status = format!(
-                "Found {} match{}",
-                self.search.match_count(),
-                if self.search.match_count() == 1 { "" } else { "es" }
-            );
+            Err(error) => {
+                // Store the error and show in status line
+                self.search.error = Some(error.clone());
+                self.search.matches.clear();
+                self.search.current_match = None;
+                self.status = error;
+            }
         }
     }
 
@@ -2562,6 +3073,18 @@ impl App {
                 self.view = View::Connected;
                 self.traffic.scroll_offset = 0;
                 self.traffic.session_start = Some(std::time::SystemTime::now());
+                
+                // Copy pre-connection file save settings to traffic state
+                self.traffic.save_enabled = self.port_select.save_enabled;
+                self.traffic.save_format = self.port_select.save_format;
+                self.traffic.save_filename = self.port_select.save_filename.clone();
+                self.traffic.save_directory = self.port_select.save_directory.clone();
+                
+                // Start file saving if enabled in pre-connection settings
+                if self.traffic.save_enabled {
+                    self.start_file_saving();
+                }
+                
                 self.status = format!(
                     "Connected to {} @ {} baud",
                     port_name, self.port_select.serial_config.baud_rate
@@ -2574,6 +3097,9 @@ impl App {
     }
 
     fn disconnect(&mut self) {
+        // Stop file saving before disconnecting
+        self.stop_file_saving();
+        
         if let ConnectionState::Connected(handle) =
             std::mem::replace(&mut self.connection, ConnectionState::Disconnected)
         {
@@ -2581,27 +3107,127 @@ impl App {
         }
     }
 
+    /// Start file saving with current configuration
+    fn start_file_saving(&mut self) {
+        // Stop any existing file saver first
+        self.stop_file_saving();
+
+        // Get port name for auto-generated filename
+        let port_name = if let ConnectionState::Connected(ref handle) = self.connection {
+            handle.port_name().to_string()
+        } else {
+            "unknown".to_string()
+        };
+
+        // Build config
+        let mut config = FileSaveConfig::new(
+            self.traffic.save_directory.clone(),
+            &port_name,
+        ).with_format(self.traffic.save_format);
+
+        // Set custom filename if provided
+        if !self.traffic.save_filename.is_empty() {
+            config = config.with_filename(&self.traffic.save_filename);
+        }
+
+        // Start the file saver (spawns async task on the provided runtime)
+        match start_file_saver(config, &self.runtime) {
+            Ok(handle) => {
+                let path = handle.file_path().display().to_string();
+                self.file_saver = Some(handle);
+                self.status = format!("Saving to: {}", path);
+            }
+            Err(e) => {
+                self.status = format!("Failed to start file saving: {}", e);
+                self.traffic.save_enabled = false;
+            }
+        }
+    }
+
+    /// Stop file saving
+    fn stop_file_saving(&mut self) {
+        if let Some(handle) = self.file_saver.take() {
+            let _ = handle.stop();
+            self.status = "File saving stopped.".to_string();
+        }
+    }
+
+    /// Send data chunk to file saver (if active)
+    fn write_to_file_saver(&self, chunk: &DataChunk) {
+        if let Some(ref handle) = self.file_saver {
+            let _ = handle.write(chunk.clone());
+        }
+    }
+
+    /// Handle toggling a traffic config setting
+    /// This is separate from TrafficState::toggle_setting to handle side effects like file saving
+    fn handle_traffic_toggle(&mut self) {
+        let field = self.traffic.config_field;
+        
+        // Handle SaveEnabled specially - toggling during a session starts/stops file saving
+        if field == TrafficConfigField::SaveEnabled {
+            self.traffic.save_enabled = !self.traffic.save_enabled;
+            if self.traffic.save_enabled {
+                // Start file saving when enabled during a session
+                self.start_file_saving();
+            } else {
+                // Stop file saving when disabled during a session
+                self.stop_file_saving();
+            }
+        } else {
+            // For other toggles, use the TrafficState method
+            self.traffic.toggle_setting();
+        }
+        
+        self.status = format!(
+            "{}: {}",
+            field.label(),
+            self.traffic.get_config_display(field)
+        );
+        self.needs_full_clear = true;
+    }
+
     /// Poll for session events (non-blocking)
     pub fn poll_session_events(&mut self) {
-        if let ConnectionState::Connected(ref mut handle) = self.connection {
+        // Collect events first to avoid borrow checker issues
+        let events: Vec<SessionEvent> = if let ConnectionState::Connected(ref mut handle) = self.connection {
+            let mut events = Vec::new();
             while let Some(event) = handle.try_recv_event() {
-                match event {
-                    SessionEvent::Disconnected { error } => {
-                        self.status = match error {
-                            Some(e) => format!("Disconnected: {}", e),
-                            None => "Disconnected.".to_string(),
-                        };
-                        self.connection = ConnectionState::Disconnected;
-                        self.view = View::PortSelect;
-                        self.needs_full_clear = true;
-                        break;
-                    }
-                    SessionEvent::Error(e) => {
-                        self.status = format!("Error: {}", e);
-                    }
-                    SessionEvent::DataReceived(_) | SessionEvent::DataSent(_) => {}
-                    SessionEvent::Connected => {}
+                events.push(event);
+            }
+            events
+        } else {
+            Vec::new()
+        };
+
+        // Now process the events
+        for event in events {
+            match event {
+                SessionEvent::Disconnected { error } => {
+                    // Stop file saving on disconnect
+                    self.stop_file_saving();
+                    
+                    self.status = match error {
+                        Some(e) => format!("Disconnected: {}", e),
+                        None => "Disconnected.".to_string(),
+                    };
+                    self.connection = ConnectionState::Disconnected;
+                    self.view = View::PortSelect;
+                    self.needs_full_clear = true;
+                    break;
                 }
+                SessionEvent::Error(e) => {
+                    self.status = format!("Error: {}", e);
+                }
+                SessionEvent::DataReceived(chunk) => {
+                    // Write received data to file saver
+                    self.write_to_file_saver(&chunk);
+                }
+                SessionEvent::DataSent(chunk) => {
+                    // Write sent data to file saver
+                    self.write_to_file_saver(&chunk);
+                }
+                SessionEvent::Connected => {}
             }
         }
     }

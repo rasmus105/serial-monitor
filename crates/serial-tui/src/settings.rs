@@ -347,19 +347,20 @@ impl DropdownCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsTab {
     #[default]
+    General,
     Keybindings,
-    // Future tabs: General, Display, etc.
 }
 
 impl SettingsTab {
     pub fn name(&self) -> &'static str {
         match self {
+            SettingsTab::General => "General",
             SettingsTab::Keybindings => "Keybindings",
         }
     }
 
     pub fn all() -> &'static [SettingsTab] {
-        &[SettingsTab::Keybindings]
+        &[SettingsTab::General, SettingsTab::Keybindings]
     }
 
     pub fn next(self) -> Self {
@@ -390,6 +391,8 @@ pub struct SettingsPanelState {
     pub recording_key: bool,
     /// Index of the binding being edited (None = adding new)
     pub editing_binding_index: Option<usize>,
+    /// Dropdown selection index (for General tab dropdowns)
+    pub dropdown_index: usize,
 }
 
 impl SettingsPanelState {
@@ -658,10 +661,9 @@ pub fn map_settings_key(event: &KeyEvent) -> Option<SettingsCommand> {
     match event.code {
         // Esc, q, and Enter are also handled by GlobalNavCommand, but kept here as fallback
         KeyCode::Esc | KeyCode::Char('q') => Some(SettingsCommand::Close),
-        KeyCode::Tab if event.modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(SettingsCommand::PrevTab)
-        }
-        KeyCode::Tab => Some(SettingsCommand::NextTab),
+        KeyCode::BackTab => Some(SettingsCommand::PrevTab),
+        KeyCode::Tab | KeyCode::Char('l') => Some(SettingsCommand::NextTab),
+        KeyCode::Char('h') => Some(SettingsCommand::PrevTab),
         // Navigation handled by GlobalNavCommand, these are fallbacks
         KeyCode::Up | KeyCode::Char('k') => Some(SettingsCommand::MoveUp),
         KeyCode::Down | KeyCode::Char('j') => Some(SettingsCommand::MoveDown),
