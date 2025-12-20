@@ -52,6 +52,14 @@ pub struct SessionHandle {
     port_name: String,
 }
 
+impl std::fmt::Debug for SessionHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionHandle")
+            .field("port_name", &self.port_name)
+            .finish_non_exhaustive()
+    }
+}
+
 impl SessionHandle {
     /// Get a read lock on the data buffer
     ///

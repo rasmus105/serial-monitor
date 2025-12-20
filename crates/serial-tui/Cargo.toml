@@ -5,10 +5,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "serial-monitor"
+path = "src/main.rs"
+
 [dependencies]
 serial-core = { workspace = true }
 tokio = { workspace = true }
-
-# TUI dependencies (to be added)
-# ratatui = "0.28"
-# crossterm = "0.28"
+ratatui = { workspace = true }
+crossterm = { workspace = true }
