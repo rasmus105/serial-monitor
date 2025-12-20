@@ -29,6 +29,9 @@ unicode-width = "0.2"
 # Enum utilities
 strum = { version = "0.26", features = ["derive"] }
 
+# Regex
+regex = "1"
+
 # Internal crates
 serial-core = { path = "crates/serial-core" }
 serial-tui = { path = "crates/serial-tui" }
