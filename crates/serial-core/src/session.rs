@@ -9,7 +9,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio_serial::{ClearBuffer, SerialPort, SerialPortBuilderExt};
 
-use crate::buffer::{DataBuffer, DataChunk, Direction};
+use crate::buffer::{DataBuffer, DataChunk};
+use crate::chunking::{Chunker, ChunkingStrategy};
 use crate::error::{Error, Result};
 use crate::port::SerialConfig;
 
@@ -35,6 +36,48 @@ pub enum SessionCommand {
     Send(Vec<u8>),
     /// Disconnect and stop the I/O task
     Disconnect,
+}
+
+/// Configuration for a session (beyond serial port settings)
+#[derive(Debug, Clone, Default)]
+pub struct SessionConfig {
+    /// Strategy for chunking received data
+    pub rx_chunking: ChunkingStrategy,
+    /// Strategy for chunking transmitted data (usually Raw is fine)
+    pub tx_chunking: ChunkingStrategy,
+    /// Maximum buffer size in bytes
+    pub buffer_size: Option<usize>,
+}
+
+impl SessionConfig {
+    /// Create a new session config with default settings
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the RX chunking strategy
+    pub fn with_rx_chunking(mut self, strategy: ChunkingStrategy) -> Self {
+        self.rx_chunking = strategy;
+        self
+    }
+
+    /// Set the TX chunking strategy
+    pub fn with_tx_chunking(mut self, strategy: ChunkingStrategy) -> Self {
+        self.tx_chunking = strategy;
+        self
+    }
+
+    /// Set the buffer size
+    pub fn with_buffer_size(mut self, size: usize) -> Self {
+        self.buffer_size = Some(size);
+        self
+    }
+
+    /// Use line-delimited chunking for RX (convenience method)
+    pub fn line_delimited(mut self) -> Self {
+        self.rx_chunking = ChunkingStrategy::line_delimited();
+        self
+    }
 }
 
 /// Handle for interacting with an active session
@@ -115,21 +158,35 @@ impl Session {
     ///
     /// Returns a `SessionHandle` for interacting with the session.
     pub async fn connect(port_name: &str, config: SerialConfig) -> Result<SessionHandle> {
-        Self::connect_with_buffer_size(port_name, config, DataBuffer::DEFAULT_MAX_SIZE).await
+        Self::connect_with_config(port_name, config, SessionConfig::default()).await
     }
 
-    /// Connect with a custom buffer size
+    /// Connect with a custom buffer size (legacy API, use connect_with_config for new code)
     pub async fn connect_with_buffer_size(
         port_name: &str,
         config: SerialConfig,
         buffer_size: usize,
     ) -> Result<SessionHandle> {
+        Self::connect_with_config(
+            port_name,
+            config,
+            SessionConfig::default().with_buffer_size(buffer_size),
+        )
+        .await
+    }
+
+    /// Connect with full session configuration
+    pub async fn connect_with_config(
+        port_name: &str,
+        serial_config: SerialConfig,
+        session_config: SessionConfig,
+    ) -> Result<SessionHandle> {
         // Open the serial port
-        let port = tokio_serial::new(port_name, config.baud_rate)
-            .data_bits(config.data_bits)
-            .parity(config.parity)
-            .stop_bits(config.stop_bits)
-            .flow_control(config.flow_control)
+        let port = tokio_serial::new(port_name, serial_config.baud_rate)
+            .data_bits(serial_config.data_bits)
+            .parity(serial_config.parity)
+            .stop_bits(serial_config.stop_bits)
+            .flow_control(serial_config.flow_control)
             .open_native_async()?;
 
         // Clear any data buffered by the OS before we opened the port
@@ -137,6 +194,9 @@ impl Session {
         port.clear(ClearBuffer::Input)?;
 
         // Create shared buffer
+        let buffer_size = session_config
+            .buffer_size
+            .unwrap_or(DataBuffer::DEFAULT_MAX_SIZE);
         let buffer = Arc::new(RwLock::new(DataBuffer::with_max_size(buffer_size)));
 
         // Create channels
@@ -147,9 +207,13 @@ impl Session {
         let buffer_clone = Arc::clone(&buffer);
         let port_name_owned = port_name.to_string();
 
+        // Create chunkers
+        let rx_chunker = Chunker::rx(session_config.rx_chunking);
+        let tx_chunker = Chunker::tx(session_config.tx_chunking);
+
         // Spawn the I/O task
         tokio::spawn(async move {
-            io_task(port, buffer_clone, event_tx, command_rx).await;
+            io_task(port, buffer_clone, event_tx, command_rx, rx_chunker, tx_chunker).await;
         });
 
         Ok(SessionHandle {
@@ -167,6 +231,8 @@ async fn io_task(
     buffer: Arc<RwLock<DataBuffer>>,
     event_tx: mpsc::Sender<SessionEvent>,
     mut command_rx: mpsc::Receiver<SessionCommand>,
+    mut rx_chunker: Chunker,
+    mut tx_chunker: Chunker,
 ) {
     let (mut reader, mut writer) = tokio::io::split(port);
     let mut read_buf = [0u8; 1024];
@@ -181,23 +247,40 @@ async fn io_task(
                 match result {
                     Ok(0) => {
                         // EOF - port closed
+                        // Flush any pending data
+                        if let Some(chunk) = rx_chunker.flush() {
+                            {
+                                let mut buf = buffer.write().unwrap();
+                                buf.push(chunk.clone());
+                            }
+                            let _ = event_tx.send(SessionEvent::DataReceived(chunk)).await;
+                        }
                         let _ = event_tx.send(SessionEvent::Disconnected { error: None }).await;
                         break;
                     }
                     Ok(n) => {
-                        let data = read_buf[..n].to_vec();
-                        let chunk = DataChunk::new(Direction::Rx, data);
-
-                        // Store in buffer
-                        {
-                            let mut buf = buffer.write().unwrap();
-                            buf.push(chunk.clone());
+                        // Process through chunker - may produce 0, 1, or many chunks
+                        let chunks = rx_chunker.process(&read_buf[..n]);
+                        
+                        for chunk in chunks {
+                            // Store in buffer
+                            {
+                                let mut buf = buffer.write().unwrap();
+                                buf.push(chunk.clone());
+                            }
+                            // Notify UI
+                            let _ = event_tx.send(SessionEvent::DataReceived(chunk)).await;
                         }
-
-                        // Notify UI
-                        let _ = event_tx.send(SessionEvent::DataReceived(chunk)).await;
                     }
                     Err(e) => {
+                        // Flush any pending data before disconnecting
+                        if let Some(chunk) = rx_chunker.flush() {
+                            {
+                                let mut buf = buffer.write().unwrap();
+                                buf.push(chunk.clone());
+                            }
+                            let _ = event_tx.send(SessionEvent::DataReceived(chunk)).await;
+                        }
                         let _ = event_tx.send(SessionEvent::Disconnected {
                             error: Some(e.to_string())
                         }).await;
@@ -212,16 +295,28 @@ async fn io_task(
                     Some(SessionCommand::Send(data)) => {
                         match writer.write_all(&data).await {
                             Ok(()) => {
-                                let chunk = DataChunk::new(Direction::Tx, data);
-
-                                // Store in buffer
-                                {
-                                    let mut buf = buffer.write().unwrap();
-                                    buf.push(chunk.clone());
+                                // Process through TX chunker
+                                let chunks = tx_chunker.process(&data);
+                                
+                                for chunk in chunks {
+                                    // Store in buffer
+                                    {
+                                        let mut buf = buffer.write().unwrap();
+                                        buf.push(chunk.clone());
+                                    }
+                                    // Notify UI
+                                    let _ = event_tx.send(SessionEvent::DataSent(chunk)).await;
                                 }
-
-                                // Notify UI
-                                let _ = event_tx.send(SessionEvent::DataSent(chunk)).await;
+                                
+                                // For TX, we might want to flush immediately if using line-delimited
+                                // (since the user's send is a complete "message")
+                                if let Some(chunk) = tx_chunker.flush() {
+                                    {
+                                        let mut buf = buffer.write().unwrap();
+                                        buf.push(chunk.clone());
+                                    }
+                                    let _ = event_tx.send(SessionEvent::DataSent(chunk)).await;
+                                }
                             }
                             Err(e) => {
                                 let _ = event_tx.send(SessionEvent::Error(e.to_string())).await;
@@ -229,6 +324,14 @@ async fn io_task(
                         }
                     }
                     Some(SessionCommand::Disconnect) | None => {
+                        // Flush any pending data
+                        if let Some(chunk) = rx_chunker.flush() {
+                            {
+                                let mut buf = buffer.write().unwrap();
+                                buf.push(chunk.clone());
+                            }
+                            let _ = event_tx.send(SessionEvent::DataReceived(chunk)).await;
+                        }
                         let _ = event_tx.send(SessionEvent::Disconnected { error: None }).await;
                         break;
                     }

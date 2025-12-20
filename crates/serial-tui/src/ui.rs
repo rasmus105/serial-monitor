@@ -573,24 +573,34 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
         " Traffic ".to_string()
     };
 
+    // Build filter indicator if filter is active
+    let filter_indicator = if app.traffic.should_apply_filter(app.traffic.encoding) {
+        format!("[Filter: {}] ", app.traffic.filter_pattern)
+    } else if app.traffic.filter_enabled && !app.traffic.filter_pattern.is_empty() {
+        // Filter is enabled but not applied (wrong encoding)
+        "[Filter: N/A] ".to_string()
+    } else {
+        String::new()
+    };
+
     let title = if app.file_send.handle.is_some() {
         // Show file send in progress
         let progress = app.file_send.progress.as_ref();
         let pct = progress
             .map(|p| (p.percentage() * 100.0) as u8)
             .unwrap_or(0);
-        format!("{}| [{}] [Sending: {}%] ", tab_bar, app.traffic.encoding, pct)
+        format!("{}| [{}] {}[Sending: {}%] ", tab_bar, app.traffic.encoding, filter_indicator, pct)
     } else if app.search.pattern.is_some() {
         let next_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::NextMatch).unwrap_or_else(|| "n".to_string());
         let prev_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::PrevMatch).unwrap_or_else(|| "N".to_string());
         format!(
-            "{}| [{}] [{}: search, {}/{}: next/prev] ",
-            tab_bar, app.traffic.encoding, search_key, next_key, prev_key
+            "{}| [{}] {}[{}: search, {}/{}: next/prev] ",
+            tab_bar, app.traffic.encoding, filter_indicator, search_key, next_key, prev_key
         )
     } else {
         format!(
-            "{}| [{}] [{}: config, {}: search, {}: send] ",
-            tab_bar, app.traffic.encoding, config_key, search_key, send_key
+            "{}| [{}] {}[{}: config, {}: search, {}: send] ",
+            tab_bar, app.traffic.encoding, filter_indicator, config_key, search_key, send_key
         )
     };
 
@@ -612,8 +622,8 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
         let buffer = handle.buffer();
         let all_chunks: Vec<_> = buffer.chunks().collect();
 
-        // Filter chunks based on show_tx and show_rx settings
-        let chunks: Vec<_> = all_chunks
+        // First pass: Filter chunks based on show_tx and show_rx settings
+        let direction_filtered: Vec<_> = all_chunks
             .iter()
             .enumerate()
             .filter(|(_, chunk)| match chunk.direction {
@@ -622,9 +632,28 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
             })
             .collect();
 
+        // Check if we should apply text filter (only for ASCII/UTF-8 encodings)
+        let apply_filter = app.traffic.should_apply_filter(app.traffic.encoding);
+
+        // Second pass: Apply text filter if enabled
+        // We need to encode first to check against the filter pattern
+        let chunks: Vec<_> = if apply_filter {
+            direction_filtered
+                .into_iter()
+                .filter(|(_, chunk)| {
+                    let encoded = encode(&chunk.data, app.traffic.encoding);
+                    app.traffic.matches_filter(&encoded)
+                })
+                .collect()
+        } else {
+            direction_filtered
+        };
+
         if chunks.is_empty() {
             let msg = if all_chunks.is_empty() {
                 "Waiting for data..."
+            } else if apply_filter {
+                "No data matches current filter"
             } else {
                 "No data matches current filters (check Show TX/RX settings)"
             };
@@ -829,6 +858,7 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     let panel_width = inner.width as usize;
     let connection_sep = create_separator("Connection", panel_width);
     let settings_sep = create_separator("Settings", panel_width);
+    let filtering_sep = create_separator("Filtering", panel_width);
     let file_save_sep = create_separator("File Saving", panel_width);
 
     let mut lines: Vec<Line> = vec![
@@ -858,9 +888,22 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     ];
 
     // Build config lines using TrafficConfigField iterator
+    let mut in_filtering_section = false;
     let mut in_file_save_section = false;
 
     for field in TrafficConfigField::iter() {
+        // Add separator before filtering section
+        if field.is_filtering_field() && !in_filtering_section {
+            in_filtering_section = true;
+            lines.push(Line::from("")); // Spacer
+            lines.push(Line::from(Span::styled(
+                filtering_sep.clone(),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+
         // Add separator before file saving section
         if field.is_file_saving_field() && !in_file_save_section {
             in_file_save_section = true;

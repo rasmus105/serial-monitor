@@ -442,6 +442,10 @@ pub enum TrafficConfigField {
     ShowTx,
     ShowRx,
     HexGrouping,
+    // Filtering fields
+    FilterEnabled,
+    FilterMode,
+    FilterPattern,
     // File saving fields
     SaveEnabled,
     SaveFormat,
@@ -479,6 +483,9 @@ impl TrafficConfigField {
             TrafficConfigField::ShowTx => "Show TX",
             TrafficConfigField::ShowRx => "Show RX",
             TrafficConfigField::HexGrouping => "Hex Grouping",
+            TrafficConfigField::FilterEnabled => "Filter",
+            TrafficConfigField::FilterMode => "Filter Mode",
+            TrafficConfigField::FilterPattern => "Filter Pattern",
             TrafficConfigField::SaveEnabled => "Save to File",
             TrafficConfigField::SaveFormat => "Save Format",
             TrafficConfigField::SaveFilename => "Filename",
@@ -496,6 +503,7 @@ impl TrafficConfigField {
                 | TrafficConfigField::LockToBottom
                 | TrafficConfigField::ShowTx
                 | TrafficConfigField::ShowRx
+                | TrafficConfigField::FilterEnabled
                 | TrafficConfigField::SaveEnabled
         )
     }
@@ -504,7 +512,9 @@ impl TrafficConfigField {
     pub fn is_text_input(&self) -> bool {
         matches!(
             self,
-            TrafficConfigField::SaveFilename | TrafficConfigField::SaveDirectory
+            TrafficConfigField::SaveFilename 
+                | TrafficConfigField::SaveDirectory
+                | TrafficConfigField::FilterPattern
         )
     }
 
@@ -527,6 +537,16 @@ impl TrafficConfigField {
                 | TrafficConfigField::SaveFormat
                 | TrafficConfigField::SaveFilename
                 | TrafficConfigField::SaveDirectory
+        )
+    }
+
+    /// Check if this is a filtering field (for section grouping)
+    pub fn is_filtering_field(&self) -> bool {
+        matches!(
+            self,
+            TrafficConfigField::FilterEnabled
+                | TrafficConfigField::FilterMode
+                | TrafficConfigField::FilterPattern
         )
     }
 }
@@ -1168,6 +1188,13 @@ pub struct TrafficState {
     pub visible_height: usize,
     /// Whether quit confirmation dialog is showing
     pub quit_confirm: bool,
+    // Filtering state
+    /// Whether filtering is enabled
+    pub filter_enabled: bool,
+    /// Filter mode (Normal or Regex)
+    pub filter_mode: FilterMode,
+    /// Filter pattern
+    pub filter_pattern: String,
     // File saving state
     /// Whether file saving is enabled
     pub save_enabled: bool,
@@ -1203,6 +1230,10 @@ impl Default for TrafficState {
             total_rows: 0,
             visible_height: 0,
             quit_confirm: false,
+            // Filtering defaults
+            filter_enabled: false,
+            filter_mode: FilterMode::default(),
+            filter_pattern: String::new(),
             // File saving defaults
             save_enabled: false,
             save_format: SaveFormat::default(),
@@ -1238,6 +1269,17 @@ impl TrafficState {
                 if self.show_rx { "ON" } else { "OFF" }.to_string()
             }
             TrafficConfigField::HexGrouping => self.hex_grouping.display_name().to_string(),
+            TrafficConfigField::FilterEnabled => {
+                if self.filter_enabled { "ON" } else { "OFF" }.to_string()
+            }
+            TrafficConfigField::FilterMode => self.filter_mode.display_name().to_string(),
+            TrafficConfigField::FilterPattern => {
+                if self.filter_pattern.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    self.filter_pattern.clone()
+                }
+            }
             TrafficConfigField::SaveEnabled => {
                 if self.save_enabled { "ON" } else { "OFF" }.to_string()
             }
@@ -1272,6 +1314,10 @@ impl TrafficState {
                 .into_iter()
                 .map(String::from)
                 .collect(),
+            TrafficConfigField::FilterMode => FilterMode::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
             TrafficConfigField::SaveFormat => SaveFormat::all_display_names()
                 .into_iter()
                 .map(String::from)
@@ -1288,6 +1334,7 @@ impl TrafficState {
             TrafficConfigField::Encoding => self.encoding.index(),
             TrafficConfigField::WrapMode => self.wrap_mode.index(),
             TrafficConfigField::HexGrouping => self.hex_grouping.index(),
+            TrafficConfigField::FilterMode => self.filter_mode.index(),
             TrafficConfigField::SaveFormat => self.save_format.index(),
             _ => 0,
         }
@@ -1300,6 +1347,7 @@ impl TrafficState {
             TrafficConfigField::Encoding => Encoding::all_variants().len(),
             TrafficConfigField::WrapMode => WrapMode::all_variants().len(),
             TrafficConfigField::HexGrouping => HexGrouping::all_variants().len(),
+            TrafficConfigField::FilterMode => FilterMode::all_variants().len(),
             TrafficConfigField::SaveFormat => SaveFormat::all_variants().len(),
             _ => 0,
         }
@@ -1325,6 +1373,9 @@ impl TrafficState {
             TrafficConfigField::HexGrouping => {
                 self.hex_grouping = HexGrouping::from_index(self.dropdown_index);
             }
+            TrafficConfigField::FilterMode => {
+                self.filter_mode = FilterMode::from_index(self.dropdown_index);
+            }
             TrafficConfigField::SaveFormat => {
                 self.save_format = SaveFormat::from_index(self.dropdown_index);
             }
@@ -1341,6 +1392,7 @@ impl TrafficState {
             TrafficConfigField::LockToBottom => self.lock_to_bottom = !self.lock_to_bottom,
             TrafficConfigField::ShowTx => self.show_tx = !self.show_tx,
             TrafficConfigField::ShowRx => self.show_rx = !self.show_rx,
+            TrafficConfigField::FilterEnabled => self.filter_enabled = !self.filter_enabled,
             TrafficConfigField::SaveEnabled => self.save_enabled = !self.save_enabled,
             _ => {}
         }
@@ -1349,6 +1401,9 @@ impl TrafficState {
     /// Apply text input value to the appropriate field
     pub fn apply_text_input(&mut self, value: String) {
         match self.config_field {
+            TrafficConfigField::FilterPattern => {
+                self.filter_pattern = value;
+            }
             TrafficConfigField::SaveFilename => {
                 self.save_filename = value;
             }
@@ -1362,6 +1417,7 @@ impl TrafficState {
     /// Get the current text value for text input fields
     pub fn get_text_value(&self) -> String {
         match self.config_field {
+            TrafficConfigField::FilterPattern => self.filter_pattern.clone(),
             TrafficConfigField::SaveFilename => self.save_filename.clone(),
             TrafficConfigField::SaveDirectory => self.save_directory.clone(),
             _ => String::new(),
@@ -1375,6 +1431,38 @@ impl TrafficState {
         }
         let max_scroll = self.total_rows.saturating_sub(self.visible_height);
         self.scroll_offset >= max_scroll
+    }
+
+    /// Check if filtering should be applied (enabled, has pattern, and encoding is text-based)
+    pub fn should_apply_filter(&self, encoding: Encoding) -> bool {
+        self.filter_enabled
+            && !self.filter_pattern.is_empty()
+            && matches!(encoding, Encoding::Utf8 | Encoding::Ascii)
+    }
+
+    /// Check if a chunk's content matches the filter pattern.
+    /// Returns true if the chunk should be shown.
+    pub fn matches_filter(&self, encoded_content: &str) -> bool {
+        // If filter is not active or pattern is empty, show everything
+        if !self.filter_enabled || self.filter_pattern.is_empty() {
+            return true;
+        }
+
+        match self.filter_mode {
+            FilterMode::Regex => {
+                // Try to compile and match regex
+                match Regex::new(&self.filter_pattern) {
+                    Ok(re) => re.is_match(encoded_content),
+                    Err(_) => true, // On invalid regex, show all (don't hide data due to user error)
+                }
+            }
+            FilterMode::Normal => {
+                // Case-insensitive substring search
+                encoded_content
+                    .to_lowercase()
+                    .contains(&self.filter_pattern.to_lowercase())
+            }
+        }
     }
 }
 
@@ -1419,6 +1507,49 @@ impl SearchMode {
             SearchMode::Regex => SearchMode::Normal,
             SearchMode::Normal => SearchMode::Regex,
         }
+    }
+}
+
+/// Filter mode - determines how the filter pattern is interpreted
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FilterMode {
+    /// Normal filter (default) - pattern is interpreted as a literal string (case-insensitive)
+    #[default]
+    Normal,
+    /// Regex filter - pattern is interpreted as a regular expression
+    Regex,
+}
+
+impl FilterMode {
+    pub fn name(&self) -> &'static str {
+        match self {
+            FilterMode::Normal => "Normal",
+            FilterMode::Regex => "Regex",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            FilterMode::Normal => "Pattern is interpreted as a literal string (case-insensitive)",
+            FilterMode::Regex => "Pattern is interpreted as a regular expression",
+        }
+    }
+
+    pub fn toggle(&self) -> Self {
+        match self {
+            FilterMode::Normal => FilterMode::Regex,
+            FilterMode::Regex => FilterMode::Normal,
+        }
+    }
+}
+
+impl ConfigOption for FilterMode {
+    fn all_variants() -> &'static [Self] {
+        &[FilterMode::Normal, FilterMode::Regex]
+    }
+
+    fn display_name(&self) -> &'static str {
+        self.name()
     }
 }
 
