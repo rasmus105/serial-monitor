@@ -4,10 +4,14 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{
+        Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
-use serial_core::{encode, DataBits, FlowControl, Parity, StopBits, Direction as DataDirection};
+use serial_core::{encode, Direction as DataDirection};
+use strum::IntoEnumIterator;
 
 use crate::app::{App, ConfigField, ConnectionState, InputMode, PortSelectFocus, View};
 use crate::wrap::wrap_line;
@@ -33,9 +37,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_status_bar(frame, app, chunks[1]);
 }
 
-fn render_port_select(frame: &mut Frame, app: &mut App, area: Rect) {
+fn render_port_select(frame: &mut Frame, app: &App, area: Rect) {
     // Split horizontally if config panel is visible
-    let (port_area, config_area) = if app.config_panel_visible {
+    let (port_area, config_area) = if app.port_select.config_panel_visible {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
@@ -55,24 +59,29 @@ fn render_port_select(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_port_list(frame: &mut Frame, app: &App, area: Rect) {
-    let is_focused = app.port_select_focus == PortSelectFocus::PortList;
+    let is_focused = app.port_select.focus == PortSelectFocus::PortList;
 
     let items: Vec<ListItem> = app
+        .port_select
         .ports
         .iter()
         .enumerate()
         .map(|(i, port)| {
-            let style = if i == app.selected_port && is_focused {
+            let style = if i == app.port_select.selected_port && is_focused {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
-            } else if i == app.selected_port {
+            } else if i == app.port_select.selected_port {
                 Style::default().fg(Color::Yellow)
             } else {
                 Style::default()
             };
 
-            let prefix = if i == app.selected_port { "> " } else { "  " };
+            let prefix = if i == app.port_select.selected_port {
+                "> "
+            } else {
+                "  "
+            };
 
             let label = if let Some(ref product) = port.product {
                 format!("{}{} ({})", prefix, port.name, product)
@@ -84,7 +93,7 @@ fn render_port_list(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let title = if app.ports.is_empty() {
+    let title = if app.port_select.ports.is_empty() {
         " Select Port [:: path, r: refresh, t: toggle config] "
     } else {
         " Select Port [j/k: nav, Enter: connect, :: path, r: refresh] "
@@ -107,8 +116,8 @@ fn render_port_list(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
-    let is_focused = app.port_select_focus == PortSelectFocus::Config;
-    let dropdown_open = app.input_mode == InputMode::ConfigDropdown;
+    let is_focused = app.port_select.focus == PortSelectFocus::Config;
+    let dropdown_open = app.input.mode == InputMode::ConfigDropdown;
 
     let border_style = if is_focused || dropdown_open {
         Style::default().fg(Color::Cyan)
@@ -124,37 +133,34 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Build config lines
-    let config_items = [
-        (ConfigField::BaudRate, "Baud Rate", format!("{}", app.serial_config.baud_rate)),
-        (ConfigField::DataBits, "Data Bits", format_data_bits(app.serial_config.data_bits)),
-        (ConfigField::Parity, "Parity", format_parity(app.serial_config.parity)),
-        (ConfigField::StopBits, "Stop Bits", format_stop_bits(app.serial_config.stop_bits)),
-        (ConfigField::FlowControl, "Flow Ctrl", format_flow_control(app.serial_config.flow_control)),
-    ];
-
-    let lines: Vec<Line> = config_items
-        .iter()
-        .map(|(field, label, value)| {
-            let is_selected = app.config_field == *field && (is_focused || dropdown_open);
+    // Build config lines using ConfigField iterator
+    let lines: Vec<Line> = ConfigField::iter()
+        .map(|field| {
+            let is_selected = app.port_select.config_field == field && (is_focused || dropdown_open);
             let prefix = if is_selected { "> " } else { "  " };
 
             let label_style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
 
             let value_style = if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Cyan)
             };
 
+            let value = app.port_select.get_config_display(field);
+
             Line::from(vec![
                 Span::styled(prefix, label_style),
-                Span::styled(format!("{}: ", label), label_style),
-                Span::styled(value.clone(), value_style),
+                Span::styled(format!("{}: ", field.label()), label_style),
+                Span::styled(value, value_style),
             ])
         })
         .collect();
@@ -169,19 +175,12 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
-    let options = app.get_config_options();
+    let options = app.port_select.get_config_option_strings();
     let dropdown_height = (options.len() + 2) as u16; // +2 for borders
     let dropdown_width = options.iter().map(|s| s.len()).max().unwrap_or(10) as u16 + 6; // +6 for padding and borders
 
-    // Position the dropdown to the right of the config panel, or overlay if no space
-    // Calculate vertical position based on which field is selected
-    let field_index = match app.config_field {
-        ConfigField::BaudRate => 0,
-        ConfigField::DataBits => 1,
-        ConfigField::Parity => 2,
-        ConfigField::StopBits => 3,
-        ConfigField::FlowControl => 4,
-    };
+    // Position the dropdown based on which field is selected
+    let field_index = app.port_select.config_field.index();
 
     // Position dropdown next to the selected field
     let dropdown_y = config_area.y + 1 + field_index as u16; // +1 for border
@@ -206,7 +205,7 @@ fn render_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, option)| {
-            let is_selected = i == app.dropdown_index;
+            let is_selected = i == app.port_select.dropdown_index;
             let prefix = if is_selected { "> " } else { "  " };
 
             let style = if is_selected {
@@ -232,56 +231,24 @@ fn render_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
     frame.render_widget(dropdown_list, dropdown_area);
 }
 
-fn format_data_bits(data_bits: DataBits) -> String {
-    match data_bits {
-        DataBits::Five => "5".to_string(),
-        DataBits::Six => "6".to_string(),
-        DataBits::Seven => "7".to_string(),
-        DataBits::Eight => "8".to_string(),
-    }
-}
-
-fn format_parity(parity: Parity) -> String {
-    match parity {
-        Parity::None => "None".to_string(),
-        Parity::Odd => "Odd".to_string(),
-        Parity::Even => "Even".to_string(),
-    }
-}
-
-fn format_stop_bits(stop_bits: StopBits) -> String {
-    match stop_bits {
-        StopBits::One => "1".to_string(),
-        StopBits::Two => "2".to_string(),
-    }
-}
-
-fn format_flow_control(flow_control: FlowControl) -> String {
-    match flow_control {
-        FlowControl::None => "None".to_string(),
-        FlowControl::Software => "XON/XOFF".to_string(),
-        FlowControl::Hardware => "RTS/CTS".to_string(),
-    }
-}
-
 fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
-    let title = if app.file_send.is_some() {
+    let title = if app.file_send.handle.is_some() {
         // Show file send in progress
-        let progress = app.file_send_progress.as_ref();
+        let progress = app.file_send.progress.as_ref();
         let pct = progress.map(|p| (p.percentage() * 100.0) as u8).unwrap_or(0);
         format!(
             " Traffic [{}] [Sending file: {}% - press 'f' to cancel] ",
-            app.encoding, pct
+            app.traffic.encoding, pct
         )
-    } else if app.search_pattern.is_some() {
+    } else if app.search.pattern.is_some() {
         format!(
             " Traffic [{}] [/: search, n/N: next/prev, Esc: clear] ",
-            app.encoding
+            app.traffic.encoding
         )
     } else {
         format!(
             " Traffic [{}] [/: search, e: encoding, i: send, f: file, q: quit] ",
-            app.encoding
+            app.traffic.encoding
         )
     };
 
@@ -304,17 +271,16 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
         let content_width = inner.width as usize;
 
         // Build all physical rows from logical chunks
-        // We need to own the encoded strings since wrap_line borrows them
         let encoded_chunks: Vec<String> = chunks
             .iter()
-            .map(|chunk| encode(&chunk.data, app.encoding))
+            .map(|chunk| encode(&chunk.data, app.traffic.encoding))
             .collect();
 
         let mut all_physical_rows = Vec::new();
 
         for (idx, chunk) in chunks.iter().enumerate() {
-            let is_match = app.search_match_index == Some(idx);
-            let is_search_match = app.search_pattern.as_ref().is_some_and(|pattern| {
+            let is_match = app.search.match_index == Some(idx);
+            let is_search_match = app.search.pattern.as_ref().is_some_and(|pattern| {
                 encoded_chunks[idx]
                     .to_lowercase()
                     .contains(&pattern.to_lowercase())
@@ -366,22 +332,20 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         // Resolve scroll_to_chunk to physical row offset
-        if let Some(target_chunk) = app.scroll_to_chunk.take() {
-            // Find the first physical row belonging to target chunk
-            if let Some(row_idx) = all_physical_rows
+        if let Some(target_chunk) = app.traffic.scroll_to_chunk.take()
+            && let Some(row_idx) = all_physical_rows
                 .iter()
                 .position(|pr| pr.chunk_index == target_chunk)
-            {
-                app.scroll_offset = row_idx;
-            }
+        {
+            app.traffic.scroll_offset = row_idx;
         }
 
         // Calculate scroll based on physical rows
         let visible_height = inner.height as usize;
         let total_rows = all_physical_rows.len();
         let max_scroll = total_rows.saturating_sub(visible_height);
-        let scroll = app.scroll_offset.min(max_scroll);
-        app.scroll_offset = scroll; // Persist clamped value so scrolling works after G
+        let scroll = app.traffic.scroll_offset.min(max_scroll);
+        app.traffic.scroll_offset = scroll;
 
         // Extract the visible physical rows
         let visible_rows: Vec<Line> = all_physical_rows
@@ -397,12 +361,7 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Render scrollbar over the right border
         if total_rows > visible_height {
-            // ScrollbarState expects:
-            // - content_length: total number of items that can be scrolled through
-            // - position: current scroll position (0 to max_scroll)
-            // The scrollbar calculates thumb position as position / max_scroll
-            let mut scrollbar_state = ScrollbarState::new(max_scroll)
-                .position(scroll);
+            let mut scrollbar_state = ScrollbarState::new(max_scroll).position(scroll);
 
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
@@ -416,50 +375,46 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    match app.input_mode {
+    match app.input.mode {
         InputMode::Normal => {
-            let status = Paragraph::new(app.status.as_str())
-                .style(Style::default().fg(Color::White));
+            let status =
+                Paragraph::new(app.status.as_str()).style(Style::default().fg(Color::White));
             frame.render_widget(status, area);
         }
         InputMode::PortInput => {
             let input_line = Line::from(vec![
                 Span::styled(":", Style::default().fg(Color::Yellow)),
-                Span::raw(&app.input_buffer),
-                Span::styled("_", Style::default().fg(Color::Yellow)), // Cursor
+                Span::raw(&app.input.buffer),
+                Span::styled("_", Style::default().fg(Color::Yellow)),
             ]);
-            let input = Paragraph::new(input_line)
-                .style(Style::default().fg(Color::White));
+            let input = Paragraph::new(input_line).style(Style::default().fg(Color::White));
             frame.render_widget(input, area);
         }
         InputMode::SendInput => {
             let input_line = Line::from(vec![
                 Span::styled("> ", Style::default().fg(Color::Green)),
-                Span::raw(&app.input_buffer),
-                Span::styled("_", Style::default().fg(Color::Green)), // Cursor
+                Span::raw(&app.input.buffer),
+                Span::styled("_", Style::default().fg(Color::Green)),
             ]);
-            let input = Paragraph::new(input_line)
-                .style(Style::default().fg(Color::White));
+            let input = Paragraph::new(input_line).style(Style::default().fg(Color::White));
             frame.render_widget(input, area);
         }
         InputMode::SearchInput => {
             let input_line = Line::from(vec![
                 Span::styled("/", Style::default().fg(Color::Magenta)),
-                Span::raw(&app.input_buffer),
-                Span::styled("_", Style::default().fg(Color::Magenta)), // Cursor
+                Span::raw(&app.input.buffer),
+                Span::styled("_", Style::default().fg(Color::Magenta)),
             ]);
-            let input = Paragraph::new(input_line)
-                .style(Style::default().fg(Color::White));
+            let input = Paragraph::new(input_line).style(Style::default().fg(Color::White));
             frame.render_widget(input, area);
         }
         InputMode::FilePathInput => {
             let input_line = Line::from(vec![
                 Span::styled("File: ", Style::default().fg(Color::Blue)),
-                Span::raw(&app.input_buffer),
-                Span::styled("_", Style::default().fg(Color::Blue)), // Cursor
+                Span::raw(&app.input.buffer),
+                Span::styled("_", Style::default().fg(Color::Blue)),
             ]);
-            let input = Paragraph::new(input_line)
-                .style(Style::default().fg(Color::White));
+            let input = Paragraph::new(input_line).style(Style::default().fg(Color::White));
             frame.render_widget(input, area);
         }
         InputMode::ConfigDropdown => {
