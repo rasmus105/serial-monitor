@@ -50,12 +50,10 @@ pub fn wrap_line<'a>(
     let mut rows = Vec::new();
     let prefix_width = UnicodeWidthStr::width(prefix);
 
-    // First row includes the prefix
-    let first_row_content_width = width.saturating_sub(prefix_width);
-    // Subsequent rows are indented by prefix_width, so they also have reduced width
-    let subsequent_row_content_width = width.saturating_sub(prefix_width);
+    // All rows have the same content width (prefix on first, indent on rest)
+    let content_width = width.saturating_sub(prefix_width);
 
-    if first_row_content_width == 0 {
+    if content_width == 0 {
         // Edge case: width is smaller than prefix
         // Just show truncated prefix
         rows.push(PhysicalRow {
@@ -66,8 +64,8 @@ pub fn wrap_line<'a>(
         return rows;
     }
 
-    // Split content into chunks that fit the available width
-    let content_parts = wrap_text(content, first_row_content_width, subsequent_row_content_width);
+    // Split content into parts that fit the available width
+    let content_parts = wrap_text(content, content_width);
 
     if content_parts.is_empty() {
         // Empty content, just show prefix
@@ -105,33 +103,28 @@ pub fn wrap_line<'a>(
     rows
 }
 
-/// Wraps text into parts that fit within specified widths.
+/// Wraps text into parts that fit within the specified width.
 ///
 /// # Arguments
 /// * `text` - The text to wrap
-/// * `first_width` - Width available for the first part
-/// * `subsequent_width` - Width available for subsequent parts
+/// * `width` - Width available for each part
 ///
 /// # Returns
-/// A vector of string slices, each fitting within its respective width
-fn wrap_text(text: &str, first_width: usize, subsequent_width: usize) -> Vec<&str> {
+/// A vector of string slices, each fitting within the width
+fn wrap_text(text: &str, width: usize) -> Vec<&str> {
     if text.is_empty() {
         return vec![];
     }
 
     let mut parts = Vec::new();
     let mut remaining = text;
-    let mut is_first = true;
 
     while !remaining.is_empty() {
-        let available_width = if is_first { first_width } else { subsequent_width };
-        is_first = false;
-
-        if available_width == 0 {
+        if width == 0 {
             break;
         }
 
-        let (part, rest) = split_at_width(remaining, available_width);
+        let (part, rest) = split_at_width(remaining, width);
         if part.is_empty() {
             // Can't make progress, take at least one char to avoid infinite loop
             let first_char_end = remaining
@@ -202,13 +195,13 @@ mod tests {
 
     #[test]
     fn test_wrap_text_basic() {
-        let parts = wrap_text("hello world test", 5, 6);
-        assert_eq!(parts, vec!["hello", " world", " test"]);
+        let parts = wrap_text("hello world test", 6);
+        assert_eq!(parts, vec!["hello ", "world ", "test"]);
     }
 
     #[test]
     fn test_wrap_text_empty() {
-        let parts = wrap_text("", 10, 10);
+        let parts = wrap_text("", 10);
         assert!(parts.is_empty());
     }
 

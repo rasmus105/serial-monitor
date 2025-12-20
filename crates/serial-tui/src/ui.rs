@@ -13,7 +13,7 @@ use crate::app::{App, ConnectionState, InputMode, View};
 use crate::wrap::wrap_line;
 
 /// Render the application
-pub fn render(frame: &mut Frame, app: &App) {
+pub fn render(frame: &mut Frame, app: &mut App) {
     // Clear the entire frame to prevent artifacts from previous renders
     frame.render_widget(Clear, frame.area());
 
@@ -33,7 +33,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     render_status_bar(frame, app, chunks[1]);
 }
 
-fn render_port_select(frame: &mut Frame, app: &App, area: Rect) {
+fn render_port_select(frame: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = app
         .ports
         .iter()
@@ -70,7 +70,7 @@ fn render_port_select(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(list, area);
 }
 
-fn render_traffic(frame: &mut Frame, app: &App, area: Rect) {
+fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = if app.file_send.is_some() {
         // Show file send in progress
         let progress = app.file_send_progress.as_ref();
@@ -171,11 +171,23 @@ fn render_traffic(frame: &mut Frame, app: &App, area: Rect) {
             all_physical_rows.extend(physical_rows);
         }
 
+        // Resolve scroll_to_chunk to physical row offset
+        if let Some(target_chunk) = app.scroll_to_chunk.take() {
+            // Find the first physical row belonging to target chunk
+            if let Some(row_idx) = all_physical_rows
+                .iter()
+                .position(|pr| pr.chunk_index == target_chunk)
+            {
+                app.scroll_offset = row_idx;
+            }
+        }
+
         // Calculate scroll based on physical rows
         let visible_height = inner.height as usize;
         let total_rows = all_physical_rows.len();
         let max_scroll = total_rows.saturating_sub(visible_height);
         let scroll = app.scroll_offset.min(max_scroll);
+        app.scroll_offset = scroll; // Persist clamped value so scrolling works after G
 
         // Extract the visible physical rows
         let visible_rows: Vec<Line> = all_physical_rows

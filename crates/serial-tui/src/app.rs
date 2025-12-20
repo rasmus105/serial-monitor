@@ -68,6 +68,8 @@ pub struct App {
     pub search_match_index: Option<usize>,
     /// Total number of search matches
     pub search_match_count: usize,
+    /// Target chunk to scroll to (resolved to physical row during render)
+    pub scroll_to_chunk: Option<usize>,
     /// Active file send operation
     pub file_send: Option<FileSendHandle>,
     /// Latest file send progress
@@ -104,6 +106,7 @@ impl App {
             search_pattern: None,
             search_match_index: None,
             search_match_count: 0,
+            scroll_to_chunk: None,
             file_send: None,
             file_send_progress: None,
             runtime,
@@ -374,7 +377,7 @@ impl App {
         };
 
         self.search_match_index = Some(matches[next_idx]);
-        self.scroll_offset = matches[next_idx];
+        self.scroll_to_chunk = Some(matches[next_idx]);
         self.status = format!(
             "Match {}/{}: {}",
             next_idx + 1,
@@ -403,7 +406,7 @@ impl App {
         };
 
         self.search_match_index = Some(matches[prev_idx]);
-        self.scroll_offset = matches[prev_idx];
+        self.scroll_to_chunk = Some(matches[prev_idx]);
         self.status = format!(
             "Match {}/{}: {}",
             prev_idx + 1,
