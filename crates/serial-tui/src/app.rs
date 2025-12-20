@@ -133,13 +133,246 @@ impl ConfigOption for Encoding {
 // Enums
 // =============================================================================
 
-/// Current view/screen
+/// Current view/screen (pre-connection vs post-connection)
 #[derive(Debug, Clone, PartialEq)]
 pub enum View {
-    /// Port selection screen
+    /// Port selection screen (pre-connection)
     PortSelect,
-    /// Traffic view (main view)
+    /// Connected view with tabs (post-connection)
+    Connected,
+}
+
+// =============================================================================
+// Tab & Split System
+// =============================================================================
+
+/// Content types that can be displayed in a pane
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaneContent {
+    /// Serial traffic monitor
+    #[default]
     Traffic,
+    /// Graph view for numeric data
+    Graph,
+    /// Advanced send options - file sending, macros, etc.
+    AdvancedSend,
+}
+
+impl PaneContent {
+    /// Get the tab number (1-indexed for display)
+    pub fn tab_number(&self) -> u8 {
+        match self {
+            PaneContent::Traffic => 1,
+            PaneContent::Graph => 2,
+            PaneContent::AdvancedSend => 3,
+        }
+    }
+
+    /// Get the display name
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            PaneContent::Traffic => "Traffic",
+            PaneContent::Graph => "Graph",
+            PaneContent::AdvancedSend => "Send",
+        }
+    }
+
+    /// Create from tab number (1-indexed)
+    pub fn from_tab_number(n: u8) -> Option<Self> {
+        match n {
+            1 => Some(PaneContent::Traffic),
+            2 => Some(PaneContent::Graph),
+            3 => Some(PaneContent::AdvancedSend),
+            _ => None,
+        }
+    }
+
+    /// Get the available split options for this content as primary
+    /// Returns content types that can be shown in the secondary pane
+    pub fn available_splits(&self) -> &'static [PaneContent] {
+        match self {
+            PaneContent::Traffic => &[PaneContent::Graph, PaneContent::AdvancedSend],
+            PaneContent::Graph => &[PaneContent::Traffic, PaneContent::AdvancedSend],
+            PaneContent::AdvancedSend => &[PaneContent::Traffic, PaneContent::Graph],
+        }
+    }
+}
+
+/// Which pane is focused in a split layout
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaneFocus {
+    /// Primary pane (left side)
+    #[default]
+    Primary,
+    /// Secondary pane (right side)
+    Secondary,
+}
+
+/// State for a single tab (workspace)
+#[derive(Debug, Clone, Default)]
+pub struct TabState {
+    /// Secondary pane content (if split is active)
+    pub secondary: Option<PaneContent>,
+    /// Which pane has focus within this tab
+    pub focus: PaneFocus,
+    /// Split ratio (percentage for primary pane width)
+    pub split_ratio: u16,
+}
+
+impl TabState {
+    /// Create a new tab state (no split)
+    pub fn new() -> Self {
+        Self {
+            secondary: None,
+            focus: PaneFocus::Primary,
+            split_ratio: 50,
+        }
+    }
+
+    /// Check if there's a split
+    pub fn is_split(&self) -> bool {
+        self.secondary.is_some()
+    }
+}
+
+/// Number of tabs in the connected view
+pub const TAB_COUNT: usize = 3;
+
+/// Layout state for the connected view with tabs
+/// Each tab has its own split configuration
+#[derive(Debug, Clone)]
+pub struct TabLayout {
+    /// Current active tab (0-indexed internally, displayed as 1-indexed)
+    active_tab: usize,
+    /// State for each tab (index 0=Traffic, 1=Graph, 2=Send)
+    tabs: [TabState; TAB_COUNT],
+}
+
+impl Default for TabLayout {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TabLayout {
+    /// Create a new tab layout (start on Tab 1)
+    pub fn new() -> Self {
+        Self {
+            active_tab: 0,
+            tabs: [TabState::new(), TabState::new(), TabState::new()],
+        }
+    }
+
+    /// Get the active tab number (1-indexed for display)
+    pub fn active_tab_number(&self) -> u8 {
+        (self.active_tab + 1) as u8
+    }
+
+    /// Get the primary content for the active tab
+    pub fn primary_content(&self) -> PaneContent {
+        PaneContent::from_tab_number(self.active_tab_number()).unwrap_or_default()
+    }
+
+    /// Get the active tab's state
+    fn active_state(&self) -> &TabState {
+        &self.tabs[self.active_tab]
+    }
+
+    /// Get mutable reference to the active tab's state
+    fn active_state_mut(&mut self) -> &mut TabState {
+        &mut self.tabs[self.active_tab]
+    }
+
+    /// Switch to a specific tab (1-indexed: 1, 2, or 3)
+    pub fn switch_tab(&mut self, tab: u8) {
+        let idx = (tab as usize).saturating_sub(1);
+        if idx < TAB_COUNT {
+            self.active_tab = idx;
+        }
+    }
+
+    /// Check if the active tab has a split
+    pub fn is_split(&self) -> bool {
+        self.active_state().is_split()
+    }
+
+    /// Get the secondary content of the active tab (if any)
+    pub fn secondary(&self) -> Option<PaneContent> {
+        self.active_state().secondary
+    }
+
+    /// Get the focus of the active tab
+    pub fn focus(&self) -> PaneFocus {
+        self.active_state().focus
+    }
+
+    /// Add a vertical split with the given content to the active tab
+    /// Returns error message if split cannot be created
+    pub fn vsplit(&mut self, content: PaneContent) -> Result<(), &'static str> {
+        let primary = self.primary_content();
+        if content == primary {
+            return Err("Cannot split with the same content as primary");
+        }
+        let state = self.active_state_mut();
+        if state.secondary.is_some() {
+            return Err("Already split - close the secondary pane first");
+        }
+        state.secondary = Some(content);
+        state.focus = PaneFocus::Secondary;
+        Ok(())
+    }
+
+    /// Close the secondary pane of the active tab
+    pub fn close_secondary(&mut self) -> Result<(), &'static str> {
+        let state = self.active_state_mut();
+        if state.secondary.is_none() {
+            return Err("No secondary pane to close");
+        }
+        state.secondary = None;
+        state.focus = PaneFocus::Primary;
+        Ok(())
+    }
+
+    /// Get the currently focused pane's content
+    pub fn focused_content(&self) -> PaneContent {
+        let state = self.active_state();
+        match state.focus {
+            PaneFocus::Primary => self.primary_content(),
+            PaneFocus::Secondary => state.secondary.unwrap_or(self.primary_content()),
+        }
+    }
+
+    /// Toggle focus between panes in the active tab
+    pub fn toggle_focus(&mut self) {
+        let state = self.active_state_mut();
+        if state.secondary.is_some() {
+            state.focus = match state.focus {
+                PaneFocus::Primary => PaneFocus::Secondary,
+                PaneFocus::Secondary => PaneFocus::Primary,
+            };
+        }
+    }
+
+    /// Move focus left in the active tab
+    pub fn focus_left(&mut self) {
+        let state = self.active_state_mut();
+        if state.focus == PaneFocus::Secondary {
+            state.focus = PaneFocus::Primary;
+        }
+    }
+
+    /// Move focus right in the active tab
+    pub fn focus_right(&mut self) {
+        let state = self.active_state_mut();
+        if state.focus == PaneFocus::Primary && state.secondary.is_some() {
+            state.focus = PaneFocus::Secondary;
+        }
+    }
+
+    /// Get the split ratio of the active tab
+    pub fn split_ratio(&self) -> u16 {
+        self.active_state().split_ratio
+    }
 }
 
 /// Which panel is focused in port selection view
@@ -294,6 +527,12 @@ pub enum InputMode {
     ConfigDropdown,
     /// Traffic config dropdown is open
     TrafficConfigDropdown,
+    /// Waiting for window command after Ctrl+W
+    WindowCommand,
+    /// Command line mode (after pressing :)
+    CommandLine,
+    /// Split selection mode (choosing which content to split with)
+    SplitSelect,
 }
 
 /// Visual properties for rendering an input mode in the status bar
@@ -316,6 +555,9 @@ impl InputMode {
             InputMode::FilePathInput => "Enter file path to send:",
             InputMode::ConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::TrafficConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
+            InputMode::WindowCommand => "Ctrl+W: v=vsplit, q=close, h/l=navigate",
+            InputMode::CommandLine => "",
+            InputMode::SplitSelect => "", // Dynamic based on available splits
         }
     }
 
@@ -342,6 +584,12 @@ impl InputMode {
             }),
             InputMode::ConfigDropdown => None,         // Uses special rendering
             InputMode::TrafficConfigDropdown => None,  // Uses special rendering
+            InputMode::WindowCommand => None,          // Uses status bar message
+            InputMode::CommandLine => Some(InputModeStyle {
+                prefix: ":",
+                color: Color::Yellow,
+            }),
+            InputMode::SplitSelect => None,            // Uses status bar message
         }
     }
 }
@@ -534,13 +782,20 @@ impl TimestampFormat {
                     .duration_since(session_start)
                     .unwrap_or_default();
                 let secs = elapsed.as_secs_f64();
+                // Always produce 7 characters: "+XXXX.Xs" pattern
+                // Decrease decimal precision as integer part grows
                 if secs < 10.0 {
-                    format!("+{:.3}s", secs)
+                    format!("+{:05.3}s", secs)    // +1.234s (7 chars)
                 } else if secs < 100.0 {
-                    format!("+{:.2}s", secs)
+                    format!("+{:05.2}s", secs)    // +12.34s (7 chars)
                 } else if secs < 1000.0 {
-                    format!("+{:.1}s", secs)
+                    format!("+{:05.1}s", secs)    // +123.4s (7 chars)
+                } else if secs < 10000.0 {
+                    format!("+{:.1}s", secs)      // +1234.5s (8 chars)
+                } else if secs < 100000.0 {
+                    format!("+{:.0}s", secs)      // +12345s (7 chars)
                 } else {
+                    // For very long sessions (27+ hours), just show the number
                     format!("+{:.0}s", secs)
                 }
             }
@@ -569,7 +824,7 @@ impl TimestampFormat {
     /// Get the display width of timestamps in this format (for gutter sizing)
     pub fn width(&self) -> usize {
         match self {
-            TimestampFormat::Relative => 8,       // "+123.4s " - max reasonable width
+            TimestampFormat::Relative => 9,        // "+1234.5s " - max reasonable width (up to ~3 hours)
             TimestampFormat::AbsoluteMillis => 13, // "12:34:56.789 "
             TimestampFormat::Absolute => 9,        // "12:34:56 "
         }
@@ -969,6 +1224,8 @@ pub struct App {
     pub input: InputState,
     /// Port selection state
     pub port_select: PortSelectState,
+    /// Tab layout for connected view (with persistent splits per tab)
+    pub layout: TabLayout,
     /// Traffic view state
     pub traffic: TrafficState,
     /// Search state
@@ -1006,6 +1263,7 @@ impl App {
             status,
             input: InputState::default(),
             port_select,
+            layout: TabLayout::new(),
             traffic: TrafficState::default(),
             search: SearchState::default(),
             file_send: FileSendState::default(),
@@ -1038,7 +1296,7 @@ impl App {
         match self.input.mode {
             InputMode::Normal => match self.view {
                 View::PortSelect => self.handle_key_port_select(key),
-                View::Traffic => self.handle_key_traffic(key),
+                View::Connected => self.handle_key_connected(key),
             },
             InputMode::PortInput => self.handle_key_port_input(key),
             InputMode::SendInput => self.handle_key_send_input(key),
@@ -1046,6 +1304,9 @@ impl App {
             InputMode::FilePathInput => self.handle_key_file_path_input(key),
             InputMode::ConfigDropdown => self.handle_key_config_dropdown(key),
             InputMode::TrafficConfigDropdown => self.handle_key_traffic_config_dropdown(key),
+            InputMode::WindowCommand => self.handle_key_window_command(key),
+            InputMode::CommandLine => self.handle_key_command_line(key),
+            InputMode::SplitSelect => self.handle_key_split_select(key),
         }
     }
 
@@ -1248,7 +1509,16 @@ impl App {
             other => other,
         };
 
-        let Some(cmd) = cmd else { return };
+        let Some(cmd) = cmd else {
+            // Check for command line entry with ':'
+            if key.code == KeyCode::Char(':') && key.modifiers.is_empty() {
+                self.input.mode = InputMode::CommandLine;
+                self.input.buffer.clear();
+                self.status = String::new();
+                return;
+            }
+            return;
+        };
 
         match cmd {
             PortSelectCommand::Quit => self.should_quit = true,
@@ -1418,12 +1688,8 @@ impl App {
                     } else if self.search.pattern.is_some() {
                         self.search.clear();
                         self.status = "Search cleared.".to_string();
-                    } else {
-                        self.disconnect();
-                        self.view = View::PortSelect;
-                        self.needs_full_clear = true;
-                        self.status = "Disconnected.".to_string();
                     }
+                    // If nothing to cancel, Esc does nothing (use 'q' to disconnect)
                     return;
                 }
             }
@@ -1479,7 +1745,10 @@ impl App {
             }
             TrafficCommand::ToggleConfigPanel => {
                 self.traffic.config_panel_visible = !self.traffic.config_panel_visible;
-                if !self.traffic.config_panel_visible {
+                if self.traffic.config_panel_visible {
+                    // Focus the config panel when opening it
+                    self.traffic.focus = TrafficFocus::Config;
+                } else {
                     self.traffic.focus = TrafficFocus::Traffic;
                 }
                 self.needs_full_clear = true;
@@ -1507,6 +1776,458 @@ impl App {
                 } else {
                     "Timestamps: OFF".to_string()
                 };
+            }
+        }
+    }
+
+    /// Handle key events in the connected view
+    fn handle_key_connected(&mut self, key: KeyEvent) {
+        // Handle quit confirmation dialog first
+        if self.traffic.quit_confirm {
+            self.handle_key_quit_confirm(key);
+            return;
+        }
+
+        // Check for Ctrl+w prefix for window commands
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w') {
+            self.input.mode = InputMode::WindowCommand;
+            self.status = "Ctrl+W: v=vsplit, q=close, h/l=navigate".to_string();
+            return;
+        }
+
+        // Check for command line entry
+        if key.modifiers.is_empty() && key.code == KeyCode::Char(':') {
+            self.input.mode = InputMode::CommandLine;
+            self.input.buffer.clear();
+            self.status = String::new();
+            return;
+        }
+
+        // Tab switching with number keys (1, 2, 3) - switches to that tab
+        if key.modifiers.is_empty() {
+            match key.code {
+                KeyCode::Char('1') => {
+                    self.layout.switch_tab(1);
+                    self.needs_full_clear = true;
+                    self.status = "Tab 1: Traffic".to_string();
+                    return;
+                }
+                KeyCode::Char('2') => {
+                    self.layout.switch_tab(2);
+                    self.needs_full_clear = true;
+                    self.status = "Tab 2: Graph".to_string();
+                    return;
+                }
+                KeyCode::Char('3') => {
+                    self.layout.switch_tab(3);
+                    self.needs_full_clear = true;
+                    self.status = "Tab 3: Send".to_string();
+                    return;
+                }
+                // h/l for pane navigation (includes config panel)
+                KeyCode::Char('h') => {
+                    if self.navigate_focus_left() {
+                        self.update_focus_status();
+                        return;
+                    }
+                }
+                KeyCode::Char('l') => {
+                    if self.navigate_focus_right() {
+                        self.update_focus_status();
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Tab key cycles focus within the current tab
+        if key.code == KeyCode::Tab && key.modifiers.is_empty() {
+            self.layout.toggle_focus();
+            self.update_focus_status();
+            return;
+        }
+
+        // If config panel is focused, handle config navigation first
+        // This takes priority over pane-specific handlers
+        if self.traffic.config_panel_visible
+            && self.traffic.focus == TrafficFocus::Config
+            && self.handle_key_config_panel(key)
+        {
+            return;
+        }
+
+        // Delegate to content-specific handler based on focused pane
+        match self.layout.focused_content() {
+            PaneContent::Traffic => self.handle_key_traffic(key),
+            PaneContent::Graph => self.handle_key_graph(key),
+            PaneContent::AdvancedSend => self.handle_key_advanced_send(key),
+        }
+    }
+
+    /// Handle key events when config panel is focused (works from any pane)
+    /// Returns true if the key was handled
+    fn handle_key_config_panel(&mut self, key: KeyEvent) -> bool {
+        // Global navigation for config panel
+        if let Some(nav_cmd) = map_global_nav_key(&key) {
+            match nav_cmd {
+                GlobalNavCommand::Up => {
+                    self.traffic.config_field = self.traffic.config_field.prev();
+                    return true;
+                }
+                GlobalNavCommand::Down => {
+                    self.traffic.config_field = self.traffic.config_field.next();
+                    return true;
+                }
+                GlobalNavCommand::Confirm => {
+                    if self.traffic.config_field.is_toggle() {
+                        self.traffic.toggle_setting();
+                        self.status = format!(
+                            "{}: {}",
+                            self.traffic.config_field.label(),
+                            self.traffic.get_config_display(self.traffic.config_field)
+                        );
+                        self.needs_full_clear = true;
+                    } else {
+                        self.traffic.open_dropdown();
+                        self.input.mode = InputMode::TrafficConfigDropdown;
+                    }
+                    return true;
+                }
+                GlobalNavCommand::Cancel => {
+                    // Return focus to the pane
+                    self.traffic.focus = TrafficFocus::Traffic;
+                    self.update_focus_status();
+                    return true;
+                }
+                // PageUp/PageDown/Top/Bottom not used in config panel
+                _ => {}
+            }
+        }
+
+        // 'c' closes config panel
+        if key.code == KeyCode::Char('c') && key.modifiers.is_empty() {
+            self.traffic.config_panel_visible = false;
+            self.traffic.focus = TrafficFocus::Traffic;
+            self.needs_full_clear = true;
+            return true;
+        }
+
+        false
+    }
+
+    /// Handle window/split commands (after Ctrl+W prefix)
+    fn handle_key_window_command(&mut self, key: KeyEvent) {
+        self.input.mode = InputMode::Normal;
+
+        match key.code {
+            // Vertical split - show split selection prompt
+            KeyCode::Char('v') => {
+                if self.layout.is_split() {
+                    self.status = "Already split - close with Ctrl+W q first".to_string();
+                } else {
+                    // Enter split selection mode
+                    self.input.mode = InputMode::SplitSelect;
+                    let primary = self.layout.primary_content();
+                    let options = primary.available_splits();
+                    let prompt = options
+                        .iter()
+                        .map(|c| format!("[{}] {}", c.tab_number(), c.display_name()))
+                        .collect::<Vec<_>>()
+                        .join("  ");
+                    self.status = format!("Split with: {}  [Esc: cancel]", prompt);
+                }
+            }
+            // Close secondary pane
+            KeyCode::Char('q') => {
+                match self.layout.close_secondary() {
+                    Ok(()) => {
+                        self.needs_full_clear = true;
+                        self.status = "Closed secondary pane".to_string();
+                    }
+                    Err(msg) => {
+                        self.status = msg.to_string();
+                    }
+                }
+            }
+            // Navigation between panes
+            KeyCode::Char('h') => {
+                self.layout.focus_left();
+                self.update_focus_status();
+            }
+            KeyCode::Char('l') => {
+                self.layout.focus_right();
+                self.update_focus_status();
+            }
+            // Cycle focus with Tab or w
+            KeyCode::Char('w') | KeyCode::Tab => {
+                self.layout.toggle_focus();
+                self.update_focus_status();
+            }
+            // Cancel
+            KeyCode::Esc => {
+                self.status = "Window command cancelled".to_string();
+            }
+            _ => {
+                self.status = "Unknown window command (v=vsplit, q=close, h/l=nav)".to_string();
+            }
+        }
+    }
+
+    /// Handle split selection mode (choosing which content to split with)
+    fn handle_key_split_select(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char(c @ '1'..='3') => {
+                self.input.mode = InputMode::Normal;
+                let tab_num = c.to_digit(10).unwrap() as u8;
+                if let Some(content) = PaneContent::from_tab_number(tab_num) {
+                    match self.layout.vsplit(content) {
+                        Ok(()) => {
+                            self.needs_full_clear = true;
+                            self.status = format!("Split with {}", content.display_name());
+                        }
+                        Err(msg) => {
+                            self.status = msg.to_string();
+                        }
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                self.input.mode = InputMode::Normal;
+                self.status = "Split cancelled".to_string();
+            }
+            _ => {
+                // Invalid selection, show options again
+                let primary = self.layout.primary_content();
+                let options = primary.available_splits();
+                let prompt = options
+                    .iter()
+                    .map(|c| format!("[{}] {}", c.tab_number(), c.display_name()))
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                self.status = format!("Split with: {}  [Esc: cancel]", prompt);
+            }
+        }
+    }
+
+    fn update_focus_status(&mut self) {
+        if self.traffic.config_panel_visible && self.traffic.focus == TrafficFocus::Config {
+            self.status = "Focus: Config".to_string();
+        } else {
+            let content = self.layout.focused_content();
+            let pane_indicator = if self.layout.is_split() {
+                match self.layout.focus() {
+                    PaneFocus::Primary => " (Primary)",
+                    PaneFocus::Secondary => " (Secondary)",
+                }
+            } else {
+                ""
+            };
+            self.status = format!("Focus: {}{}", content.display_name(), pane_indicator);
+        }
+    }
+
+    /// Navigate focus left: Config -> Secondary -> Primary
+    /// Returns true if focus changed
+    fn navigate_focus_left(&mut self) -> bool {
+        // If config panel is focused, move to the rightmost pane
+        if self.traffic.config_panel_visible && self.traffic.focus == TrafficFocus::Config {
+            self.traffic.focus = TrafficFocus::Traffic;
+            // If split, focus the secondary (rightmost) pane
+            if self.layout.is_split() {
+                self.layout.active_state_mut().focus = PaneFocus::Secondary;
+            }
+            return true;
+        }
+
+        // If in split view, try to move left between panes
+        if self.layout.is_split() && self.layout.focus() == PaneFocus::Secondary {
+            self.layout.focus_left();
+            return true;
+        }
+
+        // Already at leftmost position
+        false
+    }
+
+    /// Navigate focus right: Primary -> Secondary -> Config
+    /// Returns true if focus changed
+    fn navigate_focus_right(&mut self) -> bool {
+        // If config panel is visible and we're on traffic side
+        if self.traffic.focus == TrafficFocus::Traffic {
+            // If split, check if we're on secondary pane
+            if self.layout.is_split() {
+                if self.layout.focus() == PaneFocus::Primary {
+                    // Move to secondary pane
+                    self.layout.focus_right();
+                    return true;
+                } else if self.traffic.config_panel_visible {
+                    // Already on secondary, move to config
+                    self.traffic.focus = TrafficFocus::Config;
+                    return true;
+                }
+            } else if self.traffic.config_panel_visible {
+                // No split, move directly to config
+                self.traffic.focus = TrafficFocus::Config;
+                return true;
+            }
+        }
+
+        // Already at rightmost position
+        false
+    }
+
+    /// Handle common key events for placeholder panes (Graph, AdvancedSend).
+    /// These panes share basic functionality until fully implemented.
+    /// Returns true if the key was handled, false otherwise.
+    fn handle_key_placeholder_pane(&mut self, key: KeyEvent) -> bool {
+        // Check for disconnect command
+        let cmd = self.settings.keybindings.traffic.find_command(&key);
+        if let Some(TrafficCommand::Disconnect) = cmd {
+            self.traffic.quit_confirm = true;
+            return true;
+        }
+
+        // Toggle config panel with 'c'
+        if key.code == KeyCode::Char('c') && key.modifiers.is_empty() {
+            self.traffic.config_panel_visible = !self.traffic.config_panel_visible;
+            if self.traffic.config_panel_visible {
+                self.traffic.focus = TrafficFocus::Config;
+            } else {
+                self.traffic.focus = TrafficFocus::Traffic;
+            }
+            self.needs_full_clear = true;
+            return true;
+        }
+
+        false
+    }
+
+    /// Handle key events for graph pane (placeholder)
+    fn handle_key_graph(&mut self, key: KeyEvent) {
+        // Use shared placeholder handler for common functionality
+        if self.handle_key_placeholder_pane(key) {
+            // Handled by shared handler
+        }
+        // Graph-specific keybindings will go here
+    }
+
+    /// Handle key events for advanced send pane (placeholder)
+    fn handle_key_advanced_send(&mut self, key: KeyEvent) {
+        // Use shared placeholder handler for common functionality
+        if self.handle_key_placeholder_pane(key) {
+            // Handled by shared handler
+        }
+        // Send-specific keybindings will go here
+    }
+
+    /// Handle command line input (after pressing :)
+    fn handle_key_command_line(&mut self, key: KeyEvent) {
+        match self.input.handle_text_input(key) {
+            TextInputResult::Submit(cmd) => {
+                self.execute_command(&cmd);
+            }
+            TextInputResult::Cancel => {
+                self.status = "Command cancelled".to_string();
+            }
+            TextInputResult::Continue => {}
+        }
+    }
+
+    /// Execute a command line command
+    fn execute_command(&mut self, cmd: &str) {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if parts.is_empty() {
+            return;
+        }
+
+        match parts[0] {
+            "q" | "quit" => {
+                if matches!(self.view, View::Connected) {
+                    self.traffic.quit_confirm = true;
+                } else {
+                    self.should_quit = true;
+                }
+            }
+            "connect" => {
+                if parts.len() > 1 {
+                    let port_path = parts[1..].join(" ");
+                    self.connect_to_port(&port_path);
+                } else {
+                    self.status = "Usage: :connect <port_path>".to_string();
+                }
+            }
+            "disconnect" => {
+                if matches!(self.view, View::Connected) {
+                    self.disconnect();
+                    self.view = View::PortSelect;
+                    self.needs_full_clear = true;
+                    self.status = "Disconnected.".to_string();
+                } else {
+                    self.status = "Not connected".to_string();
+                }
+            }
+            "vsplit" => {
+                if !matches!(self.view, View::Connected) {
+                    self.status = "Must be connected to use splits".to_string();
+                    return;
+                }
+                if self.layout.is_split() {
+                    self.status = "Already split - use :close first".to_string();
+                    return;
+                }
+                if parts.len() > 1 {
+                    if let Ok(tab_num) = parts[1].parse::<u8>() {
+                        if let Some(content) = PaneContent::from_tab_number(tab_num) {
+                            match self.layout.vsplit(content) {
+                                Ok(()) => {
+                                    self.needs_full_clear = true;
+                                    self.status = format!("Split with {}", content.display_name());
+                                }
+                                Err(msg) => {
+                                    self.status = msg.to_string();
+                                }
+                            }
+                        } else {
+                            self.status = "Invalid pane number (1=Traffic, 2=Graph, 3=Send)".to_string();
+                        }
+                    } else {
+                        self.status = "Usage: :vsplit [1|2|3]".to_string();
+                    }
+                } else {
+                    // No argument: enter split selection mode
+                    self.input.mode = InputMode::SplitSelect;
+                    let primary = self.layout.primary_content();
+                    let options = primary.available_splits();
+                    let prompt = options
+                        .iter()
+                        .map(|c| format!("[{}] {}", c.tab_number(), c.display_name()))
+                        .collect::<Vec<_>>()
+                        .join("  ");
+                    self.status = format!("Split with: {}  [Esc: cancel]", prompt);
+                }
+            }
+            "close" => {
+                if !matches!(self.view, View::Connected) {
+                    self.status = "Must be connected".to_string();
+                    return;
+                }
+                match self.layout.close_secondary() {
+                    Ok(()) => {
+                        self.needs_full_clear = true;
+                        self.status = "Closed secondary pane".to_string();
+                    }
+                    Err(msg) => {
+                        self.status = msg.to_string();
+                    }
+                }
+            }
+            "set" => {
+                // Handle :set commands (encoding, baud, etc.) - placeholder for now
+                self.status = "Set commands not yet implemented".to_string();
+            }
+            _ => {
+                self.status = format!("Unknown command: {}", parts[0]);
             }
         }
     }
@@ -1838,7 +2559,7 @@ impl App {
         match self.runtime.block_on(Session::connect(port_name, config)) {
             Ok(handle) => {
                 self.connection = ConnectionState::Connected(handle);
-                self.view = View::Traffic;
+                self.view = View::Connected;
                 self.traffic.scroll_offset = 0;
                 self.traffic.session_start = Some(std::time::SystemTime::now());
                 self.status = format!(

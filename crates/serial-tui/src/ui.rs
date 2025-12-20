@@ -14,8 +14,9 @@ use serial_core::{encode, Direction as DataDirection};
 use strum::IntoEnumIterator;
 
 use crate::app::{
-    App, ConfigField, ConnectionState, HexGrouping, InputMode, PortSelectFocus, SearchMatch,
-    TrafficConfigField, TrafficFocus, View, WrapMode,
+    App, ConfigField, ConnectionState, HexGrouping, InputMode, PaneContent, PaneFocus,
+    PortSelectFocus, SearchMatch, TrafficConfigField,
+    TrafficFocus, View, WrapMode,
 };
 use crate::command::{GlobalNavCommand, PortSelectCommand, TrafficCommand};
 use crate::settings::{AnyCommand, SettingsTab};
@@ -156,7 +157,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     match app.view {
         View::PortSelect => render_port_select(frame, app, chunks[0]),
-        View::Traffic => render_traffic(frame, app, chunks[0]),
+        View::Connected => render_connected(frame, app, chunks[0]),
     }
 
     render_status_bar(frame, app, chunks[1]);
@@ -169,6 +170,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render quit confirmation dialog as overlay if showing
     if app.traffic.quit_confirm {
         render_quit_confirm_dialog(frame);
+    }
+
+    // Render split selection dialog as overlay if in split select mode
+    if app.input.mode == InputMode::SplitSelect {
+        render_split_select_dialog(frame, app);
     }
 }
 
@@ -191,6 +197,156 @@ fn render_port_select(frame: &mut Frame, app: &App, area: Rect) {
     if let Some(config_area) = config_area {
         render_config_panel(frame, app, config_area);
     }
+}
+
+// =============================================================================
+// Connected View (Split layout)
+// =============================================================================
+
+fn render_connected(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Config panel is always a 30% sidebar on the right when visible
+    let (content_area, config_area) = if app.traffic.config_panel_visible {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    // Render the tab layout (with potential splits)
+    render_tab_layout(frame, app, content_area);
+
+    // Render config panel as sidebar
+    if let Some(config_area) = config_area {
+        render_traffic_config_panel(frame, app, config_area);
+    }
+}
+
+fn render_tab_layout(frame: &mut Frame, app: &mut App, area: Rect) {
+    let active_tab = app.layout.active_tab_number();
+    let primary_content = app.layout.primary_content();
+    let secondary_content = app.layout.secondary();
+    let split_ratio = app.layout.split_ratio();
+    let pane_focus = app.layout.focus();
+    
+    // Determine if panes are focused (vs config panel having focus)
+    let config_has_focus = app.traffic.config_panel_visible 
+        && app.traffic.focus == TrafficFocus::Config;
+    
+    if let Some(secondary_content) = secondary_content {
+        // We have a split - create left | right layout
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(split_ratio),
+                Constraint::Percentage(100 - split_ratio),
+            ])
+            .split(area);
+
+        // Render primary pane (left) - focused only if PaneFocus::Primary AND config doesn't have focus
+        let primary_focused = pane_focus == PaneFocus::Primary && !config_has_focus;
+        render_pane_with_title(frame, app, chunks[0], primary_content, primary_focused, active_tab, true);
+
+        // Render secondary pane (right) - focused only if PaneFocus::Secondary AND config doesn't have focus
+        let secondary_focused = pane_focus == PaneFocus::Secondary && !config_has_focus;
+        render_pane_with_title(frame, app, chunks[1], secondary_content, secondary_focused, active_tab, false);
+    } else {
+        // No split - primary pane is focused only if config panel doesn't have focus
+        let primary_focused = !config_has_focus;
+        render_pane_with_title(frame, app, area, primary_content, primary_focused, active_tab, true);
+    }
+}
+
+fn render_pane_with_title(
+    frame: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    content: PaneContent,
+    focused: bool,
+    active_tab: u8,
+    is_primary: bool,
+) {
+    match content {
+        PaneContent::Traffic => render_traffic_pane_with_tab_bar(frame, app, area, focused, active_tab, is_primary),
+        PaneContent::Graph => render_graph_pane_with_tab_bar(frame, area, focused, active_tab, is_primary),
+        PaneContent::AdvancedSend => render_send_pane_with_tab_bar(frame, area, focused, active_tab, is_primary),
+    }
+}
+
+fn render_traffic_pane_with_tab_bar(
+    frame: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    focused: bool,
+    active_tab: u8,
+    is_primary: bool,
+) {
+    render_traffic_content_with_tab_bar(frame, app, area, focused, active_tab, is_primary);
+}
+
+fn render_graph_pane_with_tab_bar(frame: &mut Frame, area: Rect, focused: bool, active_tab: u8, is_primary: bool) {
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    // Build title with tab bar only for primary pane
+    let title = if is_primary {
+        build_tab_bar_title(active_tab, focused)
+    } else {
+        " Graph ".to_string()
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let placeholder = Paragraph::new("Graph view - Coming soon")
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(placeholder, inner);
+}
+
+fn render_send_pane_with_tab_bar(frame: &mut Frame, area: Rect, focused: bool, active_tab: u8, is_primary: bool) {
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    // Build title with tab bar only for primary pane
+    let title = if is_primary {
+        build_tab_bar_title(active_tab, focused)
+    } else {
+        " Send ".to_string()
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let placeholder = Paragraph::new("Advanced send options - Coming soon")
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(placeholder, inner);
+}
+
+/// Build the tab bar title string
+/// Format: " [1:Traffic] - 2:Graph - 3:Send | [extra info] "
+fn build_tab_bar_title(active_tab: u8, _focused: bool) -> String {
+    let t1 = if active_tab == 1 { "[1:Traffic]" } else { "1:Traffic" };
+    let t2 = if active_tab == 2 { "[2:Graph]" } else { "2:Graph" };
+    let t3 = if active_tab == 3 { "[3:Send]" } else { "3:Send" };
+    format!(" {} - {} - {} ", t1, t2, t3)
 }
 
 fn render_port_list(frame: &mut Frame, app: &App, area: Rect) {
@@ -379,36 +535,21 @@ fn render_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
     frame.render_widget(dropdown_list, dropdown_area);
 }
 
-fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
-    // Split horizontally if config panel is visible (70/30 split)
-    let (traffic_area, config_area) = if app.traffic.config_panel_visible {
-        let chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(area);
-        (chunks[0], Some(chunks[1]))
-    } else {
-        (area, None)
-    };
-
-    // Render the main traffic content
-    render_traffic_content(frame, app, traffic_area);
-
-    // Render config panel if visible
-    if let Some(config_area) = config_area {
-        render_traffic_config_panel(frame, app, config_area);
-    }
-}
-
-fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
-    let is_focused = app.traffic.focus == TrafficFocus::Traffic;
+fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: Rect, focused: bool, active_tab: u8, is_primary: bool) {
+    // Use the focused parameter directly - it indicates whether this pane has focus
+    // Note: app.traffic.focus is for internal traffic view state (sidebar focus), not pane focus
 
     // Get dynamic keybinding hints
     let search_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::EnterSearchMode).unwrap_or_else(|| "/".to_string());
-    let next_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::NextMatch).unwrap_or_else(|| "n".to_string());
-    let prev_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::PrevMatch).unwrap_or_else(|| "N".to_string());
     let config_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::ToggleConfigPanel).unwrap_or_else(|| "c".to_string());
     let send_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::EnterSendMode).unwrap_or_else(|| "i".to_string());
+
+    // Build title with tab bar (only for primary pane)
+    let tab_bar = if is_primary {
+        build_tab_bar_title(active_tab, focused)
+    } else {
+        " Traffic ".to_string()
+    };
 
     let title = if app.file_send.handle.is_some() {
         // Show file send in progress
@@ -416,20 +557,22 @@ fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
         let pct = progress
             .map(|p| (p.percentage() * 100.0) as u8)
             .unwrap_or(0);
-        format!(" Traffic [{}] [Sending: {}%] ", app.traffic.encoding, pct)
+        format!("{}| [{}] [Sending: {}%] ", tab_bar, app.traffic.encoding, pct)
     } else if app.search.pattern.is_some() {
+        let next_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::NextMatch).unwrap_or_else(|| "n".to_string());
+        let prev_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::PrevMatch).unwrap_or_else(|| "N".to_string());
         format!(
-            " Traffic [{}] [{}: search, {}/{}: next/prev] ",
-            app.traffic.encoding, search_key, next_key, prev_key
+            "{}| [{}] [{}: search, {}/{}: next/prev] ",
+            tab_bar, app.traffic.encoding, search_key, next_key, prev_key
         )
     } else {
         format!(
-            " Traffic [{}] [{}: config, {}: search, {}: send] ",
-            app.traffic.encoding, config_key, search_key, send_key
+            "{}| [{}] [{}: config, {}: search, {}: send] ",
+            tab_bar, app.traffic.encoding, config_key, search_key, send_key
         )
     };
 
-    let border_style = if is_focused {
+    let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
@@ -1105,5 +1248,76 @@ fn render_quit_confirm_dialog(frame: &mut Frame) {
     ];
 
     let paragraph = Paragraph::new(text).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(paragraph, inner);
+}
+
+// =============================================================================
+// Split Selection Dialog
+// =============================================================================
+
+fn render_split_select_dialog(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    
+    // Get available split options based on current primary content
+    let primary = app.layout.primary_content();
+    let options = primary.available_splits();
+    
+    // Dialog dimensions - adjust based on content
+    let dialog_width = 45u16;
+    let dialog_height = (options.len() as u16 + 4).max(6); // +4 for borders, title line, and help line
+    
+    // Center the dialog
+    let x = area.x + (area.width.saturating_sub(dialog_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(dialog_height)) / 2;
+    
+    let dialog_area = Rect {
+        x,
+        y,
+        width: dialog_width.min(area.width),
+        height: dialog_height.min(area.height),
+    };
+
+    // Clear the area behind the dialog
+    frame.render_widget(Clear, dialog_area);
+
+    // Create the dialog block
+    let title = format!(" Split {} with: ", primary.display_name());
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    let inner = block.inner(dialog_area);
+    frame.render_widget(block, dialog_area);
+
+    // Build content lines
+    let mut lines = Vec::new();
+    
+    // Add options
+    for content in options {
+        lines.push(Line::from(vec![
+            Span::raw("   "),
+            Span::styled(
+                format!("[{}]", content.tab_number()),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                content.display_name(),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+    }
+    
+    // Add empty line and help
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("   "),
+        Span::styled("Esc", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
+        Span::styled(": Cancel", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
 }

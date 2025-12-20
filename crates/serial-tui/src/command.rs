@@ -286,7 +286,10 @@ impl Command for PortSelectCommand {
         use PortSelectCommand::*;
 
         match self {
-            Quit => &[Char('q'), Modified(KeyCode::Char('c'), KeyModifiers::CONTROL)],
+            Quit => &[
+                Char('q'),
+                Modified(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            ],
             RefreshPorts => &[Char('r')],
             EnterPortPath => &[Char(':')],
             ToggleConfigPanel => &[Char('t')],
@@ -354,7 +357,11 @@ pub fn map_port_select_key(key: KeyEvent, config_visible: bool) -> Option<PortSe
 }
 
 /// Maps a key event to a traffic view command
-pub fn map_traffic_key(key: KeyEvent, config_visible: bool, config_focused: bool) -> Option<TrafficCommand> {
+pub fn map_traffic_key(
+    key: KeyEvent,
+    config_visible: bool,
+    config_focused: bool,
+) -> Option<TrafficCommand> {
     use TrafficCommand::*;
 
     // When config panel is focused, fewer commands available
@@ -373,7 +380,7 @@ pub fn map_traffic_key(key: KeyEvent, config_visible: bool, config_focused: bool
         KeyCode::Char('c') => Some(ToggleConfigPanel),
         KeyCode::Right | KeyCode::Char('l') if config_visible => Some(FocusConfig),
         KeyCode::Char('e') => Some(CycleEncoding),
-        KeyCode::Char('i') => Some(EnterSendMode),
+        KeyCode::Char('s') => Some(EnterSendMode),
         KeyCode::Char('/') => Some(EnterSearchMode),
         KeyCode::Char('n') => Some(NextMatch),
         KeyCode::Char('N') => Some(PrevMatch),
