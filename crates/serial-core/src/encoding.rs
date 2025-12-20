@@ -9,9 +9,9 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Encoding {
     /// Hexadecimal representation (e.g., "DE AD BE EF")
-    #[default]
     Hex,
     /// UTF-8 text (invalid sequences replaced with U+FFFD)
+    #[default]
     Utf8,
     /// ASCII text (non-printable shown as dots or escape sequences)
     Ascii,

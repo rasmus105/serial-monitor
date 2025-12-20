@@ -303,6 +303,218 @@ fn split_at_width(text: &str, max_width: usize) -> (&str, &str) {
     (text, "")
 }
 
+/// A styled segment that owns its content
+#[derive(Debug, Clone)]
+pub struct StyledSegment {
+    pub content: String,
+    pub style: Style,
+}
+
+/// Wraps content with multiple styled segments into physical rows.
+///
+/// This is similar to `wrap_line` but accepts pre-built styled segments
+/// (e.g., for search highlighting) instead of a single style.
+///
+/// # Arguments
+/// * `gutter` - Configuration for line numbers/timestamps gutter
+/// * `segments` - The styled content segments
+/// * `chunk_index` - The logical chunk index for mapping
+/// * `width` - Maximum width in characters
+pub fn wrap_line_styled(
+    gutter: &GutterConfig,
+    segments: Vec<StyledSegment>,
+    chunk_index: usize,
+    width: usize,
+) -> Vec<PhysicalRow<'static>> {
+    if width == 0 {
+        return vec![];
+    }
+
+    let gutter_width = gutter.width();
+    let content_width = width.saturating_sub(gutter_width);
+
+    if content_width == 0 {
+        let mut spans = gutter.build_first_row_spans();
+        if spans.is_empty() {
+            spans.push(Span::raw(""));
+        }
+        return vec![PhysicalRow {
+            line: Line::from(spans),
+            chunk_index,
+            is_first_row: true,
+        }];
+    }
+
+    // Build all physical rows by iterating through segments and wrapping
+    let mut rows: Vec<PhysicalRow<'static>> = Vec::new();
+    let mut current_row_spans: Vec<Span<'static>> = Vec::new();
+    let mut current_row_width: usize = 0;
+    let mut is_first_row = true;
+
+    for segment in segments {
+        let mut remaining = segment.content.as_str();
+        let style = segment.style;
+
+        while !remaining.is_empty() {
+            let available = content_width.saturating_sub(current_row_width);
+
+            if available == 0 {
+                // Current row is full, emit it and start a new row
+                let gutter_spans = if is_first_row {
+                    gutter.build_first_row_spans()
+                } else {
+                    gutter.build_continuation_spans()
+                };
+
+                let mut line_spans = gutter_spans;
+                line_spans.append(&mut current_row_spans);
+
+                rows.push(PhysicalRow {
+                    line: Line::from(line_spans),
+                    chunk_index,
+                    is_first_row,
+                });
+
+                is_first_row = false;
+                current_row_spans = Vec::new();
+                current_row_width = 0;
+                continue;
+            }
+
+            let (part, rest) = split_at_width(remaining, available);
+
+            if part.is_empty() && !remaining.is_empty() {
+                // Can't fit even one character; force at least one char to avoid infinite loop
+                let first_char_end = remaining
+                    .char_indices()
+                    .nth(1)
+                    .map(|(i, _)| i)
+                    .unwrap_or(remaining.len());
+                let forced_part = &remaining[..first_char_end];
+                current_row_spans.push(Span::styled(forced_part.to_owned(), style));
+                current_row_width += unicode_width::UnicodeWidthStr::width(forced_part);
+                remaining = &remaining[first_char_end..];
+            } else {
+                current_row_spans.push(Span::styled(part.to_owned(), style));
+                current_row_width += unicode_width::UnicodeWidthStr::width(part);
+                remaining = rest;
+            }
+        }
+    }
+
+    // Emit final row if there's any content (or if we have no rows yet for empty content)
+    if !current_row_spans.is_empty() || rows.is_empty() {
+        let gutter_spans = if is_first_row {
+            gutter.build_first_row_spans()
+        } else {
+            gutter.build_continuation_spans()
+        };
+
+        let mut line_spans = gutter_spans;
+        line_spans.append(&mut current_row_spans);
+
+        rows.push(PhysicalRow {
+            line: Line::from(line_spans),
+            chunk_index,
+            is_first_row,
+        });
+    }
+
+    rows
+}
+
+/// Truncates content with multiple styled segments to fit within the given width.
+///
+/// This is similar to `truncate_line` but accepts pre-built styled segments.
+///
+/// # Arguments
+/// * `gutter` - Configuration for line numbers/timestamps gutter
+/// * `segments` - The styled content segments
+/// * `chunk_index` - The logical chunk index for mapping
+/// * `width` - Maximum width in characters
+pub fn truncate_line_styled(
+    gutter: &GutterConfig,
+    segments: Vec<StyledSegment>,
+    chunk_index: usize,
+    width: usize,
+) -> Vec<PhysicalRow<'static>> {
+    if width == 0 {
+        return vec![];
+    }
+
+    let gutter_width = gutter.width();
+    let content_width = width.saturating_sub(gutter_width);
+
+    if content_width == 0 {
+        let mut spans = gutter.build_first_row_spans();
+        if spans.is_empty() {
+            spans.push(Span::raw(""));
+        }
+        return vec![PhysicalRow {
+            line: Line::from(spans),
+            chunk_index,
+            is_first_row: true,
+        }];
+    }
+
+    // Calculate total display width
+    let total_width: usize = segments
+        .iter()
+        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_str()))
+        .sum();
+
+    let mut spans = gutter.build_first_row_spans();
+
+    if total_width <= content_width {
+        // Everything fits
+        for segment in segments {
+            spans.push(Span::styled(segment.content, segment.style));
+        }
+    } else {
+        // Need to truncate - reserve space for ellipsis
+        let ellipsis = "…";
+        let ellipsis_width = 1;
+        let available_for_content = content_width.saturating_sub(ellipsis_width);
+
+        if available_for_content == 0 {
+            spans.push(Span::styled(ellipsis.to_owned(), Style::default().add_modifier(Modifier::DIM)));
+        } else {
+            let mut remaining_width = available_for_content;
+
+            for segment in segments {
+                if remaining_width == 0 {
+                    break;
+                }
+
+                let seg_width = unicode_width::UnicodeWidthStr::width(segment.content.as_str());
+
+                if seg_width <= remaining_width {
+                    // Entire segment fits
+                    spans.push(Span::styled(segment.content, segment.style));
+                    remaining_width -= seg_width;
+                } else {
+                    // Need to truncate this segment
+                    let (truncated, _) = split_at_width(&segment.content, remaining_width);
+                    spans.push(Span::styled(truncated.to_owned(), segment.style));
+                    remaining_width = 0;
+                }
+            }
+
+            // Add ellipsis
+            spans.push(Span::styled(
+                ellipsis.to_owned(),
+                Style::default().add_modifier(Modifier::DIM),
+            ));
+        }
+    }
+
+    vec![PhysicalRow {
+        line: Line::from(spans),
+        chunk_index,
+        is_first_row: true,
+    }]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +623,137 @@ mod tests {
 
         // "   1 " (5) + "+0.000s " (8) = 13
         assert_eq!(gutter.width(), 13);
+    }
+
+    #[test]
+    fn test_wrap_line_styled_single_segment() {
+        let gutter = GutterConfig::empty();
+        let segments = vec![StyledSegment {
+            content: "hello world".to_owned(),
+            style: Style::default(),
+        }];
+        let rows = wrap_line_styled(&gutter, segments, 0, 80);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].is_first_row);
+        assert_eq!(rows[0].chunk_index, 0);
+    }
+
+    #[test]
+    fn test_wrap_line_styled_multiple_segments() {
+        use ratatui::style::Color;
+
+        let gutter = GutterConfig::empty();
+        let segments = vec![
+            StyledSegment {
+                content: "hello ".to_owned(),
+                style: Style::default().fg(Color::Green),
+            },
+            StyledSegment {
+                content: "world".to_owned(),
+                style: Style::default().fg(Color::Red),
+            },
+        ];
+        let rows = wrap_line_styled(&gutter, segments, 0, 80);
+        assert_eq!(rows.len(), 1);
+        // Should have 2 spans (one for each segment)
+        assert_eq!(rows[0].line.spans.len(), 2);
+    }
+
+    #[test]
+    fn test_wrap_line_styled_wrapping() {
+        use ratatui::style::Color;
+
+        let gutter = GutterConfig::empty();
+        // Create segments that will wrap: "hello world" with highlight on "world"
+        let segments = vec![
+            StyledSegment {
+                content: "hello ".to_owned(),
+                style: Style::default(),
+            },
+            StyledSegment {
+                content: "world".to_owned(),
+                style: Style::default().bg(Color::Yellow),
+            },
+        ];
+        // Width of 8 should wrap "world" to next line
+        let rows = wrap_line_styled(&gutter, segments, 0, 8);
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].is_first_row);
+        assert!(!rows[1].is_first_row);
+    }
+
+    #[test]
+    fn test_wrap_line_styled_highlight_spans_wrap() {
+        use ratatui::style::Color;
+
+        let gutter = GutterConfig::empty();
+        // A highlight that will be split across lines
+        let segments = vec![
+            StyledSegment {
+                content: "ab".to_owned(),
+                style: Style::default(),
+            },
+            StyledSegment {
+                content: "cdef".to_owned(),
+                style: Style::default().bg(Color::Yellow),
+            },
+            StyledSegment {
+                content: "gh".to_owned(),
+                style: Style::default(),
+            },
+        ];
+        // Width of 4: first row "abcd", second row "efgh"
+        // The highlight "cdef" should span both rows
+        let rows = wrap_line_styled(&gutter, segments, 0, 4);
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn test_truncate_line_styled_fits() {
+        let gutter = GutterConfig::empty();
+        let segments = vec![StyledSegment {
+            content: "short".to_owned(),
+            style: Style::default(),
+        }];
+        let rows = truncate_line_styled(&gutter, segments, 0, 80);
+        assert_eq!(rows.len(), 1);
+        // No ellipsis needed
+        assert_eq!(rows[0].line.spans.len(), 1);
+    }
+
+    #[test]
+    fn test_truncate_line_styled_truncates() {
+        let gutter = GutterConfig::empty();
+        let segments = vec![StyledSegment {
+            content: "this is a long line".to_owned(),
+            style: Style::default(),
+        }];
+        let rows = truncate_line_styled(&gutter, segments, 0, 10);
+        assert_eq!(rows.len(), 1);
+        // Should have truncated content + ellipsis
+        assert!(rows[0].line.spans.len() >= 2);
+        // Last span should be ellipsis
+        let last_span = rows[0].line.spans.last().unwrap();
+        assert_eq!(last_span.content.as_ref(), "…");
+    }
+
+    #[test]
+    fn test_truncate_line_styled_multiple_segments() {
+        use ratatui::style::Color;
+
+        let gutter = GutterConfig::empty();
+        let segments = vec![
+            StyledSegment {
+                content: "hello ".to_owned(),
+                style: Style::default(),
+            },
+            StyledSegment {
+                content: "world".to_owned(),
+                style: Style::default().bg(Color::Yellow),
+            },
+        ];
+        // Truncate at width 8 (should show "hello w…")
+        let rows = truncate_line_styled(&gutter, segments, 0, 8);
+        assert_eq!(rows.len(), 1);
     }
 }

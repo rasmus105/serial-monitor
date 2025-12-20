@@ -14,6 +14,7 @@ use crate::command::{map_global_nav_key, DropdownCommand, GlobalNavCommand, Port
 use crate::settings::{
     key_event_to_binding, map_settings_key, Settings, SettingsCommand, SettingsPanelState,
 };
+use crate::ui::format_hex_grouped;
 
 // =============================================================================
 // ConfigOption Trait - Abstraction for serial config enum options
@@ -841,23 +842,44 @@ impl TrafficState {
     }
 }
 
+/// A single search match occurrence
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchMatch {
+    /// Index of the chunk containing this match
+    pub chunk_index: usize,
+    /// Byte offset where the match starts within the encoded content
+    pub byte_start: usize,
+    /// Byte offset where the match ends within the encoded content
+    pub byte_end: usize,
+}
+
 /// State for search functionality
 #[derive(Debug, Default)]
 pub struct SearchState {
     /// Current search pattern (if any)
     pub pattern: Option<String>,
-    /// Current search match index (line index in the displayed data)
-    pub match_index: Option<usize>,
-    /// Total number of search matches
-    pub match_count: usize,
+    /// All match occurrences found
+    pub matches: Vec<SearchMatch>,
+    /// Index into `matches` for the current match (0-based)
+    pub current_match: Option<usize>,
 }
 
 impl SearchState {
     /// Clear search state
     pub fn clear(&mut self) {
         self.pattern = None;
-        self.match_index = None;
-        self.match_count = 0;
+        self.matches.clear();
+        self.current_match = None;
+    }
+
+    /// Get the total number of matches
+    pub fn match_count(&self) -> usize {
+        self.matches.len()
+    }
+
+    /// Get the current match (if any)
+    pub fn current(&self) -> Option<&SearchMatch> {
+        self.current_match.and_then(|idx| self.matches.get(idx))
     }
 }
 
@@ -1580,20 +1602,39 @@ impl App {
         }
     }
 
-    fn find_matching_lines(&self) -> Vec<usize> {
+    /// Find all match occurrences across all chunks
+    fn find_all_matches(&self) -> Vec<SearchMatch> {
         let pattern = match &self.search.pattern {
-            Some(p) => p,
-            None => return vec![],
+            Some(p) if !p.is_empty() => p,
+            _ => return vec![],
         };
 
+        let pattern_lower = pattern.to_lowercase();
         let mut matches = Vec::new();
 
         if let ConnectionState::Connected(ref handle) = self.connection {
             let buffer = handle.buffer();
-            for (idx, chunk) in buffer.chunks().enumerate() {
+            for (chunk_idx, chunk) in buffer.chunks().enumerate() {
                 let encoded = encode(&chunk.data, self.traffic.encoding);
-                if encoded.to_lowercase().contains(&pattern.to_lowercase()) {
-                    matches.push(idx);
+                // Apply hex grouping if in hex mode (same as rendering)
+                let encoded = if self.traffic.encoding == serial_core::Encoding::Hex {
+                    format_hex_grouped(&encoded, self.traffic.hex_grouping)
+                } else {
+                    encoded
+                };
+                let encoded_lower = encoded.to_lowercase();
+
+                // Find all occurrences within this chunk
+                let mut search_start = 0;
+                while let Some(rel_pos) = encoded_lower[search_start..].find(&pattern_lower) {
+                    let byte_start = search_start + rel_pos;
+                    let byte_end = byte_start + pattern.len();
+                    matches.push(SearchMatch {
+                        chunk_index: chunk_idx,
+                        byte_start,
+                        byte_end,
+                    });
+                    search_start = byte_end;
                 }
             }
         }
@@ -1602,69 +1643,70 @@ impl App {
     }
 
     fn update_search_matches(&mut self) {
-        let matches = self.find_matching_lines();
-        self.search.match_count = matches.len();
+        self.search.matches = self.find_all_matches();
+        self.search.current_match = None;
 
-        if matches.is_empty() {
-            self.search.match_index = None;
+        if self.search.matches.is_empty() {
             if let Some(ref pattern) = self.search.pattern {
                 self.status = format!("Pattern not found: {}", pattern);
             }
         } else {
             self.status = format!(
                 "Found {} match{}",
-                self.search.match_count,
-                if self.search.match_count == 1 { "" } else { "es" }
+                self.search.match_count(),
+                if self.search.match_count() == 1 { "" } else { "es" }
             );
         }
     }
 
     fn goto_next_match(&mut self) {
-        let matches = self.find_matching_lines();
-        if matches.is_empty() {
+        if self.search.matches.is_empty() {
             self.status = "No matches".to_string();
             return;
         }
 
-        let next_idx = match self.search.match_index {
-            Some(current) => matches
-                .iter()
-                .position(|&m| m > current)
-                .unwrap_or(0),
+        // Move to next match, wrapping around
+        let next_idx = match self.search.current_match {
+            Some(current) => (current + 1) % self.search.matches.len(),
             None => 0,
         };
 
-        self.search.match_index = Some(matches[next_idx]);
-        self.traffic.scroll_to_chunk = Some(matches[next_idx]);
+        self.search.current_match = Some(next_idx);
+        let m = &self.search.matches[next_idx];
+        self.traffic.scroll_to_chunk = Some(m.chunk_index);
         self.status = format!(
             "Match {}/{}: {}",
             next_idx + 1,
-            matches.len(),
+            self.search.matches.len(),
             self.search.pattern.as_deref().unwrap_or("")
         );
     }
 
     fn goto_prev_match(&mut self) {
-        let matches = self.find_matching_lines();
-        if matches.is_empty() {
+        if self.search.matches.is_empty() {
             self.status = "No matches".to_string();
             return;
         }
 
-        let prev_idx = match self.search.match_index {
-            Some(current) => matches
-                .iter()
-                .rposition(|&m| m < current)
-                .unwrap_or(matches.len() - 1),
-            None => matches.len() - 1,
+        // Move to previous match, wrapping around
+        let prev_idx = match self.search.current_match {
+            Some(current) => {
+                if current == 0 {
+                    self.search.matches.len() - 1
+                } else {
+                    current - 1
+                }
+            }
+            None => self.search.matches.len() - 1,
         };
 
-        self.search.match_index = Some(matches[prev_idx]);
-        self.traffic.scroll_to_chunk = Some(matches[prev_idx]);
+        self.search.current_match = Some(prev_idx);
+        let m = &self.search.matches[prev_idx];
+        self.traffic.scroll_to_chunk = Some(m.chunk_index);
         self.status = format!(
             "Match {}/{}: {}",
             prev_idx + 1,
-            matches.len(),
+            self.search.matches.len(),
             self.search.pattern.as_deref().unwrap_or("")
         );
     }

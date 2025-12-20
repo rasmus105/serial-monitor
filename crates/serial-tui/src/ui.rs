@@ -14,12 +14,12 @@ use serial_core::{encode, Direction as DataDirection};
 use strum::IntoEnumIterator;
 
 use crate::app::{
-    App, ConfigField, ConnectionState, HexGrouping, InputMode, PortSelectFocus, TrafficConfigField,
-    TrafficFocus, View, WrapMode,
+    App, ConfigField, ConnectionState, HexGrouping, InputMode, PortSelectFocus, SearchMatch,
+    TrafficConfigField, TrafficFocus, View, WrapMode,
 };
 use crate::command::{GlobalNavCommand, PortSelectCommand, TrafficCommand};
 use crate::settings::{AnyCommand, SettingsTab};
-use crate::wrap::{truncate_line, wrap_line, GutterConfig};
+use crate::wrap::{truncate_line_styled, wrap_line_styled, GutterConfig, StyledSegment};
 
 /// Create a centered separator line like "──── Title ────" that spans the full width
 fn create_separator(title: &str, width: usize) -> String {
@@ -43,7 +43,7 @@ fn create_separator(title: &str, width: usize) -> String {
 ///   - Byte: "DE AD BE EF" (space every byte, unchanged)
 ///   - Word: "DEAD BEEF" (space every 2 bytes)
 ///   - DWord: "DEADBEEF" for 4 bytes, "DEADBEEF 12345678" for 8 bytes
-fn format_hex_grouped(hex: &str, grouping: HexGrouping) -> String {
+pub fn format_hex_grouped(hex: &str, grouping: HexGrouping) -> String {
     match grouping {
         HexGrouping::Byte => hex.to_string(), // Already space-separated per byte
         HexGrouping::None => hex.replace(' ', ""),
@@ -61,6 +61,84 @@ fn format_hex_grouped(hex: &str, grouping: HexGrouping) -> String {
                 .join(" ")
         }
     }
+}
+
+/// Build styled segments for a chunk's content with search highlighting.
+///
+/// # Arguments
+/// * `content` - The encoded content string
+/// * `chunk_index` - The index of this chunk
+/// * `base_style` - The base style for non-highlighted text (direction color)
+/// * `matches` - All search matches for this chunk (byte ranges)
+/// * `current_match` - The currently focused match (if any)
+///
+/// # Returns
+/// A vector of styled segments ready for wrapping/truncating
+fn build_highlighted_segments(
+    content: &str,
+    chunk_index: usize,
+    base_style: Style,
+    matches: &[SearchMatch],
+    current_match: Option<&SearchMatch>,
+) -> Vec<StyledSegment> {
+    // Filter matches to only those in this chunk
+    let chunk_matches: Vec<&SearchMatch> = matches
+        .iter()
+        .filter(|m| m.chunk_index == chunk_index)
+        .collect();
+
+    if chunk_matches.is_empty() {
+        return vec![StyledSegment {
+            content: content.to_owned(),
+            style: base_style,
+        }];
+    }
+
+    // Styles for highlighting
+    let current_highlight_style = Style::default().bg(Color::Yellow).fg(Color::Black);
+    let other_highlight_style = base_style.bg(Color::DarkGray);
+
+    let mut segments = Vec::new();
+    let mut last_end = 0;
+
+    for m in chunk_matches {
+        // Sanity check byte ranges
+        let start = m.byte_start.min(content.len());
+        let end = m.byte_end.min(content.len());
+
+        if start > last_end {
+            // Non-matching prefix
+            segments.push(StyledSegment {
+                content: content[last_end..start].to_owned(),
+                style: base_style,
+            });
+        }
+
+        // The match itself
+        let is_current = current_match.is_some_and(|cur| cur == m);
+        let highlight_style = if is_current {
+            current_highlight_style
+        } else {
+            other_highlight_style
+        };
+
+        segments.push(StyledSegment {
+            content: content[start..end].to_owned(),
+            style: highlight_style,
+        });
+
+        last_end = end;
+    }
+
+    // Remaining suffix
+    if last_end < content.len() {
+        segments.push(StyledSegment {
+            content: content[last_end..].to_owned(),
+            style: base_style,
+        });
+    }
+
+    segments
 }
 
 /// Render the application
@@ -429,29 +507,17 @@ fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
             })
             .collect();
 
+        // Get search state for highlighting
+        let search_matches = &app.search.matches;
+        let current_match = app.search.current();
+
         let mut all_physical_rows = Vec::new();
 
         for (display_idx, (original_idx, chunk)) in chunks.iter().enumerate() {
-            let is_match = app.search.match_index == Some(*original_idx);
-            let is_search_match = app.search.pattern.as_ref().is_some_and(|pattern| {
-                encoded_chunks[display_idx]
-                    .to_lowercase()
-                    .contains(&pattern.to_lowercase())
-            });
-
             // Use color to indicate direction
             let direction_style = match chunk.direction {
                 DataDirection::Tx => Style::default().fg(Color::Green),
                 DataDirection::Rx => Style::default().fg(Color::White),
-            };
-
-            // Highlight the line if it's the current match or contains search pattern
-            let content_style = if is_match {
-                direction_style.bg(Color::Yellow).fg(Color::Black)
-            } else if is_search_match {
-                direction_style.bg(Color::DarkGray)
-            } else {
-                direction_style
             };
 
             // Build gutter config for this chunk
@@ -474,34 +540,36 @@ fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
                 style: gutter_style,
             };
 
+            // Build styled segments with search highlighting
+            let segments = build_highlighted_segments(
+                &encoded_chunks[display_idx],
+                *original_idx,
+                direction_style,
+                search_matches,
+                current_match,
+            );
+
             // Wrap or truncate this chunk into physical rows based on wrap mode
             let physical_rows = match app.traffic.wrap_mode {
-                WrapMode::Wrap => wrap_line(
-                    &gutter,
-                    &encoded_chunks[display_idx],
-                    content_style,
-                    *original_idx,
-                    content_width,
-                ),
-                WrapMode::Truncate => truncate_line(
-                    &gutter,
-                    &encoded_chunks[display_idx],
-                    content_style,
-                    *original_idx,
-                    content_width,
-                ),
+                WrapMode::Wrap => wrap_line_styled(&gutter, segments, *original_idx, content_width),
+                WrapMode::Truncate => {
+                    truncate_line_styled(&gutter, segments, *original_idx, content_width)
+                }
             };
 
             all_physical_rows.extend(physical_rows);
         }
 
         // Resolve scroll_to_chunk to physical row offset
+        // Use scroll_off to show context above the match (like vim's scrolloff)
+        const SCROLL_OFF: usize = 8;
         if let Some(target_chunk) = app.traffic.scroll_to_chunk.take()
             && let Some(row_idx) = all_physical_rows
                 .iter()
                 .position(|pr| pr.chunk_index == target_chunk)
         {
-            app.traffic.scroll_offset = row_idx;
+            // Position the match with SCROLL_OFF lines above it (if possible)
+            app.traffic.scroll_offset = row_idx.saturating_sub(SCROLL_OFF);
             app.traffic.was_at_bottom = false;
         }
 
