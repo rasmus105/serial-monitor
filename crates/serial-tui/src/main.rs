@@ -18,6 +18,9 @@ mod event_loop {
         loop {
             // Poll for session events
             app.poll_session_events();
+            
+            // Poll for file send progress
+            app.poll_file_send();
 
             // Render
             terminal.draw(|frame| serial_tui::ui::render(frame, app))?;

@@ -12,9 +12,13 @@ pub enum Error {
     #[error("Serial port error: {0}")]
     SerialPort(#[from] serialport::Error),
 
-    /// I/O error
+    /// I/O error from std::io
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    StdIo(#[from] std::io::Error),
+
+    /// I/O error with custom message
+    #[error("I/O error: {0}")]
+    Io(String),
 
     /// Port not connected
     #[error("Port not connected")]

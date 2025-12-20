@@ -9,7 +9,10 @@ license = "MIT"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "process", "io-std", "fs"] }
+
+# Random
+rand = "0.9"
 
 # Serial port
 tokio-serial = "5.4"

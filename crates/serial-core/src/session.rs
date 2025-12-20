@@ -30,7 +30,7 @@ pub enum SessionEvent {
 
 /// Commands sent to the session's I/O task
 #[derive(Debug)]
-enum SessionCommand {
+pub enum SessionCommand {
     /// Send data to the serial port
     Send(Vec<u8>),
     /// Disconnect and stop the I/O task
@@ -99,6 +99,11 @@ impl SessionHandle {
     /// Get the port name
     pub fn port_name(&self) -> &str {
         &self.port_name
+    }
+
+    /// Clone the command sender (for use by file sender)
+    pub(crate) fn clone_sender(&self) -> mpsc::Sender<SessionCommand> {
+        self.command_tx.clone()
     }
 }
 
