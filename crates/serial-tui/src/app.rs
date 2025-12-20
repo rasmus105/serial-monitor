@@ -1850,7 +1850,7 @@ impl App {
         // Handle General tab separately - it has simpler controls
         if self.settings_panel.tab == SettingsTab::General {
             match key.code {
-                KeyCode::Esc => {
+                KeyCode::Esc | KeyCode::Char('q') => {
                     self.settings_panel.close();
                     self.needs_full_clear = true;
                 }

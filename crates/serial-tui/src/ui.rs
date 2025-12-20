@@ -558,7 +558,9 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             .begin_symbol(None)
             .end_symbol(None)
             .track_symbol(Some("│"))
-            .thumb_symbol("█");
+            .thumb_symbol("█")
+            .track_style(Style::default().fg(Color::DarkGray))
+            .thumb_style(Style::default().fg(Color::Gray));
         frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
     }
 
@@ -881,7 +883,9 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
                 .begin_symbol(Some("┐"))
                 .end_symbol(Some("┘"))
                 .track_symbol(Some("│"))
-                .thumb_symbol("█");
+                .thumb_symbol("█")
+                .track_style(Style::default().fg(Color::DarkGray))
+                .thumb_style(Style::default().fg(Color::Gray));
 
             frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
         }
@@ -1117,7 +1121,9 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             .begin_symbol(None)
             .end_symbol(None)
             .track_symbol(Some("│"))
-            .thumb_symbol("█");
+            .thumb_symbol("█")
+            .track_style(Style::default().fg(Color::DarkGray))
+            .thumb_style(Style::default().fg(Color::Gray));
         frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
     }
 
@@ -1566,7 +1572,11 @@ fn render_keybindings_tab(frame: &mut Frame, app: &App, area: Rect) {
     if all_commands.len() > visible_height {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("┐"))
-            .end_symbol(Some("┘"));
+            .end_symbol(Some("┘"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█")
+            .track_style(Style::default().fg(Color::DarkGray))
+            .thumb_style(Style::default().fg(Color::Gray));
 
         let mut scrollbar_state =
             ScrollbarState::new(all_commands.len()).position(app.settings_panel.selected_command);
