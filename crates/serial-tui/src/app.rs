@@ -133,6 +133,9 @@ impl App {
     fn handle_key_port_select(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.should_quit = true;
+            }
             KeyCode::Char('r') => self.refresh_ports(),
             KeyCode::Char(':') => {
                 self.input_mode = InputMode::PortInput;

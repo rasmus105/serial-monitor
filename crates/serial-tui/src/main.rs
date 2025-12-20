@@ -11,14 +11,14 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use serial_tui::App;
 
 mod event_loop {
+    use crossterm::event::{self, Event};
     use serial_tui::App;
-    use crate::event::{poll_event, is_quit_key, AppEvent};
 
     pub fn run(app: &mut App, terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>) -> std::io::Result<()> {
         loop {
             // Poll for session events
             app.poll_session_events();
-            
+
             // Poll for file send progress
             app.poll_file_send();
 
@@ -26,21 +26,9 @@ mod event_loop {
             terminal.draw(|frame| serial_tui::ui::render(frame, app))?;
 
             // Handle input
-            if let Some(event) = poll_event(app.tick_rate())? {
-                match event {
-                    AppEvent::Key(key) => {
-                        if is_quit_key(&key) && app.view == serial_tui::app::View::PortSelect {
-                            app.should_quit = true;
-                        } else {
-                            app.handle_key(key);
-                        }
-                    }
-                    AppEvent::Resize(_, _) => {
-                        // Terminal will handle resize automatically
-                    }
-                    AppEvent::Tick => {
-                        // Just continue the loop
-                    }
+            if event::poll(app.tick_rate())? {
+                if let Event::Key(key) = event::read()? {
+                    app.handle_key(key);
                 }
             }
 
@@ -50,10 +38,6 @@ mod event_loop {
         }
         Ok(())
     }
-}
-
-mod event {
-    pub use serial_tui::event::{poll_event, is_quit_key, AppEvent};
 }
 
 fn main() -> io::Result<()> {

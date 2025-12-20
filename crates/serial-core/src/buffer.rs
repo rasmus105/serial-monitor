@@ -65,8 +65,8 @@ pub struct DataBuffer {
 }
 
 impl DataBuffer {
-    /// Default buffer size: 250 MB
-    pub const DEFAULT_MAX_SIZE: usize = 250 * 1024 * 1024;
+    /// Default buffer size: 100 MB
+    pub const DEFAULT_MAX_SIZE: usize = 100 * 1024 * 1024;
 
     /// Create a new buffer with the default size limit
     pub fn new() -> Self {
