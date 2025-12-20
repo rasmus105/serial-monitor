@@ -14,10 +14,53 @@ use serial_core::{encode, Direction as DataDirection};
 use strum::IntoEnumIterator;
 
 use crate::app::{
-    App, ConfigField, ConnectionState, InputMode, PortSelectFocus, TrafficConfigField,
+    App, ConfigField, ConnectionState, HexGrouping, InputMode, PortSelectFocus, TrafficConfigField,
     TrafficFocus, View, WrapMode,
 };
+use crate::command::Command;
 use crate::wrap::{wrap_line, truncate_line, GutterConfig};
+
+/// Create a centered separator line like "──── Title ────" that spans the full width
+fn create_separator(title: &str, width: usize) -> String {
+    let title_with_spaces = format!(" {} ", title);
+    let title_len = title_with_spaces.chars().count();
+    let remaining = width.saturating_sub(title_len);
+    let left = remaining / 2;
+    let right = remaining - left;
+    format!(
+        "{}{}{}",
+        "─".repeat(left),
+        title_with_spaces,
+        "─".repeat(right)
+    )
+}
+
+/// Format hex string with specified grouping
+/// Input: "DE AD BE EF" (space-separated bytes from core)
+/// Output depends on grouping:
+///   - None: "DEADBEEF" (no spaces)
+///   - Byte: "DE AD BE EF" (space every byte, unchanged)
+///   - Word: "DEAD BEEF" (space every 2 bytes)
+///   - DWord: "DEADBEEF" for 4 bytes, "DEADBEEF 12345678" for 8 bytes
+fn format_hex_grouped(hex: &str, grouping: HexGrouping) -> String {
+    match grouping {
+        HexGrouping::Byte => hex.to_string(), // Already space-separated per byte
+        HexGrouping::None => hex.replace(' ', ""),
+        HexGrouping::Word | HexGrouping::DWord => {
+            // Remove existing spaces and regroup
+            let compact: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
+            let bytes_per_group = grouping.bytes_per_group();
+            let chars_per_group = bytes_per_group * 2; // 2 hex chars per byte
+            
+            compact
+                .as_bytes()
+                .chunks(chars_per_group)
+                .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    }
+}
 
 /// Render the application
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -346,7 +389,15 @@ fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
         // Build all physical rows from logical chunks
         let encoded_chunks: Vec<String> = chunks
             .iter()
-            .map(|(_, chunk)| encode(&chunk.data, app.traffic.encoding))
+            .map(|(_, chunk)| {
+                let encoded = encode(&chunk.data, app.traffic.encoding);
+                // Apply hex grouping if in hex mode
+                if app.traffic.encoding == serial_core::Encoding::Hex {
+                    format_hex_grouped(&encoded, app.traffic.hex_grouping)
+                } else {
+                    encoded
+                }
+            })
             .collect();
 
         let mut all_physical_rows = Vec::new();
@@ -362,7 +413,7 @@ fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
             // Use color to indicate direction
             let direction_style = match chunk.direction {
                 DataDirection::Tx => Style::default().fg(Color::Green),
-                DataDirection::Rx => Style::default().fg(Color::Cyan),
+                DataDirection::Rx => Style::default().fg(Color::White),
             };
 
             // Highlight the line if it's the current match or contains search pattern
@@ -502,10 +553,15 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         ("Not connected".to_string(), "-".to_string())
     };
 
+    // Create full-width separators
+    let panel_width = inner.width as usize;
+    let connection_sep = create_separator("Connection", panel_width);
+    let settings_sep = create_separator("Settings", panel_width);
+
     let mut lines: Vec<Line> = vec![
         // Header: Connection Info (read-only)
         Line::from(Span::styled(
-            "─── Connection ───",
+            connection_sep,
             Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
@@ -519,7 +575,7 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(""), // Spacer
         // Header: Settings
         Line::from(Span::styled(
-            "─── Settings ───",
+            settings_sep,
             Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
         )),
     ];
@@ -558,11 +614,26 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(value, value_style)
         };
 
-        lines.push(Line::from(vec![
-            Span::styled(prefix, label_style),
-            Span::styled(format!("{}: ", field.label()), label_style),
-            value_span,
-        ]));
+        // Build label with optional shortcut hint (from associated command)
+        let shortcut_style = Style::default().fg(Color::DarkGray);
+        let shortcut_hint = field.associated_command().and_then(|cmd| cmd.shortcut_hint());
+        let label_with_shortcut = if let Some(key) = shortcut_hint {
+            vec![
+                Span::styled(prefix, label_style),
+                Span::styled(field.label(), label_style),
+                Span::styled(format!(" ({}):", key), shortcut_style),
+                Span::raw(" "),
+                value_span,
+            ]
+        } else {
+            vec![
+                Span::styled(prefix, label_style),
+                Span::styled(format!("{}: ", field.label()), label_style),
+                value_span,
+            ]
+        };
+
+        lines.push(Line::from(label_with_shortcut));
     }
 
     let paragraph = Paragraph::new(lines);

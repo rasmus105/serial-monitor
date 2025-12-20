@@ -233,6 +233,17 @@ impl TrafficConfigField {
                 | TrafficConfigField::ShowRx
         )
     }
+
+    /// Get the associated TrafficCommand for this field (if any)
+    /// This is used to look up the keyboard shortcut from the command system
+    pub fn associated_command(&self) -> Option<TrafficCommand> {
+        match self {
+            TrafficConfigField::LineNumbers => Some(TrafficCommand::ToggleLineNumbers),
+            TrafficConfigField::Timestamps => Some(TrafficCommand::ToggleTimestamps),
+            TrafficConfigField::Encoding => Some(TrafficCommand::CycleEncoding),
+            _ => None,
+        }
+    }
 }
 
 impl ConfigField {

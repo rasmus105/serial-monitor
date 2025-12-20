@@ -7,6 +7,105 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 // =============================================================================
+// Key Bindings
+// =============================================================================
+
+/// Represents a single key binding
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyBinding {
+    /// A simple character key (e.g., 'j', 'k')
+    Char(char),
+    /// A special key (e.g., Arrow keys, Enter, Esc)
+    Key(KeyCode),
+    /// A key with modifiers (e.g., Ctrl+U)
+    Modified(KeyCode, KeyModifiers),
+}
+
+impl KeyBinding {
+    /// Returns a human-readable display string for this binding
+    pub fn display(&self) -> String {
+        match self {
+            KeyBinding::Char(c) => match c {
+                ' ' => "Space".to_string(),
+                c => c.to_string(),
+            },
+            KeyBinding::Key(code) => Self::key_code_display(*code),
+            KeyBinding::Modified(code, mods) => {
+                let mut parts = Vec::new();
+                if mods.contains(KeyModifiers::CONTROL) {
+                    parts.push("Ctrl".to_string());
+                }
+                if mods.contains(KeyModifiers::ALT) {
+                    parts.push("Alt".to_string());
+                }
+                if mods.contains(KeyModifiers::SHIFT) {
+                    parts.push("Shift".to_string());
+                }
+                parts.push(Self::key_code_display(*code));
+                parts.join("+")
+            }
+        }
+    }
+
+    fn key_code_display(code: KeyCode) -> String {
+        match code {
+            KeyCode::Up => "↑".to_string(),
+            KeyCode::Down => "↓".to_string(),
+            KeyCode::Left => "←".to_string(),
+            KeyCode::Right => "→".to_string(),
+            KeyCode::Enter => "Enter".to_string(),
+            KeyCode::Esc => "Esc".to_string(),
+            KeyCode::Tab => "Tab".to_string(),
+            KeyCode::Backspace => "Backspace".to_string(),
+            KeyCode::Delete => "Delete".to_string(),
+            KeyCode::Home => "Home".to_string(),
+            KeyCode::End => "End".to_string(),
+            KeyCode::PageUp => "PgUp".to_string(),
+            KeyCode::PageDown => "PgDn".to_string(),
+            KeyCode::Char(c) => c.to_string(),
+            KeyCode::F(n) => format!("F{}", n),
+            _ => "?".to_string(),
+        }
+    }
+
+    /// Check if this binding matches a key event
+    pub fn matches(&self, event: &KeyEvent) -> bool {
+        match self {
+            KeyBinding::Char(c) => {
+                event.code == KeyCode::Char(*c)
+                    && !event.modifiers.contains(KeyModifiers::CONTROL)
+                    && !event.modifiers.contains(KeyModifiers::ALT)
+            }
+            KeyBinding::Key(code) => event.code == *code,
+            KeyBinding::Modified(code, mods) => {
+                event.code == *code && event.modifiers.contains(*mods)
+            }
+        }
+    }
+}
+
+/// Trait for commands that have associated key bindings
+pub trait Command: Copy {
+    /// Returns the default key bindings for this command
+    fn default_keys(&self) -> &'static [KeyBinding];
+
+    /// Returns a human-readable shortcut hint string (e.g., "j/↓")
+    /// Returns None if there are no bindings
+    fn shortcut_hint(&self) -> Option<String> {
+        let keys = self.default_keys();
+        if keys.is_empty() {
+            return None;
+        }
+        Some(
+            keys.iter()
+                .map(|k| k.display())
+                .collect::<Vec<_>>()
+                .join("/"),
+        )
+    }
+}
+
+// =============================================================================
 // Commands
 // =============================================================================
 
@@ -93,6 +192,76 @@ pub enum DropdownCommand {
     Confirm,
     /// Cancel and close dropdown
     Cancel,
+}
+
+// =============================================================================
+// Command Trait Implementations
+// =============================================================================
+
+impl Command for PortSelectCommand {
+    fn default_keys(&self) -> &'static [KeyBinding] {
+        use KeyBinding::*;
+        use PortSelectCommand::*;
+
+        match self {
+            Quit => &[Char('q'), Modified(KeyCode::Char('c'), KeyModifiers::CONTROL)],
+            RefreshPorts => &[Char('r')],
+            EnterPortPath => &[Char(':')],
+            ToggleConfigPanel => &[Char('t')],
+            FocusPortList => &[Char('h'), Key(KeyCode::Left)],
+            FocusConfig => &[Char('l'), Key(KeyCode::Right)],
+            MoveUp => &[Char('k'), Key(KeyCode::Up)],
+            MoveDown => &[Char('j'), Key(KeyCode::Down)],
+            Confirm => &[Key(KeyCode::Enter)],
+        }
+    }
+}
+
+impl Command for TrafficCommand {
+    fn default_keys(&self) -> &'static [KeyBinding] {
+        use KeyBinding::*;
+        use TrafficCommand::*;
+
+        match self {
+            Disconnect => &[Char('q')],
+            ScrollUp => &[Char('k'), Key(KeyCode::Up)],
+            ScrollDown => &[Char('j'), Key(KeyCode::Down)],
+            ScrollToTop => &[Char('g')],
+            ScrollToBottom => &[Char('G')],
+            PageUp => &[Modified(KeyCode::Char('u'), KeyModifiers::CONTROL)],
+            PageDown => &[Modified(KeyCode::Char('d'), KeyModifiers::CONTROL)],
+            CycleEncoding => &[Char('e')],
+            EnterSendMode => &[Char('i')],
+            EnterSearchMode => &[Char('/')],
+            NextMatch => &[Char('n')],
+            PrevMatch => &[Char('N')],
+            ToggleFileSend => &[Char('f')],
+            // No default bindings - user can configure these
+            ToggleLineNumbers => &[],
+            ToggleTimestamps => &[],
+            ToggleConfigPanel => &[Char('c')],
+            FocusTraffic => &[Char('h'), Key(KeyCode::Left)],
+            FocusConfig => &[Char('l'), Key(KeyCode::Right)],
+            MoveUp => &[Char('k'), Key(KeyCode::Up)],
+            MoveDown => &[Char('j'), Key(KeyCode::Down)],
+            Confirm => &[Key(KeyCode::Enter), Char(' ')],
+            EscapeOrClear => &[Key(KeyCode::Esc)],
+        }
+    }
+}
+
+impl Command for DropdownCommand {
+    fn default_keys(&self) -> &'static [KeyBinding] {
+        use DropdownCommand::*;
+        use KeyBinding::*;
+
+        match self {
+            MoveUp => &[Char('k'), Key(KeyCode::Up)],
+            MoveDown => &[Char('j'), Key(KeyCode::Down)],
+            Confirm => &[Key(KeyCode::Enter)],
+            Cancel => &[Key(KeyCode::Esc)],
+        }
+    }
 }
 
 // =============================================================================
