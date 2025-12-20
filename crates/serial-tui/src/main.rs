@@ -14,7 +14,10 @@ mod event_loop {
     use crossterm::event::{self, Event};
     use serial_tui::App;
 
-    pub fn run(app: &mut App, terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>) -> std::io::Result<()> {
+    pub fn run(
+        app: &mut App,
+        terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    ) -> std::io::Result<()> {
         loop {
             // Poll for session events
             app.poll_session_events();
@@ -22,14 +25,18 @@ mod event_loop {
             // Poll for file send progress
             app.poll_file_send();
 
+            // Check if we need a full terminal clear (e.g., after encoding change)
+            if app.needs_full_clear {
+                terminal.clear()?;
+                app.needs_full_clear = false;
+            }
+
             // Render
             terminal.draw(|frame| serial_tui::ui::render(frame, app))?;
 
             // Handle input
-            if event::poll(app.tick_rate())? {
-                if let Event::Key(key) = event::read()? {
-                    app.handle_key(key);
-                }
+            if event::poll(app.tick_rate())? && let Event::Key(key) = event::read()? {
+                app.handle_key(key);
             }
 
             if app.should_quit {

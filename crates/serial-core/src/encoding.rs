@@ -70,8 +70,27 @@ pub fn encode_hex(data: &[u8]) -> String {
 /// Encode bytes as UTF-8
 ///
 /// Invalid UTF-8 sequences are replaced with the replacement character (U+FFFD).
+/// Control characters are replaced with visible escape sequences to prevent
+/// them from affecting terminal rendering.
 pub fn encode_utf8(data: &[u8]) -> String {
-    String::from_utf8_lossy(data).into_owned()
+    let lossy = String::from_utf8_lossy(data);
+    // Replace control characters with visible representations
+    // to prevent them from corrupting terminal output
+    let mut result = String::with_capacity(lossy.len());
+    for ch in lossy.chars() {
+        match ch {
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            '\0' => result.push_str("\\0"),
+            // Other control characters (0x00-0x1F except the above, and 0x7F)
+            c if c.is_control() => {
+                result.push_str(&format!("\\x{:02X}", c as u32));
+            }
+            c => result.push(c),
+        }
+    }
+    result
 }
 
 /// Encode bytes as ASCII
@@ -126,6 +145,9 @@ mod tests {
         assert_eq!(encode_utf8(&[0xC3, 0xA9]), "é"); // UTF-8 é
         // Invalid UTF-8 should use replacement character
         assert_eq!(encode_utf8(&[0xFF, 0xFE]), "\u{FFFD}\u{FFFD}");
+        // Control characters should be escaped
+        assert_eq!(encode_utf8(b"Line1\nLine2"), "Line1\\nLine2");
+        assert_eq!(encode_utf8(b"\r\n\t"), "\\r\\n\\t");
     }
 
     #[test]

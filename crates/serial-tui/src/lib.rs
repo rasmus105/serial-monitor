@@ -4,5 +4,6 @@
 
 pub mod app;
 pub mod ui;
+pub mod wrap;
 
 pub use app::App;

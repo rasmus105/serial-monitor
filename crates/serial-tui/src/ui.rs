@@ -4,15 +4,19 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 use serial_core::{encode, Direction as DataDirection};
 
 use crate::app::{App, ConnectionState, InputMode, View};
+use crate::wrap::wrap_line;
 
 /// Render the application
 pub fn render(frame: &mut Frame, app: &App) {
+    // Clear the entire frame to prevent artifacts from previous renders
+    frame.render_widget(Clear, frame.area());
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -86,10 +90,8 @@ fn render_traffic(frame: &mut Frame, app: &App, area: Rect) {
             app.encoding
         )
     };
-    
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL);
+
+    let block = Block::default().title(title).borders(Borders::ALL);
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -105,15 +107,25 @@ fn render_traffic(frame: &mut Frame, app: &App, area: Rect) {
             return;
         }
 
-        // Build lines from chunks
-        let mut lines: Vec<Line> = Vec::new();
+        let content_width = inner.width as usize;
+
+        // Build all physical rows from logical chunks
+        // We need to own the encoded strings since wrap_line borrows them
+        let encoded_chunks: Vec<String> = chunks
+            .iter()
+            .map(|chunk| encode(&chunk.data, app.encoding))
+            .collect();
+
+        let mut all_physical_rows = Vec::new();
+
         for (idx, chunk) in chunks.iter().enumerate() {
             let is_match = app.search_match_index == Some(idx);
             let is_search_match = app.search_pattern.as_ref().is_some_and(|pattern| {
-                let encoded = encode(&chunk.data, app.encoding);
-                encoded.to_lowercase().contains(&pattern.to_lowercase())
+                encoded_chunks[idx]
+                    .to_lowercase()
+                    .contains(&pattern.to_lowercase())
             });
-            
+
             let direction_style = match chunk.direction {
                 DataDirection::Tx => Style::default().fg(Color::Green),
                 DataDirection::Rx => Style::default().fg(Color::Cyan),
@@ -124,46 +136,57 @@ fn render_traffic(frame: &mut Frame, app: &App, area: Rect) {
                 DataDirection::Rx => "RX: ",
             };
 
-            // Encode data according to selected encoding
-            let encoded = encode(&chunk.data, app.encoding);
-
             // Highlight the line if it's the current match or contains search pattern
-            let line_style = if is_match {
-                // Current match - bright yellow background
+            let content_style = if is_match {
                 direction_style.bg(Color::Yellow).fg(Color::Black)
             } else if is_search_match {
-                // Other matches - dim highlight
                 direction_style.bg(Color::DarkGray)
             } else {
                 direction_style
             };
 
             let prefix_style = if is_match {
-                Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .bg(Color::Yellow)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD)
             } else if is_search_match {
-                direction_style.bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                direction_style
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 direction_style.add_modifier(Modifier::BOLD)
             };
 
-            lines.push(Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled(encoded, line_style),
-            ]));
+            // Wrap this chunk into physical rows
+            let physical_rows = wrap_line(
+                prefix,
+                prefix_style,
+                &encoded_chunks[idx],
+                content_style,
+                idx,
+                content_width,
+            );
+
+            all_physical_rows.extend(physical_rows);
         }
 
-        // Calculate scroll
+        // Calculate scroll based on physical rows
         let visible_height = inner.height as usize;
-        let max_scroll = lines.len().saturating_sub(visible_height);
+        let total_rows = all_physical_rows.len();
+        let max_scroll = total_rows.saturating_sub(visible_height);
         let scroll = app.scroll_offset.min(max_scroll);
 
-        let visible_lines: Vec<Line> = lines
+        // Extract the visible physical rows
+        let visible_rows: Vec<Line> = all_physical_rows
             .into_iter()
             .skip(scroll)
             .take(visible_height)
+            .map(|pr| pr.line)
             .collect();
 
-        let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });
+        // Render without wrapping - we've already handled it
+        let paragraph = Paragraph::new(visible_rows);
         frame.render_widget(paragraph, inner);
     }
 }

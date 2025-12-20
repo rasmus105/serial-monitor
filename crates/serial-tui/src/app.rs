@@ -40,6 +40,10 @@ pub enum ConnectionState {
 pub struct App {
     /// Should the application quit?
     pub should_quit: bool,
+    /// Should the terminal be fully cleared on next render?
+    /// This is needed when content changes dramatically (e.g., encoding change)
+    /// to prevent artifacts from ratatui's differential rendering.
+    pub needs_full_clear: bool,
     /// Current view
     pub view: View,
     /// Input mode
@@ -87,6 +91,7 @@ impl App {
 
         Self {
             should_quit: false,
+            needs_full_clear: false,
             view: View::PortSelect,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
@@ -194,6 +199,7 @@ impl App {
             KeyCode::Char('q') => {
                 self.disconnect();
                 self.view = View::PortSelect;
+                self.needs_full_clear = true;
                 self.status = "Disconnected.".to_string();
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -221,6 +227,8 @@ impl App {
             KeyCode::Char('e') => {
                 self.encoding = self.encoding.cycle_next();
                 self.status = format!("Encoding: {}", self.encoding);
+                // Request full terminal clear to prevent artifacts from wrapping differences
+                self.needs_full_clear = true;
                 // Re-run search with new encoding if there's an active search
                 if self.search_pattern.is_some() {
                     self.update_search_matches();
@@ -265,6 +273,7 @@ impl App {
                 } else {
                     self.disconnect();
                     self.view = View::PortSelect;
+                    self.needs_full_clear = true;
                     self.status = "Disconnected.".to_string();
                 }
             }
@@ -590,6 +599,7 @@ impl App {
                         };
                         self.connection = ConnectionState::Disconnected;
                         self.view = View::PortSelect;
+                        self.needs_full_clear = true;
                         break;
                     }
                     SessionEvent::Error(e) => {
