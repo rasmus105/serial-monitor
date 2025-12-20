@@ -13,7 +13,7 @@ use strum::{EnumCount, EnumIter, IntoEnumIterator};
 
 use crate::command::{map_global_nav_key, DropdownCommand, GlobalNavCommand, PortSelectCommand, TrafficCommand};
 use crate::settings::{
-    key_event_to_binding, map_settings_key, Settings, SettingsCommand, SettingsPanelState,
+    key_event_to_binding, map_settings_key, GeneralSetting, Settings, SettingsCommand, SettingsPanelState,
     SettingsTab,
 };
 use crate::ui::format_hex_grouped;
@@ -444,7 +444,6 @@ pub enum TrafficConfigField {
     HexGrouping,
     // Filtering fields
     FilterEnabled,
-    FilterMode,
     FilterPattern,
     // File saving fields
     SaveEnabled,
@@ -484,7 +483,6 @@ impl TrafficConfigField {
             TrafficConfigField::ShowRx => "Show RX",
             TrafficConfigField::HexGrouping => "Hex Grouping",
             TrafficConfigField::FilterEnabled => "Filter",
-            TrafficConfigField::FilterMode => "Filter Mode",
             TrafficConfigField::FilterPattern => "Filter Pattern",
             TrafficConfigField::SaveEnabled => "Save to File",
             TrafficConfigField::SaveFormat => "Save Format",
@@ -545,7 +543,6 @@ impl TrafficConfigField {
         matches!(
             self,
             TrafficConfigField::FilterEnabled
-                | TrafficConfigField::FilterMode
                 | TrafficConfigField::FilterPattern
         )
     }
@@ -788,6 +785,8 @@ pub struct PortSelectState {
     pub serial_config: SerialConfig,
     /// Dropdown selection index (when dropdown is open)
     pub dropdown_index: usize,
+    /// Scroll offset for config panel
+    pub config_scroll_offset: usize,
     // File saving configuration (pre-connection)
     /// Whether file saving should start on connect
     pub save_enabled: bool,
@@ -809,6 +808,7 @@ impl Default for PortSelectState {
             config_panel_visible: true,
             serial_config: SerialConfig::default(),
             dropdown_index: 0,
+            config_scroll_offset: 0,
             save_enabled: false,
             save_format: SaveFormat::default(),
             save_filename: String::new(), // Empty = auto-generated
@@ -982,6 +982,28 @@ impl PortSelectState {
             ConfigField::SaveFilename => self.save_filename.clone(),
             ConfigField::SaveDirectory => self.save_directory.clone(),
             _ => String::new(),
+        }
+    }
+
+    /// Adjust scroll offset to ensure the selected field is visible
+    /// visible_height is the number of lines that can fit in the panel
+    pub fn adjust_scroll(&mut self, visible_height: usize) {
+        // The field index gives us the line number of the field
+        // We need to account for separators:
+        // - "File Saving" section has 2 lines (spacer + separator) before SaveEnabled
+        let field_idx = self.config_field.index();
+        let line_idx = if self.config_field.is_file_saving_field() {
+            // Add 2 for the "File Saving" separator (spacer + header)
+            field_idx + 2
+        } else {
+            field_idx
+        };
+        
+        // Ensure the selected line is visible
+        if line_idx < self.config_scroll_offset {
+            self.config_scroll_offset = line_idx;
+        } else if line_idx >= self.config_scroll_offset + visible_height {
+            self.config_scroll_offset = line_idx.saturating_sub(visible_height - 1);
         }
     }
 }
@@ -1168,6 +1190,8 @@ pub struct TrafficState {
     pub config_field: TrafficConfigField,
     /// Dropdown selection index (when dropdown is open)
     pub dropdown_index: usize,
+    /// Scroll offset for config panel
+    pub config_scroll_offset: usize,
     /// Auto-scroll: follow new data when at bottom
     pub auto_scroll: bool,
     /// Lock to bottom: always scroll to bottom
@@ -1220,6 +1244,7 @@ impl Default for TrafficState {
             focus: TrafficFocus::default(),
             config_field: TrafficConfigField::default(),
             dropdown_index: 0,
+            config_scroll_offset: 0,
             auto_scroll: true,
             lock_to_bottom: false,
             was_at_bottom: true,
@@ -1272,7 +1297,6 @@ impl TrafficState {
             TrafficConfigField::FilterEnabled => {
                 if self.filter_enabled { "ON" } else { "OFF" }.to_string()
             }
-            TrafficConfigField::FilterMode => self.filter_mode.display_name().to_string(),
             TrafficConfigField::FilterPattern => {
                 if self.filter_pattern.is_empty() {
                     "(none)".to_string()
@@ -1314,10 +1338,6 @@ impl TrafficState {
                 .into_iter()
                 .map(String::from)
                 .collect(),
-            TrafficConfigField::FilterMode => FilterMode::all_display_names()
-                .into_iter()
-                .map(String::from)
-                .collect(),
             TrafficConfigField::SaveFormat => SaveFormat::all_display_names()
                 .into_iter()
                 .map(String::from)
@@ -1334,7 +1354,6 @@ impl TrafficState {
             TrafficConfigField::Encoding => self.encoding.index(),
             TrafficConfigField::WrapMode => self.wrap_mode.index(),
             TrafficConfigField::HexGrouping => self.hex_grouping.index(),
-            TrafficConfigField::FilterMode => self.filter_mode.index(),
             TrafficConfigField::SaveFormat => self.save_format.index(),
             _ => 0,
         }
@@ -1347,7 +1366,6 @@ impl TrafficState {
             TrafficConfigField::Encoding => Encoding::all_variants().len(),
             TrafficConfigField::WrapMode => WrapMode::all_variants().len(),
             TrafficConfigField::HexGrouping => HexGrouping::all_variants().len(),
-            TrafficConfigField::FilterMode => FilterMode::all_variants().len(),
             TrafficConfigField::SaveFormat => SaveFormat::all_variants().len(),
             _ => 0,
         }
@@ -1372,9 +1390,6 @@ impl TrafficState {
             }
             TrafficConfigField::HexGrouping => {
                 self.hex_grouping = HexGrouping::from_index(self.dropdown_index);
-            }
-            TrafficConfigField::FilterMode => {
-                self.filter_mode = FilterMode::from_index(self.dropdown_index);
             }
             TrafficConfigField::SaveFormat => {
                 self.save_format = SaveFormat::from_index(self.dropdown_index);
@@ -1421,6 +1436,38 @@ impl TrafficState {
             TrafficConfigField::SaveFilename => self.save_filename.clone(),
             TrafficConfigField::SaveDirectory => self.save_directory.clone(),
             _ => String::new(),
+        }
+    }
+
+    /// Adjust scroll offset to ensure the selected field is visible
+    /// visible_height is the number of lines that can fit in the panel
+    pub fn adjust_config_scroll(&mut self, visible_height: usize) {
+        // The field index gives us a base line number
+        // We need to account for:
+        // - Header section: 5 lines (Connection header, Port, Baud, Spacer, Settings header)
+        // - Filtering section: 2 lines (spacer + separator) before FilterEnabled
+        // - File Saving section: 2 lines (spacer + separator) before SaveEnabled
+        let field_idx = self.config_field.index();
+        
+        // Calculate the actual line index accounting for headers and separators
+        let header_lines = 5; // Connection header, Port, Baud, Spacer, Settings header
+        let mut line_idx = header_lines + field_idx;
+        
+        // If we're in or past filtering section, add 2 for the separator
+        if self.config_field.is_filtering_field() || self.config_field.is_file_saving_field() {
+            line_idx += 2;
+        }
+        
+        // If we're in file saving section, add 2 more for that separator
+        if self.config_field.is_file_saving_field() {
+            line_idx += 2;
+        }
+        
+        // Ensure the selected line is visible
+        if line_idx < self.config_scroll_offset {
+            self.config_scroll_offset = line_idx;
+        } else if line_idx >= self.config_scroll_offset + visible_height {
+            self.config_scroll_offset = line_idx.saturating_sub(visible_height - 1);
         }
     }
 
@@ -1623,15 +1670,10 @@ impl InputState {
     pub fn handle_text_input(&mut self, key: KeyEvent) -> TextInputResult {
         match key.code {
             KeyCode::Enter => {
-                if !self.buffer.is_empty() {
-                    let value = self.buffer.clone();
-                    self.buffer.clear();
-                    self.mode = InputMode::Normal;
-                    TextInputResult::Submit(value)
-                } else {
-                    self.mode = InputMode::Normal;
-                    TextInputResult::Cancel
-                }
+                let value = self.buffer.clone();
+                self.buffer.clear();
+                self.mode = InputMode::Normal;
+                TextInputResult::Submit(value)
             }
             KeyCode::Esc => {
                 self.mode = InputMode::Normal;
@@ -1733,6 +1775,12 @@ impl App {
 
     /// Handle a key event
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // Settings dropdown takes priority when open (even over settings panel)
+        if self.input.mode == InputMode::SettingsDropdown {
+            self.handle_key_settings_dropdown(key);
+            return;
+        }
+
         // Settings panel takes priority when open
         if self.settings_panel.open {
             self.handle_key_settings(key);
@@ -1807,12 +1855,28 @@ impl App {
                     self.needs_full_clear = true;
                 }
                 KeyCode::Char(' ') | KeyCode::Enter => {
-                    // Open dropdown for search mode selection
-                    self.settings_panel.dropdown_index = match self.search.mode {
-                        SearchMode::Regex => 0,
-                        SearchMode::Normal => 1,
-                    };
+                    // Open dropdown for the selected setting
+                    match self.settings_panel.selected_general_setting {
+                        GeneralSetting::SearchMode => {
+                            self.settings_panel.dropdown_index = match self.search.mode {
+                                SearchMode::Regex => 0,
+                                SearchMode::Normal => 1,
+                            };
+                        }
+                        GeneralSetting::FilterMode => {
+                            self.settings_panel.dropdown_index = match self.traffic.filter_mode {
+                                FilterMode::Regex => 0,
+                                FilterMode::Normal => 1,
+                            };
+                        }
+                    }
                     self.input.mode = InputMode::SettingsDropdown;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.settings_panel.selected_general_setting = self.settings_panel.selected_general_setting.next();
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.settings_panel.selected_general_setting = self.settings_panel.selected_general_setting.prev();
                 }
                 KeyCode::Char('l') | KeyCode::Tab => {
                     self.settings_panel.tab = self.settings_panel.tab.next();
@@ -1929,6 +1993,9 @@ impl App {
     }
 
     fn handle_key_port_select(&mut self, key: KeyEvent) {
+        // Approximate visible height for scroll calculations (actual height is set during render)
+        const CONFIG_VISIBLE_HEIGHT: usize = 15;
+        
         // First check global navigation commands
         if let Some(nav_cmd) = map_global_nav_key(&key) {
             match nav_cmd {
@@ -1941,6 +2008,7 @@ impl App {
                         }
                         PortSelectFocus::Config => {
                             self.port_select.config_field = self.port_select.config_field.prev();
+                            self.port_select.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
                         }
                     }
                     return;
@@ -1956,6 +2024,7 @@ impl App {
                         }
                         PortSelectFocus::Config => {
                             self.port_select.config_field = self.port_select.config_field.next();
+                            self.port_select.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
                         }
                     }
                     return;
@@ -2105,16 +2174,7 @@ impl App {
                     return;
                 }
                 GlobalNavCommand::Confirm => {
-                    // Apply selection
-                    self.search.mode = match self.settings_panel.dropdown_index {
-                        0 => SearchMode::Regex,
-                        _ => SearchMode::Normal,
-                    };
-                    self.status = format!("Search mode: {}", self.search.mode.name());
-                    // Re-run search if there's an active pattern
-                    if self.search.pattern.is_some() {
-                        self.update_search_matches();
-                    }
+                    self.apply_settings_dropdown_selection();
                     self.input.mode = InputMode::Normal;
                     return;
                 }
@@ -2130,20 +2190,36 @@ impl App {
         if let Some(cmd) = self.settings.keybindings.dropdown.find_command(&key) {
             match cmd {
                 DropdownCommand::Confirm => {
-                    // Apply selection
-                    self.search.mode = match self.settings_panel.dropdown_index {
-                        0 => SearchMode::Regex,
-                        _ => SearchMode::Normal,
-                    };
-                    self.status = format!("Search mode: {}", self.search.mode.name());
-                    if self.search.pattern.is_some() {
-                        self.update_search_matches();
-                    }
+                    self.apply_settings_dropdown_selection();
                     self.input.mode = InputMode::Normal;
                 }
                 DropdownCommand::Cancel => {
                     self.input.mode = InputMode::Normal;
                 }
+            }
+        }
+    }
+
+    /// Apply the settings dropdown selection to the appropriate setting
+    fn apply_settings_dropdown_selection(&mut self) {
+        match self.settings_panel.selected_general_setting {
+            GeneralSetting::SearchMode => {
+                self.search.mode = match self.settings_panel.dropdown_index {
+                    0 => SearchMode::Regex,
+                    _ => SearchMode::Normal,
+                };
+                self.status = format!("Search mode: {}", self.search.mode.name());
+                // Re-run search if there's an active pattern
+                if self.search.pattern.is_some() {
+                    self.update_search_matches();
+                }
+            }
+            GeneralSetting::FilterMode => {
+                self.traffic.filter_mode = match self.settings_panel.dropdown_index {
+                    0 => FilterMode::Regex,
+                    _ => FilterMode::Normal,
+                };
+                self.status = format!("Filter mode: {}", self.traffic.filter_mode.name());
             }
         }
     }
@@ -2161,6 +2237,9 @@ impl App {
     }
 
     fn handle_key_traffic(&mut self, key: KeyEvent) {
+        // Approximate visible height for scroll calculations (actual height is set during render)
+        const CONFIG_VISIBLE_HEIGHT: usize = 15;
+        
         // Handle quit confirmation dialog first
         if self.traffic.quit_confirm {
             self.handle_key_quit_confirm(key);
@@ -2177,6 +2256,7 @@ impl App {
                     if config_focused {
                         // Move up in config panel
                         self.traffic.config_field = self.traffic.config_field.prev();
+                        self.traffic.adjust_config_scroll(CONFIG_VISIBLE_HEIGHT);
                     } else {
                         // Scroll up in traffic
                         self.traffic.was_at_bottom = false;
@@ -2188,6 +2268,7 @@ impl App {
                     if config_focused {
                         // Move down in config panel
                         self.traffic.config_field = self.traffic.config_field.next();
+                        self.traffic.adjust_config_scroll(CONFIG_VISIBLE_HEIGHT);
                     } else {
                         // Scroll down in traffic
                         self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_add(1);
@@ -2426,15 +2507,20 @@ impl App {
     /// Handle key events when config panel is focused (works from any pane)
     /// Returns true if the key was handled
     fn handle_key_config_panel(&mut self, key: KeyEvent) -> bool {
+        // Approximate visible height for scroll calculations (actual height is set during render)
+        const CONFIG_VISIBLE_HEIGHT: usize = 15;
+        
         // Global navigation for config panel
         if let Some(nav_cmd) = map_global_nav_key(&key) {
             match nav_cmd {
                 GlobalNavCommand::Up => {
                     self.traffic.config_field = self.traffic.config_field.prev();
+                    self.traffic.adjust_config_scroll(CONFIG_VISIBLE_HEIGHT);
                     return true;
                 }
                 GlobalNavCommand::Down => {
                     self.traffic.config_field = self.traffic.config_field.next();
+                    self.traffic.adjust_config_scroll(CONFIG_VISIBLE_HEIGHT);
                     return true;
                 }
                 GlobalNavCommand::Confirm => {

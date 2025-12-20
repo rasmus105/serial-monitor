@@ -19,7 +19,7 @@ use crate::app::{
     TrafficFocus, View, WrapMode,
 };
 use crate::command::{GlobalNavCommand, PortSelectCommand, TrafficCommand};
-use crate::settings::{AnyCommand, SettingsTab};
+use crate::settings::{AnyCommand, GeneralSetting, SettingsTab};
 use crate::wrap::{truncate_line_styled, wrap_line_styled, GutterConfig, StyledSegment};
 
 /// Create a centered separator line like "──── Title ────" that spans the full width
@@ -484,15 +484,83 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             value
         };
 
-        lines.push(Line::from(vec![
-            Span::styled(prefix, label_style),
-            Span::styled(format!("{}: ", field.label()), label_style),
-            Span::styled(display_value, value_style),
-        ]));
+        // For SaveDirectory, wrap the value if it's too long
+        if field == ConfigField::SaveDirectory {
+            let label_text = format!("{}{}: ", prefix, field.label());
+            let label_len = label_text.chars().count();
+            let available_width = panel_width.saturating_sub(label_len);
+            
+            if display_value.chars().count() <= available_width {
+                // Fits on one line
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(format!("{}: ", field.label()), label_style),
+                    Span::styled(display_value, value_style),
+                ]));
+            } else {
+                // Need to wrap - first line has label
+                let chars: Vec<char> = display_value.chars().collect();
+                let first_line_chars: String = chars.iter().take(available_width).collect();
+                let remaining: String = chars.iter().skip(available_width).collect();
+                
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(format!("{}: ", field.label()), label_style),
+                    Span::styled(first_line_chars, value_style),
+                ]));
+                
+                // Continuation lines - indent to align with value
+                let indent = " ".repeat(label_len);
+                let mut remaining_chars: Vec<char> = remaining.chars().collect();
+                while !remaining_chars.is_empty() {
+                    let line_chars: String = remaining_chars.iter().take(available_width).collect();
+                    remaining_chars = remaining_chars.into_iter().skip(available_width).collect();
+                    lines.push(Line::from(vec![
+                        Span::raw(indent.clone()),
+                        Span::styled(line_chars, value_style),
+                    ]));
+                }
+            }
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(prefix, label_style),
+                Span::styled(format!("{}: ", field.label()), label_style),
+                Span::styled(display_value, value_style),
+            ]));
+        }
     }
 
-    let paragraph = Paragraph::new(lines);
+    // Calculate visible height and apply scroll
+    let visible_height = inner.height as usize;
+    let total_lines = lines.len();
+    let scroll_offset = app.port_select.config_scroll_offset;
+    
+    // Only scroll if content exceeds visible height
+    let needs_scroll = total_lines > visible_height;
+    let actual_scroll = if needs_scroll {
+        scroll_offset.min(total_lines.saturating_sub(visible_height))
+    } else {
+        0
+    };
+    
+    // Take only the visible lines
+    let visible_lines: Vec<Line> = lines.into_iter().skip(actual_scroll).take(visible_height).collect();
+
+    let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, inner);
+    
+    // Render scroll indicator if needed
+    if needs_scroll {
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(actual_scroll)
+            .viewport_content_length(visible_height);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("█");
+        frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
+    }
 
     // Render dropdown popup if open
     if dropdown_open {
@@ -937,6 +1005,14 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             value.clone()
         };
 
+        let value_style = if is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+
         // For boolean toggles, show a checkbox-style indicator
         let value_span = if field.is_toggle() {
             let (indicator, color) = if value == "ON" {
@@ -946,14 +1022,7 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             };
             Span::styled(indicator, Style::default().fg(color))
         } else {
-            let value_style = if is_selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Cyan)
-            };
-            Span::styled(display_value, value_style)
+            Span::styled(display_value.clone(), value_style)
         };
 
         // Build label with optional shortcut hint (from configurable keybindings)
@@ -961,27 +1030,96 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         let shortcut_hint = field
             .associated_command()
             .and_then(|cmd| app.settings.keybindings.traffic.shortcut_hint(cmd));
-        let label_with_shortcut = if let Some(key) = shortcut_hint {
-            vec![
-                Span::styled(prefix, label_style),
-                Span::styled(field.label(), label_style),
-                Span::styled(format!(" ({}):", key), shortcut_style),
-                Span::raw(" "),
-                value_span,
-            ]
+        
+        // For SaveDirectory, wrap the value if it's too long
+        if field == TrafficConfigField::SaveDirectory {
+            let label_text = format!("{}{}: ", prefix, field.label());
+            let label_len = label_text.chars().count();
+            let available_width = panel_width.saturating_sub(label_len);
+            
+            if display_value.chars().count() <= available_width {
+                // Fits on one line
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(format!("{}: ", field.label()), label_style),
+                    Span::styled(display_value, value_style),
+                ]));
+            } else {
+                // Need to wrap - first line has label
+                let chars: Vec<char> = display_value.chars().collect();
+                let first_line_chars: String = chars.iter().take(available_width).collect();
+                let remaining: String = chars.iter().skip(available_width).collect();
+                
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(format!("{}: ", field.label()), label_style),
+                    Span::styled(first_line_chars, value_style),
+                ]));
+                
+                // Continuation lines - indent to align with value
+                let indent = " ".repeat(label_len);
+                let mut remaining_chars: Vec<char> = remaining.chars().collect();
+                while !remaining_chars.is_empty() {
+                    let line_chars: String = remaining_chars.iter().take(available_width).collect();
+                    remaining_chars = remaining_chars.into_iter().skip(available_width).collect();
+                    lines.push(Line::from(vec![
+                        Span::raw(indent.clone()),
+                        Span::styled(line_chars, value_style),
+                    ]));
+                }
+            }
         } else {
-            vec![
-                Span::styled(prefix, label_style),
-                Span::styled(format!("{}: ", field.label()), label_style),
-                value_span,
-            ]
-        };
+            let label_with_shortcut = if let Some(key) = shortcut_hint {
+                vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(field.label(), label_style),
+                    Span::styled(format!(" ({}):", key), shortcut_style),
+                    Span::raw(" "),
+                    value_span,
+                ]
+            } else {
+                vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(format!("{}: ", field.label()), label_style),
+                    value_span,
+                ]
+            };
 
-        lines.push(Line::from(label_with_shortcut));
+            lines.push(Line::from(label_with_shortcut));
+        }
     }
 
-    let paragraph = Paragraph::new(lines);
+    // Calculate visible height and apply scroll
+    let visible_height = inner.height as usize;
+    let total_lines = lines.len();
+    let scroll_offset = app.traffic.config_scroll_offset;
+    
+    // Only scroll if content exceeds visible height
+    let needs_scroll = total_lines > visible_height;
+    let actual_scroll = if needs_scroll {
+        scroll_offset.min(total_lines.saturating_sub(visible_height))
+    } else {
+        0
+    };
+    
+    // Take only the visible lines
+    let visible_lines: Vec<Line> = lines.into_iter().skip(actual_scroll).take(visible_height).collect();
+
+    let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, inner);
+    
+    // Render scroll indicator if needed
+    if needs_scroll {
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(actual_scroll)
+            .viewport_content_length(visible_height);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("█");
+        frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
+    }
 
     // Render dropdown popup if open
     if dropdown_open {
@@ -1182,10 +1320,11 @@ fn render_settings_tabs(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_general_settings_tab(frame: &mut Frame, app: &App, area: Rect) {
     let dropdown_open = app.input.mode == InputMode::SettingsDropdown;
+    let selected_setting = app.settings_panel.selected_general_setting;
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Section header
+    // Section header for Search
     lines.push(Line::from(vec![Span::styled(
         "── Search ──",
         Style::default()
@@ -1194,27 +1333,81 @@ fn render_general_settings_tab(frame: &mut Frame, app: &App, area: Rect) {
     )]));
     lines.push(Line::from(""));
 
-    // Search mode as a compact combobox-style setting
-    let prefix = "> ";
-    let mode_display = format!("[ {} ]", app.search.mode.name());
-    let label_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-    let value_style = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
+    // Search mode setting
+    let is_search_selected = selected_setting == GeneralSetting::SearchMode;
+    let search_prefix = if is_search_selected { "> " } else { "  " };
+    let search_mode_display = format!("[ {} ]", app.search.mode.name());
+    let search_label_style = if is_search_selected {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    let search_value_style = if is_search_selected {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Cyan)
+    };
 
     lines.push(Line::from(vec![
-        Span::styled(prefix, label_style),
-        Span::styled("Search mode: ", label_style),
-        Span::styled(mode_display, value_style),
+        Span::styled(search_prefix, search_label_style),
+        Span::styled("Search mode: ", search_label_style),
+        Span::styled(search_mode_display, search_value_style),
     ]));
 
-    // Hint for the current mode
+    // Hint for the current search mode
     lines.push(Line::from(vec![
         Span::raw("               "),
         Span::styled(
             app.search.mode.description(),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+
+    lines.push(Line::from("")); // Spacer
+
+    // Section header for Filtering
+    lines.push(Line::from(vec![Span::styled(
+        "── Filtering ──",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )]));
+    lines.push(Line::from(""));
+
+    // Filter mode setting
+    let is_filter_selected = selected_setting == GeneralSetting::FilterMode;
+    let filter_prefix = if is_filter_selected { "> " } else { "  " };
+    let filter_mode_display = format!("[ {} ]", app.traffic.filter_mode.name());
+    let filter_label_style = if is_filter_selected {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    let filter_value_style = if is_filter_selected {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Cyan)
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(filter_prefix, filter_label_style),
+        Span::styled("Filter mode: ", filter_label_style),
+        Span::styled(filter_mode_display, filter_value_style),
+    ]));
+
+    // Hint for the current filter mode
+    lines.push(Line::from(vec![
+        Span::raw("              "),
+        Span::styled(
+            app.traffic.filter_mode.description(),
             Style::default().fg(Color::DarkGray),
         ),
     ]));
@@ -1229,13 +1422,24 @@ fn render_general_settings_tab(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_settings_dropdown(frame: &mut Frame, app: &App, settings_area: Rect) {
+    let selected_setting = app.settings_panel.selected_general_setting;
     let options = ["Regex", "Normal"];
     let dropdown_height = (options.len() + 2) as u16; // +2 for borders
     let dropdown_width = options.iter().map(|s| s.len()).max().unwrap_or(10) as u16 + 6; // +6 for padding and borders
 
-    // Position the dropdown next to the "Search mode:" line (line 2 in the content area)
-    let dropdown_y = settings_area.y + 2; // After section header and empty line
-    let dropdown_x = settings_area.x + 18; // After "> Search mode: "
+    // Position the dropdown based on which setting is selected
+    // Search mode is at line index 2 (after header and empty line)
+    // Filter mode is at line index 8 (after search section + spacer + header + empty line)
+    let line_offset = match selected_setting {
+        GeneralSetting::SearchMode => 2,
+        GeneralSetting::FilterMode => 8,
+    };
+    let dropdown_y = settings_area.y + line_offset;
+    let label_offset = match selected_setting {
+        GeneralSetting::SearchMode => 18, // After "> Search mode: "
+        GeneralSetting::FilterMode => 17, // After "> Filter mode: "
+    };
+    let dropdown_x = settings_area.x + label_offset;
 
     // Ensure dropdown fits on screen
     let available_height = frame.area().height.saturating_sub(dropdown_y);

@@ -351,6 +351,36 @@ pub enum SettingsTab {
     Keybindings,
 }
 
+/// Which setting is selected in the General tab
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GeneralSetting {
+    #[default]
+    SearchMode,
+    FilterMode,
+}
+
+impl GeneralSetting {
+    pub fn all() -> &'static [GeneralSetting] {
+        &[GeneralSetting::SearchMode, GeneralSetting::FilterMode]
+    }
+
+    pub fn next(self) -> Self {
+        let settings = Self::all();
+        let idx = settings.iter().position(|&s| s == self).unwrap_or(0);
+        settings[(idx + 1) % settings.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        let settings = Self::all();
+        let idx = settings.iter().position(|&s| s == self).unwrap_or(0);
+        settings[(idx + settings.len() - 1) % settings.len()]
+    }
+
+    pub fn index(self) -> usize {
+        Self::all().iter().position(|&s| s == self).unwrap_or(0)
+    }
+}
+
 impl SettingsTab {
     pub fn name(&self) -> &'static str {
         match self {
@@ -383,6 +413,8 @@ pub struct SettingsPanelState {
     pub open: bool,
     /// Current tab
     pub tab: SettingsTab,
+    /// Selected setting in General tab
+    pub selected_general_setting: GeneralSetting,
     /// Selected command index in keybindings tab
     pub selected_command: usize,
     /// Scroll offset for the command list
