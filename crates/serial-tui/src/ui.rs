@@ -4,12 +4,12 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
-use serial_core::{encode, Direction as DataDirection};
+use serial_core::{encode, DataBits, FlowControl, Parity, StopBits, Direction as DataDirection};
 
-use crate::app::{App, ConnectionState, InputMode, View};
+use crate::app::{App, ConfigField, ConnectionState, InputMode, PortSelectFocus, View};
 use crate::wrap::wrap_line;
 
 /// Render the application
@@ -34,15 +34,40 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_port_select(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Split horizontally if config panel is visible
+    let (port_area, config_area) = if app.config_panel_visible {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    // Render port list
+    render_port_list(frame, app, port_area);
+
+    // Render config panel if visible
+    if let Some(config_area) = config_area {
+        render_config_panel(frame, app, config_area);
+    }
+}
+
+fn render_port_list(frame: &mut Frame, app: &App, area: Rect) {
+    let is_focused = app.port_select_focus == PortSelectFocus::PortList;
+
     let items: Vec<ListItem> = app
         .ports
         .iter()
         .enumerate()
         .map(|(i, port)| {
-            let style = if i == app.selected_port {
+            let style = if i == app.selected_port && is_focused {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
+            } else if i == app.selected_port {
+                Style::default().fg(Color::Yellow)
             } else {
                 Style::default()
             };
@@ -60,14 +85,183 @@ fn render_port_select(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let title = if app.ports.is_empty() {
-        " Select Port [:: enter path, r: refresh, q: quit] "
+        " Select Port [:: path, r: refresh, t: toggle config] "
     } else {
-        " Select Port [j/k: navigate, Enter: connect, :: enter path, r: refresh, q: quit] "
+        " Select Port [j/k: nav, Enter: connect, :: path, r: refresh] "
     };
 
-    let list = List::new(items).block(Block::default().title(title).borders(Borders::ALL));
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let list = List::new(items).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(border_style),
+    );
 
     frame.render_widget(list, area);
+}
+
+fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
+    let is_focused = app.port_select_focus == PortSelectFocus::Config;
+    let dropdown_open = app.input_mode == InputMode::ConfigDropdown;
+
+    let border_style = if is_focused || dropdown_open {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .title(" Config [Enter: select, t: toggle] ")
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Build config lines
+    let config_items = [
+        (ConfigField::BaudRate, "Baud Rate", format!("{}", app.serial_config.baud_rate)),
+        (ConfigField::DataBits, "Data Bits", format_data_bits(app.serial_config.data_bits)),
+        (ConfigField::Parity, "Parity", format_parity(app.serial_config.parity)),
+        (ConfigField::StopBits, "Stop Bits", format_stop_bits(app.serial_config.stop_bits)),
+        (ConfigField::FlowControl, "Flow Ctrl", format_flow_control(app.serial_config.flow_control)),
+    ];
+
+    let lines: Vec<Line> = config_items
+        .iter()
+        .map(|(field, label, value)| {
+            let is_selected = app.config_field == *field && (is_focused || dropdown_open);
+            let prefix = if is_selected { "> " } else { "  " };
+
+            let label_style = if is_selected {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            let value_style = if is_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+
+            Line::from(vec![
+                Span::styled(prefix, label_style),
+                Span::styled(format!("{}: ", label), label_style),
+                Span::styled(value.clone(), value_style),
+            ])
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+
+    // Render dropdown popup if open
+    if dropdown_open {
+        render_config_dropdown(frame, app, area);
+    }
+}
+
+fn render_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
+    let options = app.get_config_options();
+    let dropdown_height = (options.len() + 2) as u16; // +2 for borders
+    let dropdown_width = options.iter().map(|s| s.len()).max().unwrap_or(10) as u16 + 6; // +6 for padding and borders
+
+    // Position the dropdown to the right of the config panel, or overlay if no space
+    // Calculate vertical position based on which field is selected
+    let field_index = match app.config_field {
+        ConfigField::BaudRate => 0,
+        ConfigField::DataBits => 1,
+        ConfigField::Parity => 2,
+        ConfigField::StopBits => 3,
+        ConfigField::FlowControl => 4,
+    };
+
+    // Position dropdown next to the selected field
+    let dropdown_y = config_area.y + 1 + field_index as u16; // +1 for border
+    let dropdown_x = config_area.x + config_area.width.saturating_sub(dropdown_width + 1);
+
+    // Ensure dropdown fits on screen
+    let available_height = frame.area().height.saturating_sub(dropdown_y);
+    let actual_height = dropdown_height.min(available_height).max(3);
+
+    let dropdown_area = Rect::new(
+        dropdown_x,
+        dropdown_y,
+        dropdown_width.min(config_area.width),
+        actual_height,
+    );
+
+    // Clear the dropdown area first
+    frame.render_widget(Clear, dropdown_area);
+
+    // Build dropdown items
+    let items: Vec<ListItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, option)| {
+            let is_selected = i == app.dropdown_index;
+            let prefix = if is_selected { "> " } else { "  " };
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            ListItem::new(format!("{}{}", prefix, option)).style(style)
+        })
+        .collect();
+
+    let dropdown_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    let dropdown_list = List::new(items).block(dropdown_block);
+
+    frame.render_widget(dropdown_list, dropdown_area);
+}
+
+fn format_data_bits(data_bits: DataBits) -> String {
+    match data_bits {
+        DataBits::Five => "5".to_string(),
+        DataBits::Six => "6".to_string(),
+        DataBits::Seven => "7".to_string(),
+        DataBits::Eight => "8".to_string(),
+    }
+}
+
+fn format_parity(parity: Parity) -> String {
+    match parity {
+        Parity::None => "None".to_string(),
+        Parity::Odd => "Odd".to_string(),
+        Parity::Even => "Even".to_string(),
+    }
+}
+
+fn format_stop_bits(stop_bits: StopBits) -> String {
+    match stop_bits {
+        StopBits::One => "1".to_string(),
+        StopBits::Two => "2".to_string(),
+    }
+}
+
+fn format_flow_control(flow_control: FlowControl) -> String {
+    match flow_control {
+        FlowControl::None => "None".to_string(),
+        FlowControl::Software => "XON/XOFF".to_string(),
+        FlowControl::Hardware => "RTS/CTS".to_string(),
+    }
 }
 
 fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -200,6 +394,24 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
         // Render without wrapping - we've already handled it
         let paragraph = Paragraph::new(visible_rows);
         frame.render_widget(paragraph, inner);
+
+        // Render scrollbar over the right border
+        if total_rows > visible_height {
+            // ScrollbarState expects:
+            // - content_length: total number of items that can be scrolled through
+            // - position: current scroll position (0 to max_scroll)
+            // The scrollbar calculates thumb position as position / max_scroll
+            let mut scrollbar_state = ScrollbarState::new(max_scroll)
+                .position(scroll);
+
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼"))
+                .track_symbol(Some("│"))
+                .thumb_symbol("█");
+
+            frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+        }
     }
 }
 
@@ -207,7 +419,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     match app.input_mode {
         InputMode::Normal => {
             let status = Paragraph::new(app.status.as_str())
-                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+                .style(Style::default().fg(Color::White));
             frame.render_widget(status, area);
         }
         InputMode::PortInput => {
@@ -217,7 +429,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("_", Style::default().fg(Color::Yellow)), // Cursor
             ]);
             let input = Paragraph::new(input_line)
-                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+                .style(Style::default().fg(Color::White));
             frame.render_widget(input, area);
         }
         InputMode::SendInput => {
@@ -227,7 +439,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("_", Style::default().fg(Color::Green)), // Cursor
             ]);
             let input = Paragraph::new(input_line)
-                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+                .style(Style::default().fg(Color::White));
             frame.render_widget(input, area);
         }
         InputMode::SearchInput => {
@@ -237,7 +449,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("_", Style::default().fg(Color::Magenta)), // Cursor
             ]);
             let input = Paragraph::new(input_line)
-                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+                .style(Style::default().fg(Color::White));
             frame.render_widget(input, area);
         }
         InputMode::FilePathInput => {
@@ -247,8 +459,13 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("_", Style::default().fg(Color::Blue)), // Cursor
             ]);
             let input = Paragraph::new(input_line)
-                .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+                .style(Style::default().fg(Color::White));
             frame.render_widget(input, area);
+        }
+        InputMode::ConfigDropdown => {
+            let status = Paragraph::new("j/k: navigate, Enter: select, Esc: cancel")
+                .style(Style::default().fg(Color::Cyan));
+            frame.render_widget(status, area);
         }
     }
 }

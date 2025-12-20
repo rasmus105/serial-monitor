@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use serial_core::{encode, list_ports, send_file, Encoding, FileSendConfig, FileSendHandle, FileSendProgress, PortInfo, SerialConfig, Session, SessionEvent, SessionHandle};
+use serial_core::{encode, list_ports, send_file, DataBits, Encoding, FileSendConfig, FileSendHandle, FileSendProgress, FlowControl, Parity, PortInfo, SerialConfig, Session, SessionEvent, SessionHandle, StopBits};
 
 /// Current view/screen
 #[derive(Debug, Clone, PartialEq)]
@@ -12,6 +12,49 @@ pub enum View {
     PortSelect,
     /// Traffic view (main view)
     Traffic,
+}
+
+/// Which panel is focused in port selection view
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum PortSelectFocus {
+    /// Port list panel (left)
+    #[default]
+    PortList,
+    /// Configuration panel (right)
+    Config,
+}
+
+/// Which configuration field is selected
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ConfigField {
+    #[default]
+    BaudRate,
+    DataBits,
+    Parity,
+    StopBits,
+    FlowControl,
+}
+
+impl ConfigField {
+    pub fn next(self) -> Self {
+        match self {
+            Self::BaudRate => Self::DataBits,
+            Self::DataBits => Self::Parity,
+            Self::Parity => Self::StopBits,
+            Self::StopBits => Self::FlowControl,
+            Self::FlowControl => Self::BaudRate,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::BaudRate => Self::FlowControl,
+            Self::DataBits => Self::BaudRate,
+            Self::Parity => Self::DataBits,
+            Self::StopBits => Self::Parity,
+            Self::FlowControl => Self::StopBits,
+        }
+    }
 }
 
 /// Input mode for text entry
@@ -27,6 +70,8 @@ pub enum InputMode {
     SearchInput,
     /// Entering file path to send
     FilePathInput,
+    /// Config dropdown is open
+    ConfigDropdown,
 }
 
 /// Connection state
@@ -74,6 +119,16 @@ pub struct App {
     pub file_send: Option<FileSendHandle>,
     /// Latest file send progress
     pub file_send_progress: Option<FileSendProgress>,
+    /// Which panel is focused in port selection view
+    pub port_select_focus: PortSelectFocus,
+    /// Which config field is selected
+    pub config_field: ConfigField,
+    /// Whether config panel is visible
+    pub config_panel_visible: bool,
+    /// Serial port configuration
+    pub serial_config: SerialConfig,
+    /// Dropdown selection index (when dropdown is open)
+    pub dropdown_index: usize,
     /// Tokio runtime handle for async operations
     runtime: tokio::runtime::Handle,
 }
@@ -109,6 +164,11 @@ impl App {
             scroll_to_chunk: None,
             file_send: None,
             file_send_progress: None,
+            port_select_focus: PortSelectFocus::default(),
+            config_field: ConfigField::default(),
+            config_panel_visible: true,
+            serial_config: SerialConfig::default(),
+            dropdown_index: 0,
             runtime,
         }
     }
@@ -135,6 +195,7 @@ impl App {
             InputMode::SendInput => self.handle_key_send_input(key),
             InputMode::SearchInput => self.handle_key_search_input(key),
             InputMode::FilePathInput => self.handle_key_file_path_input(key),
+            InputMode::ConfigDropdown => self.handle_key_config_dropdown(key),
         }
     }
 
@@ -150,20 +211,176 @@ impl App {
                 self.input_buffer.clear();
                 self.status = "Enter port path (e.g., /dev/pts/5):".to_string();
             }
+            KeyCode::Char('t') => {
+                // Toggle config panel visibility
+                self.config_panel_visible = !self.config_panel_visible;
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if self.config_panel_visible {
+                    self.port_select_focus = PortSelectFocus::PortList;
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if self.config_panel_visible {
+                    self.port_select_focus = PortSelectFocus::Config;
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.selected_port > 0 {
-                    self.selected_port -= 1;
+                match self.port_select_focus {
+                    PortSelectFocus::PortList => {
+                        if self.selected_port > 0 {
+                            self.selected_port -= 1;
+                        }
+                    }
+                    PortSelectFocus::Config => {
+                        self.config_field = self.config_field.prev();
+                    }
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if !self.ports.is_empty() && self.selected_port < self.ports.len() - 1 {
-                    self.selected_port += 1;
+                match self.port_select_focus {
+                    PortSelectFocus::PortList => {
+                        if !self.ports.is_empty() && self.selected_port < self.ports.len() - 1 {
+                            self.selected_port += 1;
+                        }
+                    }
+                    PortSelectFocus::Config => {
+                        self.config_field = self.config_field.next();
+                    }
                 }
             }
             KeyCode::Enter => {
-                if !self.ports.is_empty() {
-                    self.connect_to_selected_port();
+                match self.port_select_focus {
+                    PortSelectFocus::PortList => {
+                        if !self.ports.is_empty() {
+                            self.connect_to_selected_port();
+                        }
+                    }
+                    PortSelectFocus::Config => {
+                        // Open dropdown for the selected config field
+                        self.open_config_dropdown();
+                    }
                 }
+            }
+            _ => {}
+        }
+    }
+
+    /// Common baud rates for dropdown
+    pub const BAUD_RATES: [u32; 10] = [
+        300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400,
+    ];
+
+    /// Get the list of options for the current config field
+    pub fn get_config_options(&self) -> Vec<String> {
+        match self.config_field {
+            ConfigField::BaudRate => Self::BAUD_RATES.iter().map(|b| b.to_string()).collect(),
+            ConfigField::DataBits => vec!["5".to_string(), "6".to_string(), "7".to_string(), "8".to_string()],
+            ConfigField::Parity => vec!["None".to_string(), "Odd".to_string(), "Even".to_string()],
+            ConfigField::StopBits => vec!["1".to_string(), "2".to_string()],
+            ConfigField::FlowControl => vec!["None".to_string(), "XON/XOFF".to_string(), "RTS/CTS".to_string()],
+        }
+    }
+
+    /// Get the current index in the options list for the selected config field
+    pub fn get_current_config_index(&self) -> usize {
+        match self.config_field {
+            ConfigField::BaudRate => {
+                Self::BAUD_RATES
+                    .iter()
+                    .position(|&b| b == self.serial_config.baud_rate)
+                    .unwrap_or(8) // Default to 115200
+            }
+            ConfigField::DataBits => match self.serial_config.data_bits {
+                DataBits::Five => 0,
+                DataBits::Six => 1,
+                DataBits::Seven => 2,
+                DataBits::Eight => 3,
+            },
+            ConfigField::Parity => match self.serial_config.parity {
+                Parity::None => 0,
+                Parity::Odd => 1,
+                Parity::Even => 2,
+            },
+            ConfigField::StopBits => match self.serial_config.stop_bits {
+                StopBits::One => 0,
+                StopBits::Two => 1,
+            },
+            ConfigField::FlowControl => match self.serial_config.flow_control {
+                FlowControl::None => 0,
+                FlowControl::Software => 1,
+                FlowControl::Hardware => 2,
+            },
+        }
+    }
+
+    /// Open the dropdown for the current config field
+    fn open_config_dropdown(&mut self) {
+        self.dropdown_index = self.get_current_config_index();
+        self.input_mode = InputMode::ConfigDropdown;
+    }
+
+    /// Apply the selected dropdown value to the config
+    fn apply_dropdown_selection(&mut self) {
+        match self.config_field {
+            ConfigField::BaudRate => {
+                if let Some(&baud) = Self::BAUD_RATES.get(self.dropdown_index) {
+                    self.serial_config.baud_rate = baud;
+                }
+            }
+            ConfigField::DataBits => {
+                self.serial_config.data_bits = match self.dropdown_index {
+                    0 => DataBits::Five,
+                    1 => DataBits::Six,
+                    2 => DataBits::Seven,
+                    _ => DataBits::Eight,
+                };
+            }
+            ConfigField::Parity => {
+                self.serial_config.parity = match self.dropdown_index {
+                    0 => Parity::None,
+                    1 => Parity::Odd,
+                    _ => Parity::Even,
+                };
+            }
+            ConfigField::StopBits => {
+                self.serial_config.stop_bits = match self.dropdown_index {
+                    0 => StopBits::One,
+                    _ => StopBits::Two,
+                };
+            }
+            ConfigField::FlowControl => {
+                self.serial_config.flow_control = match self.dropdown_index {
+                    0 => FlowControl::None,
+                    1 => FlowControl::Software,
+                    _ => FlowControl::Hardware,
+                };
+            }
+        }
+    }
+
+    /// Handle key events when config dropdown is open
+    fn handle_key_config_dropdown(&mut self, key: KeyEvent) {
+        let options_count = self.get_config_options().len();
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.dropdown_index > 0 {
+                    self.dropdown_index -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.dropdown_index < options_count - 1 {
+                    self.dropdown_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                self.apply_dropdown_selection();
+                self.input_mode = InputMode::Normal;
+            }
+            KeyCode::Esc => {
+                // Cancel without applying
+                self.input_mode = InputMode::Normal;
             }
             _ => {}
         }
@@ -563,7 +780,7 @@ impl App {
     }
 
     fn connect_to_port(&mut self, port_name: &str) {
-        let config = SerialConfig::default();
+        let config = self.serial_config.clone();
 
         self.status = format!("Connecting to {}...", port_name);
 
@@ -573,7 +790,7 @@ impl App {
                 self.connection = ConnectionState::Connected(handle);
                 self.view = View::Traffic;
                 self.scroll_offset = 0;
-                self.status = format!("Connected to {} @ 115200 baud", port_name);
+                self.status = format!("Connected to {} @ {} baud", port_name, self.serial_config.baud_rate);
             }
             Err(e) => {
                 self.status = format!("Failed to connect: {}", e);

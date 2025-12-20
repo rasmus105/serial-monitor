@@ -22,5 +22,5 @@ pub use buffer::{DataBuffer, DataChunk, Direction};
 pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8, Encoding};
 pub use error::{Error, Result};
 pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
-pub use port::{list_ports, PortInfo, SerialConfig};
+pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
 pub use session::{Session, SessionCommand, SessionEvent, SessionHandle};
