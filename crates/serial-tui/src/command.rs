@@ -62,6 +62,22 @@ pub enum TrafficCommand {
     PrevMatch,
     /// Toggle file send (start or cancel)
     ToggleFileSend,
+    /// Toggle line numbers display
+    ToggleLineNumbers,
+    /// Toggle timestamps display
+    ToggleTimestamps,
+    /// Toggle config panel visibility
+    ToggleConfigPanel,
+    /// Focus the traffic panel
+    FocusTraffic,
+    /// Focus the config panel
+    FocusConfig,
+    /// Move selection up (in config panel)
+    MoveUp,
+    /// Move selection down (in config panel)
+    MoveDown,
+    /// Confirm selection (toggle or open dropdown in config panel)
+    Confirm,
     /// Clear search or disconnect (context-dependent)
     EscapeOrClear,
 }
@@ -103,11 +119,27 @@ pub fn map_port_select_key(key: KeyEvent, config_visible: bool) -> Option<PortSe
 }
 
 /// Maps a key event to a traffic view command
-pub fn map_traffic_key(key: KeyEvent) -> Option<TrafficCommand> {
+pub fn map_traffic_key(key: KeyEvent, config_visible: bool, config_focused: bool) -> Option<TrafficCommand> {
     use TrafficCommand::*;
+
+    // When config panel is focused, handle navigation differently
+    if config_focused {
+        return match key.code {
+            KeyCode::Char('q') => Some(Disconnect),
+            KeyCode::Char('c') => Some(ToggleConfigPanel),
+            KeyCode::Left | KeyCode::Char('h') => Some(FocusTraffic),
+            KeyCode::Up | KeyCode::Char('k') => Some(MoveUp),
+            KeyCode::Down | KeyCode::Char('j') => Some(MoveDown),
+            KeyCode::Enter | KeyCode::Char(' ') => Some(Confirm),
+            KeyCode::Esc => Some(EscapeOrClear),
+            _ => None,
+        };
+    }
 
     match key.code {
         KeyCode::Char('q') => Some(Disconnect),
+        KeyCode::Char('c') => Some(ToggleConfigPanel),
+        KeyCode::Right | KeyCode::Char('l') if config_visible => Some(FocusConfig),
         KeyCode::Up | KeyCode::Char('k') => Some(ScrollUp),
         KeyCode::Down | KeyCode::Char('j') => Some(ScrollDown),
         KeyCode::Char('g') => Some(ScrollToTop),

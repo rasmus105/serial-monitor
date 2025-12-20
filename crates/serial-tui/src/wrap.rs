@@ -6,10 +6,73 @@
 //! while scrolling needs to work on physical rows.
 
 use ratatui::{
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
+
+/// Configuration for the gutter (line numbers, timestamps, etc.)
+#[derive(Debug, Clone)]
+pub struct GutterConfig {
+    /// Line number to display (1-indexed), or None to hide
+    pub line_number: Option<usize>,
+    /// Width reserved for line numbers (for alignment)
+    pub line_number_width: usize,
+    /// Formatted timestamp string, or None to hide
+    pub timestamp: Option<String>,
+    /// Style for the gutter (typically muted + bold)
+    pub style: Style,
+}
+
+impl GutterConfig {
+    /// Create a gutter with no line numbers or timestamps
+    pub fn empty() -> Self {
+        Self {
+            line_number: None,
+            line_number_width: 0,
+            timestamp: None,
+            style: Style::default(),
+        }
+    }
+
+    /// Calculate the total width of the gutter
+    pub fn width(&self) -> usize {
+        let mut w = 0;
+        if self.line_number.is_some() {
+            w += self.line_number_width + 1; // +1 for separator space
+        }
+        if let Some(ref ts) = self.timestamp {
+            w += UnicodeWidthStr::width(ts.as_str()) + 1; // +1 for separator space
+        }
+        w
+    }
+
+    /// Build the gutter spans for the first row of a chunk
+    pub fn build_first_row_spans(&self) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
+
+        if let Some(line_num) = self.line_number {
+            let formatted = format!("{:>width$} ", line_num, width = self.line_number_width);
+            spans.push(Span::styled(formatted, self.style));
+        }
+
+        if let Some(ref ts) = self.timestamp {
+            let formatted = format!("{} ", ts);
+            spans.push(Span::styled(formatted, self.style));
+        }
+
+        spans
+    }
+
+    /// Build the gutter spans for continuation rows (just whitespace for alignment)
+    pub fn build_continuation_spans(&self) -> Vec<Span<'static>> {
+        let width = self.width();
+        if width == 0 {
+            return vec![];
+        }
+        vec![Span::raw(" ".repeat(width))]
+    }
+}
 
 /// A physical row that will be displayed on screen.
 /// Each physical row maps back to a logical chunk index.
@@ -19,15 +82,14 @@ pub struct PhysicalRow<'a> {
     pub line: Line<'a>,
     /// Index of the logical chunk this row belongs to
     pub chunk_index: usize,
-    /// Whether this is the first row of the chunk (shows prefix)
+    /// Whether this is the first row of the chunk (shows gutter)
     pub is_first_row: bool,
 }
 
 /// Wraps a styled line into multiple physical rows that fit within the given width.
 ///
 /// # Arguments
-/// * `prefix` - The prefix text (e.g., "RX: " or "TX: ")
-/// * `prefix_style` - Style for the prefix
+/// * `gutter` - Configuration for line numbers/timestamps gutter
 /// * `content` - The main content text
 /// * `content_style` - Style for the content
 /// * `chunk_index` - The logical chunk index for mapping
@@ -36,8 +98,7 @@ pub struct PhysicalRow<'a> {
 /// # Returns
 /// A vector of PhysicalRows, one for each screen row needed
 pub fn wrap_line<'a>(
-    prefix: &'a str,
-    prefix_style: Style,
+    gutter: &GutterConfig,
     content: &'a str,
     content_style: Style,
     chunk_index: usize,
@@ -48,16 +109,20 @@ pub fn wrap_line<'a>(
     }
 
     let mut rows = Vec::new();
-    let prefix_width = UnicodeWidthStr::width(prefix);
+    let gutter_width = gutter.width();
 
-    // All rows have the same content width (prefix on first, indent on rest)
-    let content_width = width.saturating_sub(prefix_width);
+    // Content width is what remains after the gutter
+    let content_width = width.saturating_sub(gutter_width);
 
     if content_width == 0 {
-        // Edge case: width is smaller than prefix
-        // Just show truncated prefix
+        // Edge case: width is smaller than gutter
+        // Just show truncated gutter
+        let mut spans = gutter.build_first_row_spans();
+        if spans.is_empty() {
+            spans.push(Span::raw(""));
+        }
         rows.push(PhysicalRow {
-            line: Line::from(Span::styled(prefix, prefix_style)),
+            line: Line::from(spans),
             chunk_index,
             is_first_row: true,
         });
@@ -68,39 +133,110 @@ pub fn wrap_line<'a>(
     let content_parts = wrap_text(content, content_width);
 
     if content_parts.is_empty() {
-        // Empty content, just show prefix
+        // Empty content, just show gutter
+        let spans = gutter.build_first_row_spans();
         rows.push(PhysicalRow {
-            line: Line::from(Span::styled(prefix, prefix_style)),
+            line: Line::from(spans),
             chunk_index,
             is_first_row: true,
         });
         return rows;
     }
 
-    // First row: prefix + first part of content
+    // First row: gutter + first part of content
+    let mut first_spans = gutter.build_first_row_spans();
+    first_spans.push(Span::styled(content_parts[0], content_style));
     rows.push(PhysicalRow {
-        line: Line::from(vec![
-            Span::styled(prefix, prefix_style),
-            Span::styled(content_parts[0], content_style),
-        ]),
+        line: Line::from(first_spans),
         chunk_index,
         is_first_row: true,
     });
 
-    // Subsequent rows: just content (indented to align with first row's content)
-    let indent = " ".repeat(prefix_width);
+    // Subsequent rows: indent (to align with first row's content) + wrapped content
     for part in content_parts.into_iter().skip(1) {
+        let mut cont_spans = gutter.build_continuation_spans();
+        cont_spans.push(Span::styled(part, content_style));
         rows.push(PhysicalRow {
-            line: Line::from(vec![
-                Span::raw(indent.clone()),
-                Span::styled(part, content_style),
-            ]),
+            line: Line::from(cont_spans),
             chunk_index,
             is_first_row: false,
         });
     }
 
     rows
+}
+
+/// Truncates a styled line to fit within the given width, showing ellipsis if truncated.
+///
+/// # Arguments
+/// * `gutter` - Configuration for line numbers/timestamps gutter
+/// * `content` - The main content text
+/// * `content_style` - Style for the content
+/// * `chunk_index` - The logical chunk index for mapping
+/// * `width` - Maximum width in characters
+///
+/// # Returns
+/// A vector containing a single PhysicalRow (truncated lines are always one row)
+pub fn truncate_line<'a>(
+    gutter: &GutterConfig,
+    content: &'a str,
+    content_style: Style,
+    chunk_index: usize,
+    width: usize,
+) -> Vec<PhysicalRow<'a>> {
+    if width == 0 {
+        return vec![];
+    }
+
+    let gutter_width = gutter.width();
+    let content_width = width.saturating_sub(gutter_width);
+
+    if content_width == 0 {
+        // Edge case: width is smaller than gutter
+        let mut spans = gutter.build_first_row_spans();
+        if spans.is_empty() {
+            spans.push(Span::raw(""));
+        }
+        return vec![PhysicalRow {
+            line: Line::from(spans),
+            chunk_index,
+            is_first_row: true,
+        }];
+    }
+
+    let mut spans = gutter.build_first_row_spans();
+
+    // Check if content fits
+    let content_display_width = UnicodeWidthStr::width(content);
+
+    if content_display_width <= content_width {
+        // Content fits, no truncation needed
+        spans.push(Span::styled(content, content_style));
+    } else {
+        // Need to truncate - reserve space for ellipsis
+        let ellipsis = "…";
+        let ellipsis_width = 1;
+        let available_for_content = content_width.saturating_sub(ellipsis_width);
+
+        if available_for_content == 0 {
+            // Only room for ellipsis
+            spans.push(Span::styled(ellipsis, content_style));
+        } else {
+            // Truncate content and add ellipsis
+            let (truncated, _) = split_at_width(content, available_for_content);
+            spans.push(Span::styled(truncated, content_style));
+            spans.push(Span::styled(
+                ellipsis,
+                content_style.add_modifier(Modifier::DIM),
+            ));
+        }
+    }
+
+    vec![PhysicalRow {
+        line: Line::from(spans),
+        chunk_index,
+        is_first_row: true,
+    }]
 }
 
 /// Wraps text into parts that fit within the specified width.
@@ -207,7 +343,8 @@ mod tests {
 
     #[test]
     fn test_wrap_line_single_row() {
-        let rows = wrap_line("RX: ", Style::default(), "short", Style::default(), 0, 80);
+        let gutter = GutterConfig::empty();
+        let rows = wrap_line(&gutter, "short", Style::default(), 0, 80);
         assert_eq!(rows.len(), 1);
         assert!(rows[0].is_first_row);
         assert_eq!(rows[0].chunk_index, 0);
@@ -215,13 +352,64 @@ mod tests {
 
     #[test]
     fn test_wrap_line_multiple_rows() {
-        // "RX: " is 4 chars, content needs to wrap
+        let gutter = GutterConfig::empty();
         let content = "this is a very long line that will need to wrap";
-        let rows = wrap_line("RX: ", Style::default(), content, Style::default(), 5, 20);
+        let rows = wrap_line(&gutter, content, Style::default(), 5, 20);
         assert!(rows.len() > 1);
         assert!(rows[0].is_first_row);
         assert!(!rows[1].is_first_row);
         assert_eq!(rows[0].chunk_index, 5);
         assert_eq!(rows[1].chunk_index, 5);
+    }
+
+    #[test]
+    fn test_gutter_with_line_numbers() {
+        use ratatui::style::{Color, Modifier};
+
+        let gutter = GutterConfig {
+            line_number: Some(42),
+            line_number_width: 4,
+            timestamp: None,
+            style: Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        };
+
+        assert_eq!(gutter.width(), 5); // "  42 "
+        let rows = wrap_line(&gutter, "test content", Style::default(), 0, 80);
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn test_gutter_with_timestamp() {
+        use ratatui::style::{Color, Modifier};
+
+        let gutter = GutterConfig {
+            line_number: None,
+            line_number_width: 0,
+            timestamp: Some("+1.234s".to_string()),
+            style: Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        };
+
+        assert_eq!(gutter.width(), 8); // "+1.234s "
+    }
+
+    #[test]
+    fn test_gutter_with_both() {
+        use ratatui::style::{Color, Modifier};
+
+        let gutter = GutterConfig {
+            line_number: Some(1),
+            line_number_width: 4,
+            timestamp: Some("+0.000s".to_string()),
+            style: Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        };
+
+        // "   1 " (5) + "+0.000s " (8) = 13
+        assert_eq!(gutter.width(), 13);
     }
 }

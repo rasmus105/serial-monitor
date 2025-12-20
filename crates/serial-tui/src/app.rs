@@ -113,6 +113,21 @@ impl ConfigOption for FlowControl {
     }
 }
 
+impl ConfigOption for Encoding {
+    fn all_variants() -> &'static [Self] {
+        Encoding::all()
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            Encoding::Hex => "HEX",
+            Encoding::Utf8 => "UTF-8",
+            Encoding::Ascii => "ASCII",
+            Encoding::Binary => "Binary",
+        }
+    }
+}
+
 // =============================================================================
 // Enums
 // =============================================================================
@@ -136,7 +151,17 @@ pub enum PortSelectFocus {
     Config,
 }
 
-/// Which configuration field is selected
+/// Which panel is focused in traffic view
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum TrafficFocus {
+    /// Traffic content panel (left)
+    #[default]
+    Traffic,
+    /// Configuration panel (right)
+    Config,
+}
+
+/// Which configuration field is selected in port selection
 #[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount)]
 pub enum ConfigField {
     #[default]
@@ -145,6 +170,69 @@ pub enum ConfigField {
     Parity,
     StopBits,
     FlowControl,
+}
+
+/// Which configuration field is selected in traffic view config panel
+#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount)]
+pub enum TrafficConfigField {
+    #[default]
+    LineNumbers,
+    Timestamps,
+    TimestampFormat,
+    AutoScroll,
+    LockToBottom,
+    Encoding,
+    WrapMode,
+    ShowTx,
+    ShowRx,
+    HexGrouping,
+}
+
+impl TrafficConfigField {
+    pub fn next(self) -> Self {
+        let variants: Vec<_> = Self::iter().collect();
+        let idx = variants.iter().position(|&v| v == self).unwrap_or(0);
+        variants[(idx + 1) % variants.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        let variants: Vec<_> = Self::iter().collect();
+        let idx = variants.iter().position(|&v| v == self).unwrap_or(0);
+        variants[(idx + variants.len() - 1) % variants.len()]
+    }
+
+    pub fn index(self) -> usize {
+        Self::iter().position(|v| v == self).unwrap_or(0)
+    }
+
+    /// Get the label for this config field
+    pub fn label(&self) -> &'static str {
+        match self {
+            TrafficConfigField::LineNumbers => "Line Numbers",
+            TrafficConfigField::Timestamps => "Timestamps",
+            TrafficConfigField::TimestampFormat => "Time Format",
+            TrafficConfigField::AutoScroll => "Auto-scroll",
+            TrafficConfigField::LockToBottom => "Lock Bottom",
+            TrafficConfigField::Encoding => "Encoding",
+            TrafficConfigField::WrapMode => "Wrap Mode",
+            TrafficConfigField::ShowTx => "Show TX",
+            TrafficConfigField::ShowRx => "Show RX",
+            TrafficConfigField::HexGrouping => "Hex Grouping",
+        }
+    }
+
+    /// Whether this field is a simple toggle (vs a dropdown)
+    pub fn is_toggle(&self) -> bool {
+        matches!(
+            self,
+            TrafficConfigField::LineNumbers
+                | TrafficConfigField::Timestamps
+                | TrafficConfigField::AutoScroll
+                | TrafficConfigField::LockToBottom
+                | TrafficConfigField::ShowTx
+                | TrafficConfigField::ShowRx
+        )
+    }
 }
 
 impl ConfigField {
@@ -190,8 +278,10 @@ pub enum InputMode {
     SearchInput,
     /// Entering file path to send
     FilePathInput,
-    /// Config dropdown is open
+    /// Config dropdown is open (port selection)
     ConfigDropdown,
+    /// Traffic config dropdown is open
+    TrafficConfigDropdown,
 }
 
 /// Visual properties for rendering an input mode in the status bar
@@ -213,6 +303,7 @@ impl InputMode {
             InputMode::SearchInput => "Search: ",
             InputMode::FilePathInput => "Enter file path to send:",
             InputMode::ConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
+            InputMode::TrafficConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
         }
     }
 
@@ -237,7 +328,8 @@ impl InputMode {
                 prefix: "File: ",
                 color: Color::Blue,
             }),
-            InputMode::ConfigDropdown => None, // Uses special rendering
+            InputMode::ConfigDropdown => None,         // Uses special rendering
+            InputMode::TrafficConfigDropdown => None,  // Uses special rendering
         }
     }
 }
@@ -391,8 +483,158 @@ impl PortSelectState {
     }
 }
 
+/// Format for displaying timestamps in traffic view
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum TimestampFormat {
+    /// Relative time since session start (e.g., "+1.234s")
+    #[default]
+    Relative,
+    /// Absolute time with milliseconds (e.g., "12:34:56.789")
+    AbsoluteMillis,
+    /// Absolute time without milliseconds (e.g., "12:34:56")
+    Absolute,
+}
+
+impl ConfigOption for TimestampFormat {
+    fn all_variants() -> &'static [Self] {
+        &[
+            TimestampFormat::Relative,
+            TimestampFormat::AbsoluteMillis,
+            TimestampFormat::Absolute,
+        ]
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            TimestampFormat::Relative => "Relative",
+            TimestampFormat::AbsoluteMillis => "HH:MM:SS.mmm",
+            TimestampFormat::Absolute => "HH:MM:SS",
+        }
+    }
+}
+
+impl TimestampFormat {
+    /// Format a SystemTime according to this format
+    pub fn format(&self, time: std::time::SystemTime, session_start: std::time::SystemTime) -> String {
+        match self {
+            TimestampFormat::Relative => {
+                let elapsed = time
+                    .duration_since(session_start)
+                    .unwrap_or_default();
+                let secs = elapsed.as_secs_f64();
+                if secs < 10.0 {
+                    format!("+{:.3}s", secs)
+                } else if secs < 100.0 {
+                    format!("+{:.2}s", secs)
+                } else if secs < 1000.0 {
+                    format!("+{:.1}s", secs)
+                } else {
+                    format!("+{:.0}s", secs)
+                }
+            }
+            TimestampFormat::AbsoluteMillis => {
+                use std::time::UNIX_EPOCH;
+                let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
+                let secs = duration.as_secs();
+                let millis = duration.subsec_millis();
+                let hours = (secs / 3600) % 24;
+                let minutes = (secs / 60) % 60;
+                let seconds = secs % 60;
+                format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+            }
+            TimestampFormat::Absolute => {
+                use std::time::UNIX_EPOCH;
+                let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
+                let secs = duration.as_secs();
+                let hours = (secs / 3600) % 24;
+                let minutes = (secs / 60) % 60;
+                let seconds = secs % 60;
+                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+            }
+        }
+    }
+
+    /// Get the display width of timestamps in this format (for gutter sizing)
+    pub fn width(&self) -> usize {
+        match self {
+            TimestampFormat::Relative => 8,       // "+123.4s " - max reasonable width
+            TimestampFormat::AbsoluteMillis => 13, // "12:34:56.789 "
+            TimestampFormat::Absolute => 9,        // "12:34:56 "
+        }
+    }
+}
+
+/// How to handle long lines in traffic view
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum WrapMode {
+    /// Wrap long lines to fit the terminal width
+    #[default]
+    Wrap,
+    /// Truncate long lines (with ellipsis indicator)
+    Truncate,
+}
+
+impl ConfigOption for WrapMode {
+    fn all_variants() -> &'static [Self] {
+        &[WrapMode::Wrap, WrapMode::Truncate]
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            WrapMode::Wrap => "Wrap",
+            WrapMode::Truncate => "Truncate",
+        }
+    }
+}
+
+/// Hex byte grouping for hex encoding display
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum HexGrouping {
+    /// No grouping (continuous hex)
+    None,
+    /// Group by 1 byte (space every byte)
+    #[default]
+    Byte,
+    /// Group by 2 bytes (space every 2 bytes)
+    Word,
+    /// Group by 4 bytes (space every 4 bytes)
+    DWord,
+}
+
+impl ConfigOption for HexGrouping {
+    fn all_variants() -> &'static [Self] {
+        &[
+            HexGrouping::None,
+            HexGrouping::Byte,
+            HexGrouping::Word,
+            HexGrouping::DWord,
+        ]
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            HexGrouping::None => "None",
+            HexGrouping::Byte => "1 byte",
+            HexGrouping::Word => "2 bytes",
+            HexGrouping::DWord => "4 bytes",
+        }
+    }
+}
+
+impl HexGrouping {
+    /// Get the number of bytes per group (0 means no grouping)
+    pub fn bytes_per_group(&self) -> usize {
+        match self {
+            HexGrouping::None => 0,
+            HexGrouping::Byte => 1,
+            HexGrouping::Word => 2,
+            HexGrouping::DWord => 4,
+        }
+    }
+}
+
 /// State for traffic view
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TrafficState {
     /// Scroll offset for traffic view
     pub scroll_offset: usize,
@@ -400,6 +642,189 @@ pub struct TrafficState {
     pub encoding: Encoding,
     /// Target chunk to scroll to (resolved to physical row during render)
     pub scroll_to_chunk: Option<usize>,
+    /// Whether to show line numbers in the gutter
+    pub show_line_numbers: bool,
+    /// Whether to show timestamps in the gutter
+    pub show_timestamps: bool,
+    /// Timestamp display format
+    pub timestamp_format: TimestampFormat,
+    /// Session start time (for relative timestamps)
+    pub session_start: Option<std::time::SystemTime>,
+    /// Whether the config panel is visible
+    pub config_panel_visible: bool,
+    /// Which panel is focused (traffic or config)
+    pub focus: TrafficFocus,
+    /// Which config field is selected (when config panel is focused)
+    pub config_field: TrafficConfigField,
+    /// Dropdown selection index (when dropdown is open)
+    pub dropdown_index: usize,
+    /// Auto-scroll: follow new data when at bottom
+    pub auto_scroll: bool,
+    /// Lock to bottom: always scroll to bottom
+    pub lock_to_bottom: bool,
+    /// Whether user was at bottom before last scroll (for auto-scroll logic)
+    pub was_at_bottom: bool,
+    /// How to handle long lines
+    pub wrap_mode: WrapMode,
+    /// Whether to show transmitted data
+    pub show_tx: bool,
+    /// Whether to show received data
+    pub show_rx: bool,
+    /// Hex byte grouping
+    pub hex_grouping: HexGrouping,
+    /// Total physical rows (cached during render for scroll calculations)
+    pub total_rows: usize,
+    /// Visible height (cached during render)
+    pub visible_height: usize,
+}
+
+impl Default for TrafficState {
+    fn default() -> Self {
+        Self {
+            scroll_offset: 0,
+            encoding: Encoding::default(),
+            scroll_to_chunk: None,
+            show_line_numbers: true,
+            show_timestamps: false,
+            timestamp_format: TimestampFormat::default(),
+            session_start: None,
+            config_panel_visible: false,
+            focus: TrafficFocus::default(),
+            config_field: TrafficConfigField::default(),
+            dropdown_index: 0,
+            auto_scroll: true,
+            lock_to_bottom: false,
+            was_at_bottom: true,
+            wrap_mode: WrapMode::default(),
+            show_tx: true,
+            show_rx: true,
+            hex_grouping: HexGrouping::default(),
+            total_rows: 0,
+            visible_height: 0,
+        }
+    }
+}
+
+impl TrafficState {
+    /// Get display value for a traffic config field
+    pub fn get_config_display(&self, field: TrafficConfigField) -> String {
+        match field {
+            TrafficConfigField::LineNumbers => {
+                if self.show_line_numbers { "ON" } else { "OFF" }.to_string()
+            }
+            TrafficConfigField::Timestamps => {
+                if self.show_timestamps { "ON" } else { "OFF" }.to_string()
+            }
+            TrafficConfigField::TimestampFormat => self.timestamp_format.display_name().to_string(),
+            TrafficConfigField::AutoScroll => {
+                if self.auto_scroll { "ON" } else { "OFF" }.to_string()
+            }
+            TrafficConfigField::LockToBottom => {
+                if self.lock_to_bottom { "ON" } else { "OFF" }.to_string()
+            }
+            TrafficConfigField::Encoding => self.encoding.display_name().to_string(),
+            TrafficConfigField::WrapMode => self.wrap_mode.display_name().to_string(),
+            TrafficConfigField::ShowTx => {
+                if self.show_tx { "ON" } else { "OFF" }.to_string()
+            }
+            TrafficConfigField::ShowRx => {
+                if self.show_rx { "ON" } else { "OFF" }.to_string()
+            }
+            TrafficConfigField::HexGrouping => self.hex_grouping.display_name().to_string(),
+        }
+    }
+
+    /// Get string options for dropdown (for non-toggle fields)
+    pub fn get_config_option_strings(&self) -> Vec<String> {
+        match self.config_field {
+            TrafficConfigField::TimestampFormat => TimestampFormat::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            TrafficConfigField::Encoding => Encoding::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            TrafficConfigField::WrapMode => WrapMode::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            TrafficConfigField::HexGrouping => HexGrouping::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            // Toggle fields don't have dropdowns
+            _ => vec![],
+        }
+    }
+
+    /// Get the current index for dropdown selection
+    pub fn get_current_config_index(&self) -> usize {
+        match self.config_field {
+            TrafficConfigField::TimestampFormat => self.timestamp_format.index(),
+            TrafficConfigField::Encoding => self.encoding.index(),
+            TrafficConfigField::WrapMode => self.wrap_mode.index(),
+            TrafficConfigField::HexGrouping => self.hex_grouping.index(),
+            _ => 0,
+        }
+    }
+
+    /// Get the number of options for the current config field
+    pub fn get_options_count(&self) -> usize {
+        match self.config_field {
+            TrafficConfigField::TimestampFormat => TimestampFormat::all_variants().len(),
+            TrafficConfigField::Encoding => Encoding::all_variants().len(),
+            TrafficConfigField::WrapMode => WrapMode::all_variants().len(),
+            TrafficConfigField::HexGrouping => HexGrouping::all_variants().len(),
+            _ => 0,
+        }
+    }
+
+    /// Open the dropdown for the current config field
+    pub fn open_dropdown(&mut self) {
+        self.dropdown_index = self.get_current_config_index();
+    }
+
+    /// Apply the selected dropdown value
+    pub fn apply_dropdown_selection(&mut self) {
+        match self.config_field {
+            TrafficConfigField::TimestampFormat => {
+                self.timestamp_format = TimestampFormat::from_index(self.dropdown_index);
+            }
+            TrafficConfigField::Encoding => {
+                self.encoding = Encoding::from_index(self.dropdown_index);
+            }
+            TrafficConfigField::WrapMode => {
+                self.wrap_mode = WrapMode::from_index(self.dropdown_index);
+            }
+            TrafficConfigField::HexGrouping => {
+                self.hex_grouping = HexGrouping::from_index(self.dropdown_index);
+            }
+            _ => {}
+        }
+    }
+
+    /// Toggle a boolean setting
+    pub fn toggle_setting(&mut self) {
+        match self.config_field {
+            TrafficConfigField::LineNumbers => self.show_line_numbers = !self.show_line_numbers,
+            TrafficConfigField::Timestamps => self.show_timestamps = !self.show_timestamps,
+            TrafficConfigField::AutoScroll => self.auto_scroll = !self.auto_scroll,
+            TrafficConfigField::LockToBottom => self.lock_to_bottom = !self.lock_to_bottom,
+            TrafficConfigField::ShowTx => self.show_tx = !self.show_tx,
+            TrafficConfigField::ShowRx => self.show_rx = !self.show_rx,
+            _ => {}
+        }
+    }
+
+    /// Check if we're currently at the bottom of the scroll
+    pub fn is_at_bottom(&self) -> bool {
+        if self.total_rows == 0 {
+            return true;
+        }
+        let max_scroll = self.total_rows.saturating_sub(self.visible_height);
+        self.scroll_offset >= max_scroll
+    }
 }
 
 /// State for search functionality
@@ -565,6 +990,7 @@ impl App {
             InputMode::SearchInput => self.handle_key_search_input(key),
             InputMode::FilePathInput => self.handle_key_file_path_input(key),
             InputMode::ConfigDropdown => self.handle_key_config_dropdown(key),
+            InputMode::TrafficConfigDropdown => self.handle_key_traffic_config_dropdown(key),
         }
     }
 
@@ -667,7 +1093,9 @@ impl App {
     }
 
     fn handle_key_traffic(&mut self, key: KeyEvent) {
-        let Some(cmd) = map_traffic_key(key) else {
+        let config_visible = self.traffic.config_panel_visible;
+        let config_focused = self.traffic.focus == TrafficFocus::Config;
+        let Some(cmd) = map_traffic_key(key, config_visible, config_focused) else {
             return;
         };
 
@@ -679,18 +1107,23 @@ impl App {
                 self.status = "Disconnected.".to_string();
             }
             TrafficCommand::ScrollUp => {
+                // User is scrolling up, disable auto-scroll tracking
+                self.traffic.was_at_bottom = false;
                 self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_sub(1);
             }
             TrafficCommand::ScrollDown => {
                 self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_add(1);
             }
             TrafficCommand::ScrollToTop => {
+                self.traffic.was_at_bottom = false;
                 self.traffic.scroll_offset = 0;
             }
             TrafficCommand::ScrollToBottom => {
+                self.traffic.was_at_bottom = true;
                 self.traffic.scroll_offset = usize::MAX;
             }
             TrafficCommand::PageUp => {
+                self.traffic.was_at_bottom = false;
                 self.traffic.scroll_offset =
                     self.traffic.scroll_offset.saturating_sub(self.page_size());
             }
@@ -731,8 +1164,64 @@ impl App {
                     self.status = InputMode::FilePathInput.entry_prompt().to_string();
                 }
             }
+            TrafficCommand::ToggleConfigPanel => {
+                self.traffic.config_panel_visible = !self.traffic.config_panel_visible;
+                if !self.traffic.config_panel_visible {
+                    self.traffic.focus = TrafficFocus::Traffic;
+                }
+                self.needs_full_clear = true;
+            }
+            TrafficCommand::FocusTraffic => {
+                self.traffic.focus = TrafficFocus::Traffic;
+            }
+            TrafficCommand::FocusConfig => {
+                if self.traffic.config_panel_visible {
+                    self.traffic.focus = TrafficFocus::Config;
+                }
+            }
+            TrafficCommand::MoveUp => {
+                // Only when config panel is focused
+                self.traffic.config_field = self.traffic.config_field.prev();
+            }
+            TrafficCommand::MoveDown => {
+                self.traffic.config_field = self.traffic.config_field.next();
+            }
+            TrafficCommand::Confirm => {
+                // Toggle or open dropdown for config field
+                if self.traffic.config_field.is_toggle() {
+                    self.traffic.toggle_setting();
+                    self.status = format!(
+                        "{}: {}",
+                        self.traffic.config_field.label(),
+                        self.traffic.get_config_display(self.traffic.config_field)
+                    );
+                    self.needs_full_clear = true;
+                } else {
+                    self.traffic.open_dropdown();
+                    self.input.mode = InputMode::TrafficConfigDropdown;
+                }
+            }
+            TrafficCommand::ToggleLineNumbers => {
+                self.traffic.show_line_numbers = !self.traffic.show_line_numbers;
+                self.status = if self.traffic.show_line_numbers {
+                    "Line numbers: ON".to_string()
+                } else {
+                    "Line numbers: OFF".to_string()
+                };
+            }
+            TrafficCommand::ToggleTimestamps => {
+                self.traffic.show_timestamps = !self.traffic.show_timestamps;
+                self.status = if self.traffic.show_timestamps {
+                    "Timestamps: ON".to_string()
+                } else {
+                    "Timestamps: OFF".to_string()
+                };
+            }
             TrafficCommand::EscapeOrClear => {
-                if self.search.pattern.is_some() {
+                if config_focused {
+                    // When config panel is focused, Esc returns focus to traffic
+                    self.traffic.focus = TrafficFocus::Traffic;
+                } else if self.search.pattern.is_some() {
                     self.search.clear();
                     self.status = "Search cleared.".to_string();
                 } else {
@@ -741,6 +1230,40 @@ impl App {
                     self.needs_full_clear = true;
                     self.status = "Disconnected.".to_string();
                 }
+            }
+        }
+    }
+
+    fn handle_key_traffic_config_dropdown(&mut self, key: KeyEvent) {
+        let Some(cmd) = map_dropdown_key(key) else {
+            return;
+        };
+
+        let options_count = self.traffic.get_options_count();
+
+        match cmd {
+            DropdownCommand::MoveUp => {
+                if self.traffic.dropdown_index > 0 {
+                    self.traffic.dropdown_index -= 1;
+                }
+            }
+            DropdownCommand::MoveDown => {
+                if self.traffic.dropdown_index < options_count.saturating_sub(1) {
+                    self.traffic.dropdown_index += 1;
+                }
+            }
+            DropdownCommand::Confirm => {
+                self.traffic.apply_dropdown_selection();
+                self.input.mode = InputMode::Normal;
+                self.needs_full_clear = true;
+                self.status = format!(
+                    "{}: {}",
+                    self.traffic.config_field.label(),
+                    self.traffic.get_config_display(self.traffic.config_field)
+                );
+            }
+            DropdownCommand::Cancel => {
+                self.input.mode = InputMode::Normal;
             }
         }
     }
@@ -977,6 +1500,7 @@ impl App {
                 self.connection = ConnectionState::Connected(handle);
                 self.view = View::Traffic;
                 self.traffic.scroll_offset = 0;
+                self.traffic.session_start = Some(std::time::SystemTime::now());
                 self.status = format!(
                     "Connected to {} @ {} baud",
                     port_name, self.port_select.serial_config.baud_rate

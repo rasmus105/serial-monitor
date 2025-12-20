@@ -13,8 +13,11 @@ use ratatui::{
 use serial_core::{encode, Direction as DataDirection};
 use strum::IntoEnumIterator;
 
-use crate::app::{App, ConfigField, ConnectionState, InputMode, PortSelectFocus, View};
-use crate::wrap::wrap_line;
+use crate::app::{
+    App, ConfigField, ConnectionState, InputMode, PortSelectFocus, TrafficConfigField,
+    TrafficFocus, View, WrapMode,
+};
+use crate::wrap::{wrap_line, truncate_line, GutterConfig};
 
 /// Render the application
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -232,68 +235,134 @@ fn render_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
 }
 
 fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Split horizontally if config panel is visible (70/30 split)
+    let (traffic_area, config_area) = if app.traffic.config_panel_visible {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    // Render the main traffic content
+    render_traffic_content(frame, app, traffic_area);
+
+    // Render config panel if visible
+    if let Some(config_area) = config_area {
+        render_traffic_config_panel(frame, app, config_area);
+    }
+}
+
+fn render_traffic_content(frame: &mut Frame, app: &mut App, area: Rect) {
+    let is_focused = app.traffic.focus == TrafficFocus::Traffic;
+
     let title = if app.file_send.handle.is_some() {
         // Show file send in progress
         let progress = app.file_send.progress.as_ref();
         let pct = progress.map(|p| (p.percentage() * 100.0) as u8).unwrap_or(0);
         format!(
-            " Traffic [{}] [Sending file: {}% - press 'f' to cancel] ",
+            " Traffic [{}] [Sending: {}%] ",
             app.traffic.encoding, pct
         )
     } else if app.search.pattern.is_some() {
         format!(
-            " Traffic [{}] [/: search, n/N: next/prev, Esc: clear] ",
+            " Traffic [{}] [/: search, n/N: next/prev] ",
             app.traffic.encoding
         )
     } else {
         format!(
-            " Traffic [{}] [/: search, e: encoding, i: send, f: file, q: quit] ",
+            " Traffic [{}] [c: config, /: search, e: enc, i: send] ",
             app.traffic.encoding
         )
     };
 
-    let block = Block::default().title(title).borders(Borders::ALL);
+    let border_style = if is_focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style);
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if let ConnectionState::Connected(ref handle) = app.connection {
         let buffer = handle.buffer();
-        let chunks: Vec<_> = buffer.chunks().collect();
+        let all_chunks: Vec<_> = buffer.chunks().collect();
+
+        // Filter chunks based on show_tx and show_rx settings
+        let chunks: Vec<_> = all_chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| match chunk.direction {
+                DataDirection::Tx => app.traffic.show_tx,
+                DataDirection::Rx => app.traffic.show_rx,
+            })
+            .collect();
 
         if chunks.is_empty() {
-            let msg =
-                Paragraph::new("Waiting for data...").style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(msg, inner);
+            let msg = if all_chunks.is_empty() {
+                "Waiting for data..."
+            } else {
+                "No data matches current filters (check Show TX/RX settings)"
+            };
+            let paragraph =
+                Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(paragraph, inner);
+            // Update cached values for scroll logic
+            app.traffic.total_rows = 0;
+            app.traffic.visible_height = inner.height as usize;
             return;
         }
 
         let content_width = inner.width as usize;
 
+        // Calculate line number width based on total visible chunks
+        let line_number_width = if app.traffic.show_line_numbers {
+            chunks.len().to_string().len().max(3)
+        } else {
+            0
+        };
+
+        // Get session start time for relative timestamps
+        let session_start = app.traffic.session_start.unwrap_or_else(|| {
+            all_chunks
+                .first()
+                .map(|c| c.timestamp)
+                .unwrap_or_else(std::time::SystemTime::now)
+        });
+
+        // Gutter style: muted and bold
+        let gutter_style = Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD);
+
         // Build all physical rows from logical chunks
         let encoded_chunks: Vec<String> = chunks
             .iter()
-            .map(|chunk| encode(&chunk.data, app.traffic.encoding))
+            .map(|(_, chunk)| encode(&chunk.data, app.traffic.encoding))
             .collect();
 
         let mut all_physical_rows = Vec::new();
 
-        for (idx, chunk) in chunks.iter().enumerate() {
-            let is_match = app.search.match_index == Some(idx);
+        for (display_idx, (original_idx, chunk)) in chunks.iter().enumerate() {
+            let is_match = app.search.match_index == Some(*original_idx);
             let is_search_match = app.search.pattern.as_ref().is_some_and(|pattern| {
-                encoded_chunks[idx]
+                encoded_chunks[display_idx]
                     .to_lowercase()
                     .contains(&pattern.to_lowercase())
             });
 
+            // Use color to indicate direction
             let direction_style = match chunk.direction {
                 DataDirection::Tx => Style::default().fg(Color::Green),
                 DataDirection::Rx => Style::default().fg(Color::Cyan),
-            };
-
-            let prefix = match chunk.direction {
-                DataDirection::Tx => "TX: ",
-                DataDirection::Rx => "RX: ",
             };
 
             // Highlight the line if it's the current match or contains search pattern
@@ -305,28 +374,39 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
                 direction_style
             };
 
-            let prefix_style = if is_match {
-                Style::default()
-                    .bg(Color::Yellow)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD)
-            } else if is_search_match {
-                direction_style
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                direction_style.add_modifier(Modifier::BOLD)
+            // Build gutter config for this chunk
+            let gutter = GutterConfig {
+                line_number: if app.traffic.show_line_numbers {
+                    Some(display_idx + 1) // 1-indexed based on filtered list
+                } else {
+                    None
+                },
+                line_number_width,
+                timestamp: if app.traffic.show_timestamps {
+                    Some(app.traffic.timestamp_format.format(chunk.timestamp, session_start))
+                } else {
+                    None
+                },
+                style: gutter_style,
             };
 
-            // Wrap this chunk into physical rows
-            let physical_rows = wrap_line(
-                prefix,
-                prefix_style,
-                &encoded_chunks[idx],
-                content_style,
-                idx,
-                content_width,
-            );
+            // Wrap or truncate this chunk into physical rows based on wrap mode
+            let physical_rows = match app.traffic.wrap_mode {
+                WrapMode::Wrap => wrap_line(
+                    &gutter,
+                    &encoded_chunks[display_idx],
+                    content_style,
+                    *original_idx,
+                    content_width,
+                ),
+                WrapMode::Truncate => truncate_line(
+                    &gutter,
+                    &encoded_chunks[display_idx],
+                    content_style,
+                    *original_idx,
+                    content_width,
+                ),
+            };
 
             all_physical_rows.extend(physical_rows);
         }
@@ -338,14 +418,34 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
                 .position(|pr| pr.chunk_index == target_chunk)
         {
             app.traffic.scroll_offset = row_idx;
+            app.traffic.was_at_bottom = false;
         }
 
         // Calculate scroll based on physical rows
         let visible_height = inner.height as usize;
         let total_rows = all_physical_rows.len();
         let max_scroll = total_rows.saturating_sub(visible_height);
-        let scroll = app.traffic.scroll_offset.min(max_scroll);
+
+        // Update cached values for scroll calculations
+        app.traffic.total_rows = total_rows;
+        app.traffic.visible_height = visible_height;
+
+        // Handle auto-scroll and lock-to-bottom
+        let scroll = if app.traffic.lock_to_bottom {
+            // Lock to bottom: always show the bottom
+            max_scroll
+        } else if app.traffic.auto_scroll && app.traffic.was_at_bottom {
+            // Auto-scroll: if we were at bottom, stay at bottom
+            max_scroll
+        } else {
+            // Normal scroll: respect user's scroll position
+            app.traffic.scroll_offset.min(max_scroll)
+        };
+
         app.traffic.scroll_offset = scroll;
+
+        // Update was_at_bottom for next frame (for auto-scroll logic)
+        app.traffic.was_at_bottom = scroll >= max_scroll;
 
         // Extract the visible physical rows
         let visible_rows: Vec<Line> = all_physical_rows
@@ -374,6 +474,169 @@ fn render_traffic(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
+    let is_focused = app.traffic.focus == TrafficFocus::Config;
+    let dropdown_open = app.input.mode == InputMode::TrafficConfigDropdown;
+
+    let border_style = if is_focused || dropdown_open {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .title(" Config [h: back, c: close] ")
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Get connection info for display
+    let (port_name, baud_rate) = if let ConnectionState::Connected(ref handle) = app.connection {
+        (
+            handle.port_name().to_string(),
+            app.port_select.serial_config.baud_rate.to_string(),
+        )
+    } else {
+        ("Not connected".to_string(), "-".to_string())
+    };
+
+    let mut lines: Vec<Line> = vec![
+        // Header: Connection Info (read-only)
+        Line::from(Span::styled(
+            "─── Connection ───",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled("  Port: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(port_name, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Baud: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(baud_rate, Style::default().fg(Color::White)),
+        ]),
+        Line::from(""), // Spacer
+        // Header: Settings
+        Line::from(Span::styled(
+            "─── Settings ───",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        )),
+    ];
+
+    // Build config lines using TrafficConfigField iterator
+    for field in TrafficConfigField::iter() {
+        let is_selected = app.traffic.config_field == field && (is_focused || dropdown_open);
+        let prefix = if is_selected { "> " } else { "  " };
+
+        let label_style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        let value = app.traffic.get_config_display(field);
+
+        // For boolean toggles, show a checkbox-style indicator
+        let value_span = if field.is_toggle() {
+            let (indicator, color) = if value == "ON" {
+                ("[x]", Color::Green)
+            } else {
+                ("[ ]", Color::DarkGray)
+            };
+            Span::styled(indicator, Style::default().fg(color))
+        } else {
+            let value_style = if is_selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            Span::styled(value, value_style)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(prefix, label_style),
+            Span::styled(format!("{}: ", field.label()), label_style),
+            value_span,
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+
+    // Render dropdown popup if open
+    if dropdown_open {
+        render_traffic_config_dropdown(frame, app, area);
+    }
+}
+
+fn render_traffic_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
+    let options = app.traffic.get_config_option_strings();
+    if options.is_empty() {
+        return;
+    }
+
+    let dropdown_height = (options.len() + 2) as u16; // +2 for borders
+    let dropdown_width = options.iter().map(|s| s.len()).max().unwrap_or(10) as u16 + 6;
+
+    // Position the dropdown based on which field is selected
+    // Account for the header lines (Connection section + spacer = 5 lines)
+    let header_lines = 5u16;
+    let field_index = app.traffic.config_field.index();
+
+    // Position dropdown next to the selected field
+    let dropdown_y = config_area.y + 1 + header_lines + field_index as u16;
+    let dropdown_x = config_area.x + config_area.width.saturating_sub(dropdown_width + 1);
+
+    // Ensure dropdown fits on screen
+    let available_height = frame.area().height.saturating_sub(dropdown_y);
+    let actual_height = dropdown_height.min(available_height).max(3);
+
+    let dropdown_area = Rect::new(
+        dropdown_x,
+        dropdown_y,
+        dropdown_width.min(config_area.width),
+        actual_height,
+    );
+
+    // Clear the dropdown area first
+    frame.render_widget(Clear, dropdown_area);
+
+    // Build dropdown items
+    let items: Vec<ListItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, option)| {
+            let is_selected = i == app.traffic.dropdown_index;
+            let prefix = if is_selected { "> " } else { "  " };
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            ListItem::new(format!("{}{}", prefix, option)).style(style)
+        })
+        .collect();
+
+    let dropdown_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    let dropdown_list = List::new(items).block(dropdown_block);
+
+    frame.render_widget(dropdown_list, dropdown_area);
+}
+
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     match app.input.mode.style() {
         Some(style) => {
@@ -389,7 +652,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         None => {
             // Normal mode or special modes without text input
             let (text, color) = match app.input.mode {
-                InputMode::ConfigDropdown => {
+                InputMode::ConfigDropdown | InputMode::TrafficConfigDropdown => {
                     (app.input.mode.entry_prompt(), Color::Cyan)
                 }
                 _ => (app.status.as_str(), Color::White),
