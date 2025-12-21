@@ -14,7 +14,7 @@ use serial_core::{encode, Direction as DataDirection};
 use strum::IntoEnumIterator;
 
 use crate::app::{
-    App, ConfigField, ConnectionState, HexGrouping, InputMode, PaneContent, PaneFocus,
+    App, ConfigField, ConfigSection, ConnectionState, HexGrouping, InputMode, PaneContent, PaneFocus,
     PortSelectFocus, SearchMatch, TrafficConfigField,
     TrafficFocus, View, WrapMode,
 };
@@ -35,6 +35,28 @@ fn create_separator(title: &str, width: usize) -> String {
         title_with_spaces,
         "─".repeat(right)
     )
+}
+
+/// Push section separator lines if the section has changed and has a header.
+/// Returns the new section for tracking.
+fn push_section_separator<'a>(
+    lines: &mut Vec<Line<'a>>,
+    prev_section: Option<ConfigSection>,
+    new_section: ConfigSection,
+    panel_width: usize,
+) -> Option<ConfigSection> {
+    if prev_section != Some(new_section) {
+        if let Some(header) = new_section.header() {
+            lines.push(Line::from("")); // Spacer
+            lines.push(Line::from(Span::styled(
+                create_separator(header, panel_width),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+    }
+    Some(new_section)
 }
 
 /// Format hex string with specified grouping
@@ -440,46 +462,11 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     // Build config lines using ConfigField iterator, grouping by section
     let panel_width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
-    let mut in_rx_chunking_section = false;
-    let mut in_tx_chunking_section = false;
-    let mut in_file_save_section = false;
+    let mut prev_section: Option<ConfigSection> = None;
 
     for field in ConfigField::iter() {
-        // Add separator before RX chunking section
-        if field.is_rx_chunking_field() && !in_rx_chunking_section {
-            in_rx_chunking_section = true;
-            lines.push(Line::from("")); // Spacer
-            lines.push(Line::from(Span::styled(
-                create_separator("RX Chunking", panel_width),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
-        
-        // Add separator before TX chunking section
-        if field.is_tx_chunking_field() && !in_tx_chunking_section {
-            in_tx_chunking_section = true;
-            lines.push(Line::from("")); // Spacer
-            lines.push(Line::from(Span::styled(
-                create_separator("TX Chunking", panel_width),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
-        
-        // Add separator before file saving section
-        if field.is_file_saving_field() && !in_file_save_section {
-            in_file_save_section = true;
-            lines.push(Line::from("")); // Spacer
-            lines.push(Line::from(Span::styled(
-                create_separator("File Saving", panel_width),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
+        // Add separator when section changes
+        prev_section = push_section_separator(&mut lines, prev_section, field.section(), panel_width);
 
         let is_selected =
             app.port_select.config.field == field && (is_focused || dropdown_open || text_input_open);
@@ -952,12 +939,10 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         ("Not connected".to_string(), "-".to_string())
     };
 
-    // Create full-width separators
+    // Create full-width separators for custom headers
     let panel_width = inner.width as usize;
     let connection_sep = create_separator("Connection", panel_width);
     let settings_sep = create_separator("Settings", panel_width);
-    let filtering_sep = create_separator("Filtering", panel_width);
-    let file_save_sep = create_separator("File Saving", panel_width);
 
     let mut lines: Vec<Line> = vec![
         // Header: Connection Info (read-only)
@@ -986,33 +971,12 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     ];
 
     // Build config lines using TrafficConfigField iterator
-    let mut in_filtering_section = false;
-    let mut in_file_save_section = false;
+    // TrafficDisplay section has no header (first section after Settings)
+    let mut prev_section: Option<ConfigSection> = Some(ConfigSection::TrafficDisplay);
 
     for field in TrafficConfigField::iter() {
-        // Add separator before filtering section
-        if field.is_filtering_field() && !in_filtering_section {
-            in_filtering_section = true;
-            lines.push(Line::from("")); // Spacer
-            lines.push(Line::from(Span::styled(
-                filtering_sep.clone(),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
-
-        // Add separator before file saving section
-        if field.is_file_saving_field() && !in_file_save_section {
-            in_file_save_section = true;
-            lines.push(Line::from("")); // Spacer
-            lines.push(Line::from(Span::styled(
-                file_save_sep.clone(),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
+        // Add separator when section changes
+        prev_section = push_section_separator(&mut lines, prev_section, field.section(), panel_width);
 
         let is_selected = app.traffic.config.field == field && (is_focused || dropdown_open || text_input_open);
         let prefix = if is_selected { "> " } else { "  " };
