@@ -180,7 +180,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
 fn render_port_select(frame: &mut Frame, app: &App, area: Rect) {
     // Split horizontally if config panel is visible
-    let (port_area, config_area) = if app.port_select.config_panel_visible {
+    let (port_area, config_area) = if app.port_select.config.visible {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
@@ -205,7 +205,7 @@ fn render_port_select(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_connected(frame: &mut Frame, app: &mut App, area: Rect) {
     // Config panel is always a 30% sidebar on the right when visible
-    let (content_area, config_area) = if app.traffic.config_panel_visible {
+    let (content_area, config_area) = if app.traffic.config.visible {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
@@ -232,7 +232,7 @@ fn render_tab_layout(frame: &mut Frame, app: &mut App, area: Rect) {
     let pane_focus = app.layout.focus();
     
     // Determine if panes are focused (vs config panel having focus)
-    let config_has_focus = app.traffic.config_panel_visible 
+    let config_has_focus = app.traffic.config.visible 
         && app.traffic.focus == TrafficFocus::Config;
     
     if let Some(secondary_content) = secondary_content {
@@ -482,7 +482,7 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         let is_selected =
-            app.port_select.config_field == field && (is_focused || dropdown_open || text_input_open);
+            app.port_select.config.field == field && (is_focused || dropdown_open || text_input_open);
         let prefix = if is_selected { "> " } else { "  " };
 
         let label_style = if is_selected {
@@ -559,7 +559,7 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     // Calculate visible height and apply scroll
     let visible_height = inner.height as usize;
     let total_lines = lines.len();
-    let scroll_offset = app.port_select.config_scroll_offset;
+    let scroll_offset = app.port_select.config.scroll_offset;
     
     // Only scroll if content exceeds visible height
     let needs_scroll = total_lines > visible_height;
@@ -602,7 +602,7 @@ fn render_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
     let dropdown_width = options.iter().map(|s| s.len()).max().unwrap_or(10) as u16 + 6; // +6 for padding and borders
 
     // Position the dropdown based on which field is selected
-    let field_index = app.port_select.config_field.index();
+    let field_index = app.port_select.config.field.index();
 
     // Position dropdown next to the selected field
     let dropdown_y = config_area.y + 1 + field_index as u16; // +1 for border
@@ -627,7 +627,7 @@ fn render_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, option)| {
-            let is_selected = i == app.port_select.dropdown_index;
+            let is_selected = i == app.port_select.config.dropdown_index;
             let prefix = if is_selected { "> " } else { "  " };
 
             let style = if is_selected {
@@ -1014,7 +1014,7 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             )));
         }
 
-        let is_selected = app.traffic.config_field == field && (is_focused || dropdown_open || text_input_open);
+        let is_selected = app.traffic.config.field == field && (is_focused || dropdown_open || text_input_open);
         let prefix = if is_selected { "> " } else { "  " };
 
         let label_style = if is_selected {
@@ -1122,7 +1122,7 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     // Calculate visible height and apply scroll
     let visible_height = inner.height as usize;
     let total_lines = lines.len();
-    let scroll_offset = app.traffic.config_scroll_offset;
+    let scroll_offset = app.traffic.config.scroll_offset;
     
     // Only scroll if content exceeds visible height
     let needs_scroll = total_lines > visible_height;
@@ -1171,7 +1171,7 @@ fn render_traffic_config_dropdown(frame: &mut Frame, app: &App, config_area: Rec
     // Position the dropdown based on which field is selected
     // Account for the header lines (Connection section + spacer = 5 lines)
     let header_lines = 5u16;
-    let field_index = app.traffic.config_field.index();
+    let field_index = app.traffic.config.field.index();
 
     // Position dropdown next to the selected field
     let dropdown_y = config_area.y + 1 + header_lines + field_index as u16;
@@ -1196,7 +1196,7 @@ fn render_traffic_config_dropdown(frame: &mut Frame, app: &App, config_area: Rec
         .iter()
         .enumerate()
         .map(|(i, option)| {
-            let is_selected = i == app.traffic.dropdown_index;
+            let is_selected = i == app.traffic.config.dropdown_index;
             let prefix = if is_selected { "> " } else { "  " };
 
             let style = if is_selected {

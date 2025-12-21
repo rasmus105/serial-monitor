@@ -10,7 +10,7 @@ use serial_core::{
     FlowControl, LineDelimiter, Parity, PortInfo, SaveFormat, SerialConfig, Session,
     SessionConfig, SessionEvent, SessionHandle, StopBits,
 };
-use strum::{EnumCount, EnumIter, IntoEnumIterator};
+use strum::{EnumCount, EnumIter, IntoEnumIterator, IntoStaticStr, VariantArray};
 
 use crate::command::{map_global_nav_key, DropdownCommand, GlobalNavCommand, PortSelectCommand, TrafficCommand};
 use crate::settings::{
@@ -53,6 +53,150 @@ pub trait ConfigOption: Sized + Copy + PartialEq + 'static {
             .collect()
     }
 }
+
+// =============================================================================
+// Config Field Trait and Panel State
+// =============================================================================
+
+/// Trait for config field enums (e.g., ConfigField, TrafficConfigField)
+/// Provides common methods for navigating and querying field properties.
+pub trait ConfigFieldKind: Sized + Copy + PartialEq + Default {
+    /// Get the next field in the list (wrapping)
+    fn next(self) -> Self;
+    /// Get the previous field in the list (wrapping)
+    fn prev(self) -> Self;
+    /// Get the index of this field in the flat field list
+    fn index(self) -> usize;
+    /// Get the display label for this field
+    fn label(&self) -> &'static str;
+    /// Whether this field is a toggle (ON/OFF)
+    fn is_toggle(&self) -> bool;
+    /// Whether this field is a text input
+    fn is_text_input(&self) -> bool;
+    /// Whether this field has a dropdown (not toggle, not text input)
+    fn is_dropdown(&self) -> bool {
+        !self.is_toggle() && !self.is_text_input()
+    }
+    /// Get the section this field belongs to (for UI grouping and scroll calculation)
+    fn section(&self) -> ConfigSection;
+}
+
+/// Section identifiers for config panels.
+/// Used to group fields visually and calculate scroll positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConfigSection {
+    /// Default/main section (no header)
+    #[default]
+    Main,
+    /// Serial port settings (baud rate, data bits, etc.)
+    Serial,
+    /// RX chunking settings
+    RxChunking,
+    /// TX chunking settings
+    TxChunking,
+    /// File saving settings  
+    FileSave,
+    /// Traffic display settings
+    TrafficDisplay,
+    /// Filtering settings
+    Filtering,
+}
+
+impl ConfigSection {
+    /// Get the display name for this section (used as separator header)
+    pub fn header(&self) -> Option<&'static str> {
+        match self {
+            ConfigSection::Main => None,
+            ConfigSection::Serial => None, // First section, no header needed
+            ConfigSection::RxChunking => Some("RX Chunking"),
+            ConfigSection::TxChunking => Some("TX Chunking"),
+            ConfigSection::FileSave => Some("File Saving"),
+            ConfigSection::TrafficDisplay => None, // First section, no header needed
+            ConfigSection::Filtering => Some("Filtering"),
+        }
+    }
+}
+
+/// Shared state for config panel UI (dropdown index, scroll offset, visibility)
+#[derive(Debug, Clone, Default)]
+pub struct ConfigPanelState<F: ConfigFieldKind> {
+    /// Whether the config panel is visible
+    pub visible: bool,
+    /// Which config field is selected
+    pub field: F,
+    /// Dropdown selection index (when dropdown is open)
+    pub dropdown_index: usize,
+    /// Scroll offset for the config panel list
+    pub scroll_offset: usize,
+    /// Visual line index of each field (populated during render for scroll calculation)
+    /// Maps field index -> visual line index
+    field_line_positions: Vec<usize>,
+}
+
+impl<F: ConfigFieldKind> ConfigPanelState<F> {
+    /// Create a new config panel state
+    pub fn new() -> Self {
+        Self {
+            visible: false,
+            field: F::default(),
+            dropdown_index: 0,
+            scroll_offset: 0,
+            field_line_positions: Vec::new(),
+        }
+    }
+    
+    /// Create with initial visibility
+    pub fn with_visible(visible: bool) -> Self {
+        Self {
+            visible,
+            ..Self::new()
+        }
+    }
+    
+    /// Move to next field
+    pub fn next_field(&mut self) {
+        self.field = self.field.next();
+    }
+    
+    /// Move to previous field
+    pub fn prev_field(&mut self) {
+        self.field = self.field.prev();
+    }
+    
+    /// Open dropdown with current index
+    pub fn open_dropdown(&mut self, current_index: usize) {
+        self.dropdown_index = current_index;
+    }
+    
+    /// Update the visual line positions of all fields.
+    /// Call this during render after building the line list.
+    pub fn set_field_line_positions(&mut self, positions: Vec<usize>) {
+        self.field_line_positions = positions;
+    }
+    
+    /// Get the visual line position for the currently selected field.
+    /// Returns None if positions haven't been set yet.
+    pub fn current_field_line(&self) -> Option<usize> {
+        self.field_line_positions.get(self.field.index()).copied()
+    }
+    
+    /// Adjust scroll offset to ensure the selected field is visible.
+    /// Uses the cached line positions from the last render.
+    pub fn adjust_scroll(&mut self, visible_height: usize) {
+        if let Some(line_idx) = self.current_field_line() {
+            // Ensure the selected line is visible
+            if line_idx < self.scroll_offset {
+                self.scroll_offset = line_idx;
+            } else if line_idx >= self.scroll_offset + visible_height {
+                self.scroll_offset = line_idx.saturating_sub(visible_height - 1);
+            }
+        }
+    }
+}
+
+// =============================================================================
+// ConfigOption Implementations
+// =============================================================================
 
 // Implement ConfigOption for serialport types
 
@@ -152,65 +296,47 @@ impl ConfigOption for SaveFormat {
 // =============================================================================
 
 /// Chunking mode for UI selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum ChunkingMode {
     /// Raw chunking - chunks based on OS read timing
     #[default]
     Raw,
     /// Line-delimited chunking - splits on delimiter
+    #[strum(serialize = "Line Delimited")]
     LineDelimited,
 }
 
 impl ConfigOption for ChunkingMode {
-    fn all_variants() -> &'static [Self] {
-        &[ChunkingMode::Raw, ChunkingMode::LineDelimited]
-    }
-
-    fn display_name(&self) -> &'static str {
-        match self {
-            ChunkingMode::Raw => "Raw",
-            ChunkingMode::LineDelimited => "Line Delimited",
-        }
-    }
+    fn all_variants() -> &'static [Self] { Self::VARIANTS }
+    fn display_name(&self) -> &'static str { (*self).into() }
 }
 
 /// Delimiter option for UI selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum DelimiterOption {
     /// Unix-style newline: \n
     #[default]
+    #[strum(serialize = "\\n (LF)")]
     Newline,
     /// Windows-style: \r\n
+    #[strum(serialize = "\\r\\n (CRLF)")]
     CrLf,
     /// Carriage return only: \r
+    #[strum(serialize = "\\r (CR)")]
     Cr,
     /// Custom delimiter (entered as text)
     Custom,
 }
 
 impl ConfigOption for DelimiterOption {
-    fn all_variants() -> &'static [Self] {
-        &[
-            DelimiterOption::Newline,
-            DelimiterOption::CrLf,
-            DelimiterOption::Cr,
-            DelimiterOption::Custom,
-        ]
-    }
-
-    fn display_name(&self) -> &'static str {
-        match self {
-            DelimiterOption::Newline => "\\n (LF)",
-            DelimiterOption::CrLf => "\\r\\n (CRLF)",
-            DelimiterOption::Cr => "\\r (CR)",
-            DelimiterOption::Custom => "Custom",
-        }
-    }
+    fn all_variants() -> &'static [Self] { Self::VARIANTS }
+    fn display_name(&self) -> &'static str { (*self).into() }
 }
 
 /// Size unit for max line length
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum SizeUnit {
+    #[strum(serialize = "B")]
     Bytes,
     #[default]
     KiB,
@@ -218,17 +344,8 @@ pub enum SizeUnit {
 }
 
 impl ConfigOption for SizeUnit {
-    fn all_variants() -> &'static [Self] {
-        &[SizeUnit::Bytes, SizeUnit::KiB, SizeUnit::MiB]
-    }
-
-    fn display_name(&self) -> &'static str {
-        match self {
-            SizeUnit::Bytes => "B",
-            SizeUnit::KiB => "KiB",
-            SizeUnit::MiB => "MiB",
-        }
-    }
+    fn all_variants() -> &'static [Self] { Self::VARIANTS }
+    fn display_name(&self) -> &'static str { (*self).into() }
 }
 
 impl SizeUnit {
@@ -240,6 +357,42 @@ impl SizeUnit {
             SizeUnit::MiB => value * 1024 * 1024,
         }
     }
+}
+
+// =============================================================================
+// File Save Settings
+// =============================================================================
+
+/// Settings for file saving (shared between port selection and traffic view)
+#[derive(Debug, Clone, Default)]
+pub struct FileSaveSettings {
+    /// Whether file saving is enabled
+    pub enabled: bool,
+    /// Save format
+    pub format: SaveFormat,
+    /// Custom filename (empty = auto-generated)
+    pub filename: String,
+    /// Save directory
+    pub directory: String,
+}
+
+impl FileSaveSettings {
+    /// Create new file save settings with default directory
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            format: SaveFormat::default(),
+            filename: String::new(),
+            directory: default_save_directory(),
+        }
+    }
+}
+
+/// Get the default save directory (user's home directory or current directory)
+fn default_save_directory() -> String {
+    std::env::var("HOME")
+        .map(|h| format!("{}/serial-logs", h))
+        .unwrap_or_else(|_| ".".to_string())
 }
 
 // =============================================================================
@@ -509,93 +662,109 @@ pub enum TrafficFocus {
 }
 
 /// Which configuration field is selected in port selection
-#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr)]
 pub enum ConfigField {
+    // Serial port settings (section: Serial)
     #[default]
+    #[strum(serialize = "Baud Rate")]
     BaudRate,
+    #[strum(serialize = "Data Bits")]
     DataBits,
     Parity,
+    #[strum(serialize = "Stop Bits")]
     StopBits,
+    #[strum(serialize = "Flow Ctrl")]
     FlowControl,
-    // Chunking fields
+    // RX Chunking fields (section: RxChunking)
+    #[strum(serialize = "RX Mode")]
     RxChunkingMode,
+    #[strum(serialize = "RX Delimiter")]
     RxDelimiter,
+    #[strum(serialize = "RX Custom")]
     RxCustomDelimiter,
+    #[strum(serialize = "RX Max Length")]
     RxMaxLineLength,
+    #[strum(serialize = "Unit")]
     RxMaxLineLengthUnit,
+    // TX Chunking fields (section: TxChunking)
+    #[strum(serialize = "TX Mode")]
     TxChunkingMode,
+    #[strum(serialize = "TX Delimiter")]
     TxDelimiter,
+    #[strum(serialize = "TX Custom")]
     TxCustomDelimiter,
+    #[strum(serialize = "TX Max Length")]
     TxMaxLineLength,
+    #[strum(serialize = "Unit")]
     TxMaxLineLengthUnit,
-    // File saving fields
+    // File saving fields (section: FileSave)
+    #[strum(serialize = "Save to File")]
     SaveEnabled,
+    #[strum(serialize = "Save Format")]
     SaveFormat,
+    #[strum(serialize = "Filename")]
     SaveFilename,
+    #[strum(serialize = "Directory")]
     SaveDirectory,
 }
 
 /// Which configuration field is selected in traffic view config panel
-#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr)]
 pub enum TrafficConfigField {
+    // Display settings (section: TrafficDisplay)
     #[default]
+    #[strum(serialize = "Line Numbers")]
     LineNumbers,
     Timestamps,
+    #[strum(serialize = "Time Format")]
     TimestampFormat,
+    #[strum(serialize = "Auto-scroll")]
     AutoScroll,
+    #[strum(serialize = "Lock Bottom")]
     LockToBottom,
     Encoding,
+    #[strum(serialize = "Wrap Mode")]
     WrapMode,
+    #[strum(serialize = "Show TX")]
     ShowTx,
+    #[strum(serialize = "Show RX")]
     ShowRx,
+    #[strum(serialize = "Hex Grouping")]
     HexGrouping,
-    // Filtering fields
+    // Filtering fields (section: Filtering)
+    #[strum(serialize = "Filter")]
     FilterEnabled,
+    #[strum(serialize = "Filter Pattern")]
     FilterPattern,
-    // File saving fields
+    // File saving fields (section: FileSave)
+    #[strum(serialize = "Save to File")]
     SaveEnabled,
+    #[strum(serialize = "Save Format")]
     SaveFormat,
+    #[strum(serialize = "Filename")]
     SaveFilename,
+    #[strum(serialize = "Directory")]
     SaveDirectory,
 }
 
 impl TrafficConfigField {
     pub fn next(self) -> Self {
-        let variants: Vec<_> = Self::iter().collect();
-        let idx = variants.iter().position(|&v| v == self).unwrap_or(0);
-        variants[(idx + 1) % variants.len()]
+        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
+        Self::VARIANTS[(idx + 1) % Self::VARIANTS.len()]
     }
 
     pub fn prev(self) -> Self {
-        let variants: Vec<_> = Self::iter().collect();
-        let idx = variants.iter().position(|&v| v == self).unwrap_or(0);
-        variants[(idx + variants.len() - 1) % variants.len()]
+        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
+        Self::VARIANTS[(idx + Self::VARIANTS.len() - 1) % Self::VARIANTS.len()]
     }
 
     pub fn index(self) -> usize {
-        Self::iter().position(|v| v == self).unwrap_or(0)
+        Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0)
     }
 
     /// Get the label for this config field
     pub fn label(&self) -> &'static str {
-        match self {
-            TrafficConfigField::LineNumbers => "Line Numbers",
-            TrafficConfigField::Timestamps => "Timestamps",
-            TrafficConfigField::TimestampFormat => "Time Format",
-            TrafficConfigField::AutoScroll => "Auto-scroll",
-            TrafficConfigField::LockToBottom => "Lock Bottom",
-            TrafficConfigField::Encoding => "Encoding",
-            TrafficConfigField::WrapMode => "Wrap Mode",
-            TrafficConfigField::ShowTx => "Show TX",
-            TrafficConfigField::ShowRx => "Show RX",
-            TrafficConfigField::HexGrouping => "Hex Grouping",
-            TrafficConfigField::FilterEnabled => "Filter",
-            TrafficConfigField::FilterPattern => "Filter Pattern",
-            TrafficConfigField::SaveEnabled => "Save to File",
-            TrafficConfigField::SaveFormat => "Save Format",
-            TrafficConfigField::SaveFilename => "Filename",
-            TrafficConfigField::SaveDirectory => "Directory",
-        }
+        (*self).into()
     }
 
     /// Whether this field is a simple toggle (vs a dropdown or text input)
@@ -634,70 +803,70 @@ impl TrafficConfigField {
         }
     }
 
+    /// Get the section this field belongs to
+    pub fn section(&self) -> ConfigSection {
+        match self {
+            // Display settings
+            TrafficConfigField::LineNumbers
+            | TrafficConfigField::Timestamps
+            | TrafficConfigField::TimestampFormat
+            | TrafficConfigField::AutoScroll
+            | TrafficConfigField::LockToBottom
+            | TrafficConfigField::Encoding
+            | TrafficConfigField::WrapMode
+            | TrafficConfigField::ShowTx
+            | TrafficConfigField::ShowRx
+            | TrafficConfigField::HexGrouping => ConfigSection::TrafficDisplay,
+            // Filtering
+            TrafficConfigField::FilterEnabled
+            | TrafficConfigField::FilterPattern => ConfigSection::Filtering,
+            // File saving
+            TrafficConfigField::SaveEnabled
+            | TrafficConfigField::SaveFormat
+            | TrafficConfigField::SaveFilename
+            | TrafficConfigField::SaveDirectory => ConfigSection::FileSave,
+        }
+    }
+
     /// Check if this is a file saving field (for section grouping)
     pub fn is_file_saving_field(&self) -> bool {
-        matches!(
-            self,
-            TrafficConfigField::SaveEnabled
-                | TrafficConfigField::SaveFormat
-                | TrafficConfigField::SaveFilename
-                | TrafficConfigField::SaveDirectory
-        )
+        self.section() == ConfigSection::FileSave
     }
 
     /// Check if this is a filtering field (for section grouping)
     pub fn is_filtering_field(&self) -> bool {
-        matches!(
-            self,
-            TrafficConfigField::FilterEnabled
-                | TrafficConfigField::FilterPattern
-        )
+        self.section() == ConfigSection::Filtering
     }
+}
+
+impl ConfigFieldKind for TrafficConfigField {
+    fn next(self) -> Self { self.next() }
+    fn prev(self) -> Self { self.prev() }
+    fn index(self) -> usize { TrafficConfigField::index(self) }
+    fn label(&self) -> &'static str { TrafficConfigField::label(self) }
+    fn is_toggle(&self) -> bool { TrafficConfigField::is_toggle(self) }
+    fn is_text_input(&self) -> bool { TrafficConfigField::is_text_input(self) }
+    fn section(&self) -> ConfigSection { TrafficConfigField::section(self) }
 }
 
 impl ConfigField {
     pub fn next(self) -> Self {
-        let variants: Vec<_> = Self::iter().collect();
-        let idx = variants.iter().position(|&v| v == self).unwrap_or(0);
-        variants[(idx + 1) % variants.len()]
+        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
+        Self::VARIANTS[(idx + 1) % Self::VARIANTS.len()]
     }
 
     pub fn prev(self) -> Self {
-        let variants: Vec<_> = Self::iter().collect();
-        let idx = variants.iter().position(|&v| v == self).unwrap_or(0);
-        variants[(idx + variants.len() - 1) % variants.len()]
+        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
+        Self::VARIANTS[(idx + Self::VARIANTS.len() - 1) % Self::VARIANTS.len()]
     }
 
     pub fn index(self) -> usize {
-        Self::iter().position(|v| v == self).unwrap_or(0)
+        Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0)
     }
 
     /// Get the label for this config field
     pub fn label(&self) -> &'static str {
-        match self {
-            ConfigField::BaudRate => "Baud Rate",
-            ConfigField::DataBits => "Data Bits",
-            ConfigField::Parity => "Parity",
-            ConfigField::StopBits => "Stop Bits",
-            ConfigField::FlowControl => "Flow Ctrl",
-            // RX Chunking
-            ConfigField::RxChunkingMode => "RX Mode",
-            ConfigField::RxDelimiter => "RX Delimiter",
-            ConfigField::RxCustomDelimiter => "RX Custom",
-            ConfigField::RxMaxLineLength => "RX Max Length",
-            ConfigField::RxMaxLineLengthUnit => "Unit",
-            // TX Chunking
-            ConfigField::TxChunkingMode => "TX Mode",
-            ConfigField::TxDelimiter => "TX Delimiter",
-            ConfigField::TxCustomDelimiter => "TX Custom",
-            ConfigField::TxMaxLineLength => "TX Max Length",
-            ConfigField::TxMaxLineLengthUnit => "Unit",
-            // File saving
-            ConfigField::SaveEnabled => "Save to File",
-            ConfigField::SaveFormat => "Save Format",
-            ConfigField::SaveFilename => "Filename",
-            ConfigField::SaveDirectory => "Directory",
-        }
+        (*self).into()
     }
 
     /// Whether this field is a text input field
@@ -726,45 +895,69 @@ impl ConfigField {
         matches!(self, ConfigField::SaveEnabled)
     }
 
+    /// Check if this is a dropdown field
+    pub fn is_dropdown(&self) -> bool {
+        !self.is_toggle() && !self.is_text_input()
+    }
+
+    /// Get the section this field belongs to
+    pub fn section(&self) -> ConfigSection {
+        match self {
+            // Serial port settings
+            ConfigField::BaudRate
+            | ConfigField::DataBits
+            | ConfigField::Parity
+            | ConfigField::StopBits
+            | ConfigField::FlowControl => ConfigSection::Serial,
+            // RX Chunking
+            ConfigField::RxChunkingMode
+            | ConfigField::RxDelimiter
+            | ConfigField::RxCustomDelimiter
+            | ConfigField::RxMaxLineLength
+            | ConfigField::RxMaxLineLengthUnit => ConfigSection::RxChunking,
+            // TX Chunking
+            ConfigField::TxChunkingMode
+            | ConfigField::TxDelimiter
+            | ConfigField::TxCustomDelimiter
+            | ConfigField::TxMaxLineLength
+            | ConfigField::TxMaxLineLengthUnit => ConfigSection::TxChunking,
+            // File saving
+            ConfigField::SaveEnabled
+            | ConfigField::SaveFormat
+            | ConfigField::SaveFilename
+            | ConfigField::SaveDirectory => ConfigSection::FileSave,
+        }
+    }
+
     /// Check if this is a file saving field (for section grouping)
     pub fn is_file_saving_field(&self) -> bool {
-        matches!(
-            self,
-            ConfigField::SaveEnabled
-                | ConfigField::SaveFormat
-                | ConfigField::SaveFilename
-                | ConfigField::SaveDirectory
-        )
+        self.section() == ConfigSection::FileSave
     }
 
     /// Check if this is an RX chunking field (for section grouping)
     pub fn is_rx_chunking_field(&self) -> bool {
-        matches!(
-            self,
-            ConfigField::RxChunkingMode
-                | ConfigField::RxDelimiter
-                | ConfigField::RxCustomDelimiter
-                | ConfigField::RxMaxLineLength
-                | ConfigField::RxMaxLineLengthUnit
-        )
+        self.section() == ConfigSection::RxChunking
     }
 
     /// Check if this is a TX chunking field (for section grouping)
     pub fn is_tx_chunking_field(&self) -> bool {
-        matches!(
-            self,
-            ConfigField::TxChunkingMode
-                | ConfigField::TxDelimiter
-                | ConfigField::TxCustomDelimiter
-                | ConfigField::TxMaxLineLength
-                | ConfigField::TxMaxLineLengthUnit
-        )
+        self.section() == ConfigSection::TxChunking
     }
 
     /// Check if this is a serial config field
     pub fn is_serial_field(&self) -> bool {
-        !self.is_file_saving_field() && !self.is_rx_chunking_field() && !self.is_tx_chunking_field()
+        self.section() == ConfigSection::Serial
     }
+}
+
+impl ConfigFieldKind for ConfigField {
+    fn next(self) -> Self { self.next() }
+    fn prev(self) -> Self { self.prev() }
+    fn index(self) -> usize { ConfigField::index(self) }
+    fn label(&self) -> &'static str { ConfigField::label(self) }
+    fn is_toggle(&self) -> bool { ConfigField::is_toggle(self) }
+    fn is_text_input(&self) -> bool { ConfigField::is_text_input(self) }
+    fn section(&self) -> ConfigSection { ConfigField::section(self) }
 }
 
 /// Which file saving configuration field is selected in port selection config panel
@@ -934,16 +1127,10 @@ pub struct PortSelectState {
     pub selected_port: usize,
     /// Which panel is focused
     pub focus: PortSelectFocus,
-    /// Which config field is selected
-    pub config_field: ConfigField,
-    /// Whether config panel is visible
-    pub config_panel_visible: bool,
+    /// Config panel state (field selection, dropdown, scroll)
+    pub config: ConfigPanelState<ConfigField>,
     /// Serial port configuration
     pub serial_config: SerialConfig,
-    /// Dropdown selection index (when dropdown is open)
-    pub dropdown_index: usize,
-    /// Scroll offset for config panel
-    pub config_scroll_offset: usize,
     // Chunking configuration (RX)
     /// RX chunking mode
     pub rx_chunking_mode: ChunkingMode,
@@ -967,14 +1154,8 @@ pub struct PortSelectState {
     /// TX max line length unit
     pub tx_max_line_length_unit: SizeUnit,
     // File saving configuration (pre-connection)
-    /// Whether file saving should start on connect
-    pub save_enabled: bool,
-    /// Save format
-    pub save_format: SaveFormat,
-    /// Custom filename (None = auto-generated)
-    pub save_filename: String,
-    /// Save directory
-    pub save_directory: String,
+    /// File saving settings
+    pub file_save: FileSaveSettings,
 }
 
 impl Default for PortSelectState {
@@ -983,11 +1164,8 @@ impl Default for PortSelectState {
             ports: Vec::new(),
             selected_port: 0,
             focus: PortSelectFocus::default(),
-            config_field: ConfigField::default(),
-            config_panel_visible: true,
+            config: ConfigPanelState::with_visible(true),
             serial_config: SerialConfig::default(),
-            dropdown_index: 0,
-            config_scroll_offset: 0,
             // RX chunking defaults
             rx_chunking_mode: ChunkingMode::default(),
             rx_delimiter: DelimiterOption::default(),
@@ -1001,19 +1179,9 @@ impl Default for PortSelectState {
             tx_max_line_length: "64".to_string(),
             tx_max_line_length_unit: SizeUnit::KiB,
             // File saving defaults
-            save_enabled: false,
-            save_format: SaveFormat::default(),
-            save_filename: String::new(), // Empty = auto-generated
-            save_directory: default_save_directory(),
+            file_save: FileSaveSettings::new(),
         }
     }
-}
-
-/// Get the default save directory (user's home directory or current directory)
-fn default_save_directory() -> String {
-    std::env::var("HOME")
-        .map(|h| format!("{}/serial-logs", h))
-        .unwrap_or_else(|_| ".".to_string())
 }
 
 impl PortSelectState {
@@ -1035,7 +1203,7 @@ impl PortSelectState {
 
     /// Get string options for dropdown (including baud rates as strings)
     pub fn get_config_option_strings(&self) -> Vec<String> {
-        match self.config_field {
+        match self.config.field {
             ConfigField::BaudRate => Self::BAUD_RATES.iter().map(|b| b.to_string()).collect(),
             ConfigField::DataBits => DataBits::all_display_names()
                 .into_iter()
@@ -1091,7 +1259,7 @@ impl PortSelectState {
 
     /// Get the current index in the options list for the selected config field
     pub fn get_current_config_index(&self) -> usize {
-        match self.config_field {
+        match self.config.field {
             ConfigField::BaudRate => Self::BAUD_RATES
                 .iter()
                 .position(|&b| b == self.serial_config.baud_rate)
@@ -1100,7 +1268,7 @@ impl PortSelectState {
             ConfigField::Parity => self.serial_config.parity.index(),
             ConfigField::StopBits => self.serial_config.stop_bits.index(),
             ConfigField::FlowControl => self.serial_config.flow_control.index(),
-            ConfigField::SaveFormat => self.save_format.index(),
+            ConfigField::SaveFormat => self.file_save.format.index(),
             // Chunking fields
             ConfigField::RxChunkingMode => self.rx_chunking_mode.index(),
             ConfigField::TxChunkingMode => self.tx_chunking_mode.index(),
@@ -1128,17 +1296,17 @@ impl PortSelectState {
             ConfigField::StopBits => self.serial_config.stop_bits.display_name().to_string(),
             ConfigField::FlowControl => self.serial_config.flow_control.display_name().to_string(),
             ConfigField::SaveEnabled => {
-                if self.save_enabled { "ON" } else { "OFF" }.to_string()
+                if self.file_save.enabled { "ON" } else { "OFF" }.to_string()
             }
-            ConfigField::SaveFormat => self.save_format.display_name().to_string(),
+            ConfigField::SaveFormat => self.file_save.format.display_name().to_string(),
             ConfigField::SaveFilename => {
-                if self.save_filename.is_empty() {
+                if self.file_save.filename.is_empty() {
                     "(auto)".to_string()
                 } else {
-                    self.save_filename.clone()
+                    self.file_save.filename.clone()
                 }
             }
-            ConfigField::SaveDirectory => self.save_directory.clone(),
+            ConfigField::SaveDirectory => self.file_save.directory.clone(),
             // RX Chunking fields
             ConfigField::RxChunkingMode => self.rx_chunking_mode.display_name().to_string(),
             ConfigField::RxDelimiter => self.rx_delimiter.display_name().to_string(),
@@ -1168,50 +1336,50 @@ impl PortSelectState {
 
     /// Open the dropdown for the current config field
     pub fn open_dropdown(&mut self) {
-        self.dropdown_index = self.get_current_config_index();
+        self.config.dropdown_index = self.get_current_config_index();
     }
 
     /// Apply the selected dropdown value to the config
     pub fn apply_dropdown_selection(&mut self) {
-        match self.config_field {
+        match self.config.field {
             ConfigField::BaudRate => {
-                if let Some(&baud) = Self::BAUD_RATES.get(self.dropdown_index) {
+                if let Some(&baud) = Self::BAUD_RATES.get(self.config.dropdown_index) {
                     self.serial_config.baud_rate = baud;
                 }
             }
             ConfigField::DataBits => {
-                self.serial_config.data_bits = DataBits::from_index(self.dropdown_index);
+                self.serial_config.data_bits = DataBits::from_index(self.config.dropdown_index);
             }
             ConfigField::Parity => {
-                self.serial_config.parity = Parity::from_index(self.dropdown_index);
+                self.serial_config.parity = Parity::from_index(self.config.dropdown_index);
             }
             ConfigField::StopBits => {
-                self.serial_config.stop_bits = StopBits::from_index(self.dropdown_index);
+                self.serial_config.stop_bits = StopBits::from_index(self.config.dropdown_index);
             }
             ConfigField::FlowControl => {
-                self.serial_config.flow_control = FlowControl::from_index(self.dropdown_index);
+                self.serial_config.flow_control = FlowControl::from_index(self.config.dropdown_index);
             }
             ConfigField::SaveFormat => {
-                self.save_format = SaveFormat::from_index(self.dropdown_index);
+                self.file_save.format = SaveFormat::from_index(self.config.dropdown_index);
             }
             // Chunking dropdown fields
             ConfigField::RxChunkingMode => {
-                self.rx_chunking_mode = ChunkingMode::from_index(self.dropdown_index);
+                self.rx_chunking_mode = ChunkingMode::from_index(self.config.dropdown_index);
             }
             ConfigField::TxChunkingMode => {
-                self.tx_chunking_mode = ChunkingMode::from_index(self.dropdown_index);
+                self.tx_chunking_mode = ChunkingMode::from_index(self.config.dropdown_index);
             }
             ConfigField::RxDelimiter => {
-                self.rx_delimiter = DelimiterOption::from_index(self.dropdown_index);
+                self.rx_delimiter = DelimiterOption::from_index(self.config.dropdown_index);
             }
             ConfigField::TxDelimiter => {
-                self.tx_delimiter = DelimiterOption::from_index(self.dropdown_index);
+                self.tx_delimiter = DelimiterOption::from_index(self.config.dropdown_index);
             }
             ConfigField::RxMaxLineLengthUnit => {
-                self.rx_max_line_length_unit = SizeUnit::from_index(self.dropdown_index);
+                self.rx_max_line_length_unit = SizeUnit::from_index(self.config.dropdown_index);
             }
             ConfigField::TxMaxLineLengthUnit => {
-                self.tx_max_line_length_unit = SizeUnit::from_index(self.dropdown_index);
+                self.tx_max_line_length_unit = SizeUnit::from_index(self.config.dropdown_index);
             }
             // Toggle and text input fields don't use dropdown
             ConfigField::SaveEnabled
@@ -1226,7 +1394,7 @@ impl PortSelectState {
 
     /// Get the number of options for the current config field
     pub fn get_options_count(&self) -> usize {
-        match self.config_field {
+        match self.config.field {
             ConfigField::BaudRate => Self::BAUD_RATES.len(),
             ConfigField::DataBits => DataBits::all_variants().len(),
             ConfigField::Parity => Parity::all_variants().len(),
@@ -1256,19 +1424,19 @@ impl PortSelectState {
 
     /// Toggle a boolean setting
     pub fn toggle_setting(&mut self) {
-        if self.config_field == ConfigField::SaveEnabled {
-            self.save_enabled = !self.save_enabled;
+        if self.config.field == ConfigField::SaveEnabled {
+            self.file_save.enabled = !self.file_save.enabled;
         }
     }
 
     /// Apply text input value to the appropriate field
     pub fn apply_text_input(&mut self, value: String) {
-        match self.config_field {
+        match self.config.field {
             ConfigField::SaveFilename => {
-                self.save_filename = value;
+                self.file_save.filename = value;
             }
             ConfigField::SaveDirectory => {
-                self.save_directory = value;
+                self.file_save.directory = value;
             }
             ConfigField::RxCustomDelimiter => {
                 self.rx_custom_delimiter = value;
@@ -1294,44 +1462,14 @@ impl PortSelectState {
 
     /// Get the current text value for text input fields
     pub fn get_text_value(&self) -> String {
-        match self.config_field {
-            ConfigField::SaveFilename => self.save_filename.clone(),
-            ConfigField::SaveDirectory => self.save_directory.clone(),
+        match self.config.field {
+            ConfigField::SaveFilename => self.file_save.filename.clone(),
+            ConfigField::SaveDirectory => self.file_save.directory.clone(),
             ConfigField::RxCustomDelimiter => self.rx_custom_delimiter.clone(),
             ConfigField::TxCustomDelimiter => self.tx_custom_delimiter.clone(),
             ConfigField::RxMaxLineLength => self.rx_max_line_length.clone(),
             ConfigField::TxMaxLineLength => self.tx_max_line_length.clone(),
             _ => String::new(),
-        }
-    }
-
-    /// Adjust scroll offset to ensure the selected field is visible
-    /// visible_height is the number of lines that can fit in the panel
-    pub fn adjust_scroll(&mut self, visible_height: usize) {
-        // The field index gives us the line number of the field
-        // We need to account for separators:
-        // - "RX Chunking" section has 2 lines (spacer + separator) before RxChunkingMode
-        // - "TX Chunking" section has 2 lines (spacer + separator) before TxChunkingMode
-        // - "File Saving" section has 2 lines (spacer + separator) before SaveEnabled
-        let field_idx = self.config_field.index();
-        let line_idx = if self.config_field.is_rx_chunking_field() {
-            // Add 2 for the "RX Chunking" separator
-            field_idx + 2
-        } else if self.config_field.is_tx_chunking_field() {
-            // Add 4 for both "RX Chunking" and "TX Chunking" separators
-            field_idx + 4
-        } else if self.config_field.is_file_saving_field() {
-            // Add 6 for all three separators
-            field_idx + 6
-        } else {
-            field_idx
-        };
-        
-        // Ensure the selected line is visible
-        if line_idx < self.config_scroll_offset {
-            self.config_scroll_offset = line_idx;
-        } else if line_idx >= self.config_scroll_offset + visible_height {
-            self.config_scroll_offset = line_idx.saturating_sub(visible_height - 1);
         }
     }
 
@@ -1421,33 +1559,22 @@ impl PortSelectState {
 }
 
 /// Format for displaying timestamps in traffic view
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr)]
 pub enum TimestampFormat {
     /// Relative time since session start (e.g., "+1.234s")
     #[default]
     Relative,
     /// Absolute time with milliseconds (e.g., "12:34:56.789")
+    #[strum(serialize = "HH:MM:SS.mmm")]
     AbsoluteMillis,
     /// Absolute time without milliseconds (e.g., "12:34:56")
+    #[strum(serialize = "HH:MM:SS")]
     Absolute,
 }
 
 impl ConfigOption for TimestampFormat {
-    fn all_variants() -> &'static [Self] {
-        &[
-            TimestampFormat::Relative,
-            TimestampFormat::AbsoluteMillis,
-            TimestampFormat::Absolute,
-        ]
-    }
-
-    fn display_name(&self) -> &'static str {
-        match self {
-            TimestampFormat::Relative => "Relative",
-            TimestampFormat::AbsoluteMillis => "HH:MM:SS.mmm",
-            TimestampFormat::Absolute => "HH:MM:SS",
-        }
-    }
+    fn all_variants() -> &'static [Self] { Self::VARIANTS }
+    fn display_name(&self) -> &'static str { (*self).into() }
 }
 
 impl TimestampFormat {
@@ -1509,7 +1636,7 @@ impl TimestampFormat {
 }
 
 /// How to handle long lines in traffic view
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr)]
 pub enum WrapMode {
     /// Wrap long lines to fit the terminal width
     #[default]
@@ -1519,50 +1646,30 @@ pub enum WrapMode {
 }
 
 impl ConfigOption for WrapMode {
-    fn all_variants() -> &'static [Self] {
-        &[WrapMode::Wrap, WrapMode::Truncate]
-    }
-
-    fn display_name(&self) -> &'static str {
-        match self {
-            WrapMode::Wrap => "Wrap",
-            WrapMode::Truncate => "Truncate",
-        }
-    }
+    fn all_variants() -> &'static [Self] { Self::VARIANTS }
+    fn display_name(&self) -> &'static str { (*self).into() }
 }
 
 /// Hex byte grouping for hex encoding display
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr)]
 pub enum HexGrouping {
     /// No grouping (continuous hex)
     None,
     /// Group by 1 byte (space every byte)
     #[default]
+    #[strum(serialize = "1 byte")]
     Byte,
     /// Group by 2 bytes (space every 2 bytes)
+    #[strum(serialize = "2 bytes")]
     Word,
     /// Group by 4 bytes (space every 4 bytes)
+    #[strum(serialize = "4 bytes")]
     DWord,
 }
 
 impl ConfigOption for HexGrouping {
-    fn all_variants() -> &'static [Self] {
-        &[
-            HexGrouping::None,
-            HexGrouping::Byte,
-            HexGrouping::Word,
-            HexGrouping::DWord,
-        ]
-    }
-
-    fn display_name(&self) -> &'static str {
-        match self {
-            HexGrouping::None => "None",
-            HexGrouping::Byte => "1 byte",
-            HexGrouping::Word => "2 bytes",
-            HexGrouping::DWord => "4 bytes",
-        }
-    }
+    fn all_variants() -> &'static [Self] { Self::VARIANTS }
+    fn display_name(&self) -> &'static str { (*self).into() }
 }
 
 impl HexGrouping {
@@ -1594,16 +1701,10 @@ pub struct TrafficState {
     pub timestamp_format: TimestampFormat,
     /// Session start time (for relative timestamps)
     pub session_start: Option<std::time::SystemTime>,
-    /// Whether the config panel is visible
-    pub config_panel_visible: bool,
+    /// Config panel state (field selection, dropdown, scroll)
+    pub config: ConfigPanelState<TrafficConfigField>,
     /// Which panel is focused (traffic or config)
     pub focus: TrafficFocus,
-    /// Which config field is selected (when config panel is focused)
-    pub config_field: TrafficConfigField,
-    /// Dropdown selection index (when dropdown is open)
-    pub dropdown_index: usize,
-    /// Scroll offset for config panel
-    pub config_scroll_offset: usize,
     /// Auto-scroll: follow new data when at bottom
     pub auto_scroll: bool,
     /// Lock to bottom: always scroll to bottom
@@ -1628,18 +1729,12 @@ pub struct TrafficState {
     /// Whether filtering is enabled
     pub filter_enabled: bool,
     /// Filter mode (Normal or Regex)
-    pub filter_mode: FilterMode,
+    pub filter_mode: PatternMode,
     /// Filter pattern
     pub filter_pattern: String,
     // File saving state
-    /// Whether file saving is enabled
-    pub save_enabled: bool,
-    /// Save format
-    pub save_format: SaveFormat,
-    /// Custom filename (empty = auto-generated)
-    pub save_filename: String,
-    /// Save directory
-    pub save_directory: String,
+    /// File save settings
+    pub file_save: FileSaveSettings,
 }
 
 impl Default for TrafficState {
@@ -1652,11 +1747,8 @@ impl Default for TrafficState {
             show_timestamps: false,
             timestamp_format: TimestampFormat::default(),
             session_start: None,
-            config_panel_visible: false,
+            config: ConfigPanelState::new(),
             focus: TrafficFocus::default(),
-            config_field: TrafficConfigField::default(),
-            dropdown_index: 0,
-            config_scroll_offset: 0,
             auto_scroll: true,
             lock_to_bottom: false,
             was_at_bottom: true,
@@ -1669,13 +1761,10 @@ impl Default for TrafficState {
             quit_confirm: false,
             // Filtering defaults
             filter_enabled: false,
-            filter_mode: FilterMode::default(),
+            filter_mode: PatternMode::default(),
             filter_pattern: String::new(),
             // File saving defaults
-            save_enabled: false,
-            save_format: SaveFormat::default(),
-            save_filename: String::new(),
-            save_directory: default_save_directory(),
+            file_save: FileSaveSettings::new(),
         }
     }
 }
@@ -1717,23 +1806,23 @@ impl TrafficState {
                 }
             }
             TrafficConfigField::SaveEnabled => {
-                if self.save_enabled { "ON" } else { "OFF" }.to_string()
+                if self.file_save.enabled { "ON" } else { "OFF" }.to_string()
             }
-            TrafficConfigField::SaveFormat => self.save_format.display_name().to_string(),
+            TrafficConfigField::SaveFormat => self.file_save.format.display_name().to_string(),
             TrafficConfigField::SaveFilename => {
-                if self.save_filename.is_empty() {
+                if self.file_save.filename.is_empty() {
                     "(auto)".to_string()
                 } else {
-                    self.save_filename.clone()
+                    self.file_save.filename.clone()
                 }
             }
-            TrafficConfigField::SaveDirectory => self.save_directory.clone(),
+            TrafficConfigField::SaveDirectory => self.file_save.directory.clone(),
         }
     }
 
     /// Get string options for dropdown (for non-toggle fields)
     pub fn get_config_option_strings(&self) -> Vec<String> {
-        match self.config_field {
+        match self.config.field {
             TrafficConfigField::TimestampFormat => TimestampFormat::all_display_names()
                 .into_iter()
                 .map(String::from)
@@ -1761,19 +1850,19 @@ impl TrafficState {
 
     /// Get the current index for dropdown selection
     pub fn get_current_config_index(&self) -> usize {
-        match self.config_field {
+        match self.config.field {
             TrafficConfigField::TimestampFormat => self.timestamp_format.index(),
             TrafficConfigField::Encoding => self.encoding.index(),
             TrafficConfigField::WrapMode => self.wrap_mode.index(),
             TrafficConfigField::HexGrouping => self.hex_grouping.index(),
-            TrafficConfigField::SaveFormat => self.save_format.index(),
+            TrafficConfigField::SaveFormat => self.file_save.format.index(),
             _ => 0,
         }
     }
 
     /// Get the number of options for the current config field
     pub fn get_options_count(&self) -> usize {
-        match self.config_field {
+        match self.config.field {
             TrafficConfigField::TimestampFormat => TimestampFormat::all_variants().len(),
             TrafficConfigField::Encoding => Encoding::all_variants().len(),
             TrafficConfigField::WrapMode => WrapMode::all_variants().len(),
@@ -1785,26 +1874,26 @@ impl TrafficState {
 
     /// Open the dropdown for the current config field
     pub fn open_dropdown(&mut self) {
-        self.dropdown_index = self.get_current_config_index();
+        self.config.dropdown_index = self.get_current_config_index();
     }
 
     /// Apply the selected dropdown value
     pub fn apply_dropdown_selection(&mut self) {
-        match self.config_field {
+        match self.config.field {
             TrafficConfigField::TimestampFormat => {
-                self.timestamp_format = TimestampFormat::from_index(self.dropdown_index);
+                self.timestamp_format = TimestampFormat::from_index(self.config.dropdown_index);
             }
             TrafficConfigField::Encoding => {
-                self.encoding = Encoding::from_index(self.dropdown_index);
+                self.encoding = Encoding::from_index(self.config.dropdown_index);
             }
             TrafficConfigField::WrapMode => {
-                self.wrap_mode = WrapMode::from_index(self.dropdown_index);
+                self.wrap_mode = WrapMode::from_index(self.config.dropdown_index);
             }
             TrafficConfigField::HexGrouping => {
-                self.hex_grouping = HexGrouping::from_index(self.dropdown_index);
+                self.hex_grouping = HexGrouping::from_index(self.config.dropdown_index);
             }
             TrafficConfigField::SaveFormat => {
-                self.save_format = SaveFormat::from_index(self.dropdown_index);
+                self.file_save.format = SaveFormat::from_index(self.config.dropdown_index);
             }
             _ => {}
         }
@@ -1812,7 +1901,7 @@ impl TrafficState {
 
     /// Toggle a boolean setting
     pub fn toggle_setting(&mut self) {
-        match self.config_field {
+        match self.config.field {
             TrafficConfigField::LineNumbers => self.show_line_numbers = !self.show_line_numbers,
             TrafficConfigField::Timestamps => self.show_timestamps = !self.show_timestamps,
             TrafficConfigField::AutoScroll => self.auto_scroll = !self.auto_scroll,
@@ -1820,22 +1909,22 @@ impl TrafficState {
             TrafficConfigField::ShowTx => self.show_tx = !self.show_tx,
             TrafficConfigField::ShowRx => self.show_rx = !self.show_rx,
             TrafficConfigField::FilterEnabled => self.filter_enabled = !self.filter_enabled,
-            TrafficConfigField::SaveEnabled => self.save_enabled = !self.save_enabled,
+            TrafficConfigField::SaveEnabled => self.file_save.enabled = !self.file_save.enabled,
             _ => {}
         }
     }
 
     /// Apply text input value to the appropriate field
     pub fn apply_text_input(&mut self, value: String) {
-        match self.config_field {
+        match self.config.field {
             TrafficConfigField::FilterPattern => {
                 self.filter_pattern = value;
             }
             TrafficConfigField::SaveFilename => {
-                self.save_filename = value;
+                self.file_save.filename = value;
             }
             TrafficConfigField::SaveDirectory => {
-                self.save_directory = value;
+                self.file_save.directory = value;
             }
             _ => {}
         }
@@ -1843,43 +1932,11 @@ impl TrafficState {
 
     /// Get the current text value for text input fields
     pub fn get_text_value(&self) -> String {
-        match self.config_field {
+        match self.config.field {
             TrafficConfigField::FilterPattern => self.filter_pattern.clone(),
-            TrafficConfigField::SaveFilename => self.save_filename.clone(),
-            TrafficConfigField::SaveDirectory => self.save_directory.clone(),
+            TrafficConfigField::SaveFilename => self.file_save.filename.clone(),
+            TrafficConfigField::SaveDirectory => self.file_save.directory.clone(),
             _ => String::new(),
-        }
-    }
-
-    /// Adjust scroll offset to ensure the selected field is visible
-    /// visible_height is the number of lines that can fit in the panel
-    pub fn adjust_config_scroll(&mut self, visible_height: usize) {
-        // The field index gives us a base line number
-        // We need to account for:
-        // - Header section: 5 lines (Connection header, Port, Baud, Spacer, Settings header)
-        // - Filtering section: 2 lines (spacer + separator) before FilterEnabled
-        // - File Saving section: 2 lines (spacer + separator) before SaveEnabled
-        let field_idx = self.config_field.index();
-        
-        // Calculate the actual line index accounting for headers and separators
-        let header_lines = 5; // Connection header, Port, Baud, Spacer, Settings header
-        let mut line_idx = header_lines + field_idx;
-        
-        // If we're in or past filtering section, add 2 for the separator
-        if self.config_field.is_filtering_field() || self.config_field.is_file_saving_field() {
-            line_idx += 2;
-        }
-        
-        // If we're in file saving section, add 2 more for that separator
-        if self.config_field.is_file_saving_field() {
-            line_idx += 2;
-        }
-        
-        // Ensure the selected line is visible
-        if line_idx < self.config_scroll_offset {
-            self.config_scroll_offset = line_idx;
-        } else if line_idx >= self.config_scroll_offset + visible_height {
-            self.config_scroll_offset = line_idx.saturating_sub(visible_height - 1);
         }
     }
 
@@ -1908,14 +1965,14 @@ impl TrafficState {
         }
 
         match self.filter_mode {
-            FilterMode::Regex => {
+            PatternMode::Regex => {
                 // Try to compile and match regex
                 match Regex::new(&self.filter_pattern) {
                     Ok(re) => re.is_match(encoded_content),
                     Err(_) => true, // On invalid regex, show all (don't hide data due to user error)
                 }
             }
-            FilterMode::Normal => {
+            PatternMode::Normal => {
                 // Case-insensitive substring search
                 encoded_content
                     .to_lowercase()
@@ -1936,80 +1993,39 @@ pub struct SearchMatch {
     pub byte_end: usize,
 }
 
-/// Search mode - determines how the search pattern is interpreted
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SearchMode {
-    /// Regex search (default) - pattern is interpreted as a regular expression
+/// Pattern matching mode - determines how patterns are interpreted for search/filter
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
+pub enum PatternMode {
+    /// Normal mode - pattern is interpreted as a literal string (case-insensitive)
     #[default]
-    Regex,
-    /// Normal search - pattern is interpreted as a literal string (case-insensitive)
     Normal,
+    /// Regex mode - pattern is interpreted as a regular expression
+    Regex,
 }
 
-impl SearchMode {
+impl PatternMode {
     pub fn name(&self) -> &'static str {
-        match self {
-            SearchMode::Regex => "Regex",
-            SearchMode::Normal => "Normal",
-        }
+        (*self).into()
     }
 
     pub fn description(&self) -> &'static str {
         match self {
-            SearchMode::Regex => "Pattern is interpreted as a regular expression",
-            SearchMode::Normal => "Pattern is interpreted as a literal string (case-insensitive)",
+            PatternMode::Normal => "Pattern is interpreted as a literal string (case-insensitive)",
+            PatternMode::Regex => "Pattern is interpreted as a regular expression",
         }
     }
 
     pub fn toggle(&self) -> Self {
         match self {
-            SearchMode::Regex => SearchMode::Normal,
-            SearchMode::Normal => SearchMode::Regex,
+            PatternMode::Normal => PatternMode::Regex,
+            PatternMode::Regex => PatternMode::Normal,
         }
     }
 }
 
-/// Filter mode - determines how the filter pattern is interpreted
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FilterMode {
-    /// Normal filter (default) - pattern is interpreted as a literal string (case-insensitive)
-    #[default]
-    Normal,
-    /// Regex filter - pattern is interpreted as a regular expression
-    Regex,
-}
-
-impl FilterMode {
-    pub fn name(&self) -> &'static str {
-        match self {
-            FilterMode::Normal => "Normal",
-            FilterMode::Regex => "Regex",
-        }
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            FilterMode::Normal => "Pattern is interpreted as a literal string (case-insensitive)",
-            FilterMode::Regex => "Pattern is interpreted as a regular expression",
-        }
-    }
-
-    pub fn toggle(&self) -> Self {
-        match self {
-            FilterMode::Normal => FilterMode::Regex,
-            FilterMode::Regex => FilterMode::Normal,
-        }
-    }
-}
-
-impl ConfigOption for FilterMode {
-    fn all_variants() -> &'static [Self] {
-        &[FilterMode::Normal, FilterMode::Regex]
-    }
-
-    fn display_name(&self) -> &'static str {
-        self.name()
-    }
+impl ConfigOption for PatternMode {
+    fn all_variants() -> &'static [Self] { Self::VARIANTS }
+    fn display_name(&self) -> &'static str { (*self).into() }
 }
 
 /// State for search functionality
@@ -2022,7 +2038,7 @@ pub struct SearchState {
     /// Index into `matches` for the current match (0-based)
     pub current_match: Option<usize>,
     /// Search mode (regex or normal)
-    pub mode: SearchMode,
+    pub mode: PatternMode,
     /// Error message from regex compilation (if any)
     pub error: Option<String>,
 }
@@ -2271,14 +2287,14 @@ impl App {
                     match self.settings_panel.selected_general_setting {
                         GeneralSetting::SearchMode => {
                             self.settings_panel.dropdown_index = match self.search.mode {
-                                SearchMode::Regex => 0,
-                                SearchMode::Normal => 1,
+                                PatternMode::Regex => 0,
+                                PatternMode::Normal => 1,
                             };
                         }
                         GeneralSetting::FilterMode => {
                             self.settings_panel.dropdown_index = match self.traffic.filter_mode {
-                                FilterMode::Regex => 0,
-                                FilterMode::Normal => 1,
+                                PatternMode::Regex => 0,
+                                PatternMode::Normal => 1,
                             };
                         }
                     }
@@ -2419,8 +2435,8 @@ impl App {
                             }
                         }
                         PortSelectFocus::Config => {
-                            self.port_select.config_field = self.port_select.config_field.prev();
-                            self.port_select.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
+                            self.port_select.config.field = self.port_select.config.field.prev();
+                            self.port_select.config.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
                         }
                     }
                     return;
@@ -2435,8 +2451,8 @@ impl App {
                             }
                         }
                         PortSelectFocus::Config => {
-                            self.port_select.config_field = self.port_select.config_field.next();
-                            self.port_select.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
+                            self.port_select.config.field = self.port_select.config.field.next();
+                            self.port_select.config.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
                         }
                     }
                     return;
@@ -2450,14 +2466,14 @@ impl App {
                         }
                         PortSelectFocus::Config => {
                             // Check if it's a toggle field
-                            if self.port_select.config_field.is_toggle() {
+                            if self.port_select.config.field.is_toggle() {
                                 self.port_select.toggle_setting();
                                 self.status = format!(
                                     "{}: {}",
-                                    self.port_select.config_field.label(),
-                                    self.port_select.get_config_display(self.port_select.config_field)
+                                    self.port_select.config.field.label(),
+                                    self.port_select.get_config_display(self.port_select.config.field)
                                 );
-                            } else if self.port_select.config_field.is_text_input() {
+                            } else if self.port_select.config.field.is_text_input() {
                                 // Text input field
                                 self.input.buffer = self.port_select.get_text_value();
                                 self.input.mode = InputMode::ConfigTextInput;
@@ -2481,10 +2497,10 @@ impl App {
 
         // Handle context-sensitive commands
         let cmd = match cmd {
-            Some(PortSelectCommand::FocusPortList) if !self.port_select.config_panel_visible => {
+            Some(PortSelectCommand::FocusPortList) if !self.port_select.config.visible => {
                 None
             }
-            Some(PortSelectCommand::FocusConfig) if !self.port_select.config_panel_visible => None,
+            Some(PortSelectCommand::FocusConfig) if !self.port_select.config.visible => None,
             other => other,
         };
 
@@ -2508,7 +2524,7 @@ impl App {
                 self.status = InputMode::PortInput.entry_prompt().to_string();
             }
             PortSelectCommand::ToggleConfigPanel => {
-                self.port_select.config_panel_visible = !self.port_select.config_panel_visible;
+                self.port_select.config.visible = !self.port_select.config.visible;
             }
             PortSelectCommand::FocusPortList => {
                 self.port_select.focus = PortSelectFocus::PortList;
@@ -2524,91 +2540,39 @@ impl App {
 
     fn handle_key_config_dropdown(&mut self, key: KeyEvent) {
         let options_count = self.port_select.get_options_count();
-
-        // Use global navigation for dropdown
-        if let Some(nav_cmd) = map_global_nav_key(&key) {
-            match nav_cmd {
-                GlobalNavCommand::Up => {
-                    if self.port_select.dropdown_index > 0 {
-                        self.port_select.dropdown_index -= 1;
-                    }
-                    return;
-                }
-                GlobalNavCommand::Down => {
-                    if self.port_select.dropdown_index < options_count - 1 {
-                        self.port_select.dropdown_index += 1;
-                    }
-                    return;
-                }
-                GlobalNavCommand::Confirm => {
-                    self.port_select.apply_dropdown_selection();
-                    self.input.mode = InputMode::Normal;
-                    return;
-                }
-                GlobalNavCommand::Cancel => {
-                    self.input.mode = InputMode::Normal;
-                    return;
-                }
-                _ => {}
+        match handle_dropdown_key(
+            key,
+            options_count,
+            &mut self.port_select.config.dropdown_index,
+            &self.settings.keybindings.dropdown,
+        ) {
+            DropdownResult::Confirmed => {
+                self.port_select.apply_dropdown_selection();
+                self.input.mode = InputMode::Normal;
             }
-        }
-
-        // Fall back to dropdown-specific bindings
-        if let Some(cmd) = self.settings.keybindings.dropdown.find_command(&key) {
-            match cmd {
-                DropdownCommand::Confirm => {
-                    self.port_select.apply_dropdown_selection();
-                    self.input.mode = InputMode::Normal;
-                }
-                DropdownCommand::Cancel => {
-                    self.input.mode = InputMode::Normal;
-                }
+            DropdownResult::Cancelled => {
+                self.input.mode = InputMode::Normal;
             }
+            DropdownResult::Navigated | DropdownResult::NotHandled => {}
         }
     }
 
     fn handle_key_settings_dropdown(&mut self, key: KeyEvent) {
         const OPTIONS_COUNT: usize = 2; // Regex, Normal
-
-        // Use global navigation for dropdown
-        if let Some(nav_cmd) = map_global_nav_key(&key) {
-            match nav_cmd {
-                GlobalNavCommand::Up => {
-                    if self.settings_panel.dropdown_index > 0 {
-                        self.settings_panel.dropdown_index -= 1;
-                    }
-                    return;
-                }
-                GlobalNavCommand::Down => {
-                    if self.settings_panel.dropdown_index < OPTIONS_COUNT - 1 {
-                        self.settings_panel.dropdown_index += 1;
-                    }
-                    return;
-                }
-                GlobalNavCommand::Confirm => {
-                    self.apply_settings_dropdown_selection();
-                    self.input.mode = InputMode::Normal;
-                    return;
-                }
-                GlobalNavCommand::Cancel => {
-                    self.input.mode = InputMode::Normal;
-                    return;
-                }
-                _ => {}
+        match handle_dropdown_key(
+            key,
+            OPTIONS_COUNT,
+            &mut self.settings_panel.dropdown_index,
+            &self.settings.keybindings.dropdown,
+        ) {
+            DropdownResult::Confirmed => {
+                self.apply_settings_dropdown_selection();
+                self.input.mode = InputMode::Normal;
             }
-        }
-
-        // Fall back to dropdown-specific bindings
-        if let Some(cmd) = self.settings.keybindings.dropdown.find_command(&key) {
-            match cmd {
-                DropdownCommand::Confirm => {
-                    self.apply_settings_dropdown_selection();
-                    self.input.mode = InputMode::Normal;
-                }
-                DropdownCommand::Cancel => {
-                    self.input.mode = InputMode::Normal;
-                }
+            DropdownResult::Cancelled => {
+                self.input.mode = InputMode::Normal;
             }
+            DropdownResult::Navigated | DropdownResult::NotHandled => {}
         }
     }
 
@@ -2617,8 +2581,8 @@ impl App {
         match self.settings_panel.selected_general_setting {
             GeneralSetting::SearchMode => {
                 self.search.mode = match self.settings_panel.dropdown_index {
-                    0 => SearchMode::Regex,
-                    _ => SearchMode::Normal,
+                    0 => PatternMode::Regex,
+                    _ => PatternMode::Normal,
                 };
                 self.status = format!("Search mode: {}", self.search.mode.name());
                 // Re-run search if there's an active pattern
@@ -2628,8 +2592,8 @@ impl App {
             }
             GeneralSetting::FilterMode => {
                 self.traffic.filter_mode = match self.settings_panel.dropdown_index {
-                    0 => FilterMode::Regex,
-                    _ => FilterMode::Normal,
+                    0 => PatternMode::Regex,
+                    _ => PatternMode::Normal,
                 };
                 self.status = format!("Filter mode: {}", self.traffic.filter_mode.name());
             }
@@ -2658,7 +2622,7 @@ impl App {
             return;
         }
 
-        let config_visible = self.traffic.config_panel_visible;
+        let config_visible = self.traffic.config.visible;
         let config_focused = self.traffic.focus == TrafficFocus::Config;
 
         // First check global navigation commands (j/k, Ctrl+u/d, g, G, etc.)
@@ -2667,8 +2631,8 @@ impl App {
                 GlobalNavCommand::Up => {
                     if config_focused {
                         // Move up in config panel
-                        self.traffic.config_field = self.traffic.config_field.prev();
-                        self.traffic.adjust_config_scroll(CONFIG_VISIBLE_HEIGHT);
+                        self.traffic.config.field = self.traffic.config.field.prev();
+                        self.traffic.config.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
                     } else {
                         // Scroll up in traffic
                         self.traffic.was_at_bottom = false;
@@ -2679,8 +2643,8 @@ impl App {
                 GlobalNavCommand::Down => {
                     if config_focused {
                         // Move down in config panel
-                        self.traffic.config_field = self.traffic.config_field.next();
-                        self.traffic.adjust_config_scroll(CONFIG_VISIBLE_HEIGHT);
+                        self.traffic.config.field = self.traffic.config.field.next();
+                        self.traffic.config.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
                     } else {
                         // Scroll down in traffic
                         self.traffic.scroll_offset = self.traffic.scroll_offset.saturating_add(1);
@@ -2719,9 +2683,9 @@ impl App {
                 GlobalNavCommand::Confirm => {
                     if config_focused {
                         // Toggle or open dropdown/text input for config field
-                        if self.traffic.config_field.is_toggle() {
+                        if self.traffic.config.field.is_toggle() {
                             self.handle_traffic_toggle();
-                        } else if self.traffic.config_field.is_text_input() {
+                        } else if self.traffic.config.field.is_text_input() {
                             self.input.buffer = self.traffic.get_text_value();
                             self.input.mode = InputMode::TrafficConfigTextInput;
                             self.status = InputMode::TrafficConfigTextInput.entry_prompt().to_string();
@@ -2795,8 +2759,8 @@ impl App {
                 }
             }
             TrafficCommand::ToggleConfigPanel => {
-                self.traffic.config_panel_visible = !self.traffic.config_panel_visible;
-                if self.traffic.config_panel_visible {
+                self.traffic.config.visible = !self.traffic.config.visible;
+                if self.traffic.config.visible {
                     // Focus the config panel when opening it
                     self.traffic.focus = TrafficFocus::Config;
                 } else {
@@ -2808,7 +2772,7 @@ impl App {
                 self.traffic.focus = TrafficFocus::Traffic;
             }
             TrafficCommand::FocusConfig => {
-                if self.traffic.config_panel_visible {
+                if self.traffic.config.visible {
                     self.traffic.focus = TrafficFocus::Config;
                 }
             }
@@ -2901,7 +2865,7 @@ impl App {
 
         // If config panel is focused, handle config navigation first
         // This takes priority over pane-specific handlers
-        if self.traffic.config_panel_visible
+        if self.traffic.config.visible
             && self.traffic.focus == TrafficFocus::Config
             && self.handle_key_config_panel(key)
         {
@@ -2926,19 +2890,19 @@ impl App {
         if let Some(nav_cmd) = map_global_nav_key(&key) {
             match nav_cmd {
                 GlobalNavCommand::Up => {
-                    self.traffic.config_field = self.traffic.config_field.prev();
-                    self.traffic.adjust_config_scroll(CONFIG_VISIBLE_HEIGHT);
+                    self.traffic.config.field = self.traffic.config.field.prev();
+                    self.traffic.config.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
                     return true;
                 }
                 GlobalNavCommand::Down => {
-                    self.traffic.config_field = self.traffic.config_field.next();
-                    self.traffic.adjust_config_scroll(CONFIG_VISIBLE_HEIGHT);
+                    self.traffic.config.field = self.traffic.config.field.next();
+                    self.traffic.config.adjust_scroll(CONFIG_VISIBLE_HEIGHT);
                     return true;
                 }
                 GlobalNavCommand::Confirm => {
-                    if self.traffic.config_field.is_toggle() {
+                    if self.traffic.config.field.is_toggle() {
                         self.handle_traffic_toggle();
-                    } else if self.traffic.config_field.is_text_input() {
+                    } else if self.traffic.config.field.is_text_input() {
                         self.input.buffer = self.traffic.get_text_value();
                         self.input.mode = InputMode::TrafficConfigTextInput;
                         self.status = InputMode::TrafficConfigTextInput.entry_prompt().to_string();
@@ -2961,7 +2925,7 @@ impl App {
 
         // 'c' closes config panel
         if key.code == KeyCode::Char('c') && key.modifiers.is_empty() {
-            self.traffic.config_panel_visible = false;
+            self.traffic.config.visible = false;
             self.traffic.focus = TrafficFocus::Traffic;
             self.needs_full_clear = true;
             return true;
@@ -3065,7 +3029,7 @@ impl App {
     }
 
     fn update_focus_status(&mut self) {
-        if self.traffic.config_panel_visible && self.traffic.focus == TrafficFocus::Config {
+        if self.traffic.config.visible && self.traffic.focus == TrafficFocus::Config {
             self.status = "Focus: Config".to_string();
         } else {
             let content = self.layout.focused_content();
@@ -3085,7 +3049,7 @@ impl App {
     /// Returns true if focus changed
     fn navigate_focus_left(&mut self) -> bool {
         // If config panel is focused, move to the rightmost pane
-        if self.traffic.config_panel_visible && self.traffic.focus == TrafficFocus::Config {
+        if self.traffic.config.visible && self.traffic.focus == TrafficFocus::Config {
             self.traffic.focus = TrafficFocus::Traffic;
             // If split, focus the secondary (rightmost) pane
             if self.layout.is_split() {
@@ -3115,12 +3079,12 @@ impl App {
                     // Move to secondary pane
                     self.layout.focus_right();
                     return true;
-                } else if self.traffic.config_panel_visible {
+                } else if self.traffic.config.visible {
                     // Already on secondary, move to config
                     self.traffic.focus = TrafficFocus::Config;
                     return true;
                 }
-            } else if self.traffic.config_panel_visible {
+            } else if self.traffic.config.visible {
                 // No split, move directly to config
                 self.traffic.focus = TrafficFocus::Config;
                 return true;
@@ -3144,8 +3108,8 @@ impl App {
 
         // Toggle config panel with 'c'
         if key.code == KeyCode::Char('c') && key.modifiers.is_empty() {
-            self.traffic.config_panel_visible = !self.traffic.config_panel_visible;
-            if self.traffic.config_panel_visible {
+            self.traffic.config.visible = !self.traffic.config.visible;
+            if self.traffic.config.visible {
                 self.traffic.focus = TrafficFocus::Config;
             } else {
                 self.traffic.focus = TrafficFocus::Traffic;
@@ -3308,58 +3272,26 @@ impl App {
 
     fn handle_key_traffic_config_dropdown(&mut self, key: KeyEvent) {
         let options_count = self.traffic.get_options_count();
-
-        // Use global navigation for dropdown
-        if let Some(nav_cmd) = map_global_nav_key(&key) {
-            match nav_cmd {
-                GlobalNavCommand::Up => {
-                    if self.traffic.dropdown_index > 0 {
-                        self.traffic.dropdown_index -= 1;
-                    }
-                    return;
-                }
-                GlobalNavCommand::Down => {
-                    if self.traffic.dropdown_index < options_count.saturating_sub(1) {
-                        self.traffic.dropdown_index += 1;
-                    }
-                    return;
-                }
-                GlobalNavCommand::Confirm => {
-                    self.traffic.apply_dropdown_selection();
-                    self.input.mode = InputMode::Normal;
-                    self.needs_full_clear = true;
-                    self.status = format!(
-                        "{}: {}",
-                        self.traffic.config_field.label(),
-                        self.traffic.get_config_display(self.traffic.config_field)
-                    );
-                    return;
-                }
-                GlobalNavCommand::Cancel => {
-                    self.input.mode = InputMode::Normal;
-                    return;
-                }
-                _ => {}
+        match handle_dropdown_key(
+            key,
+            options_count,
+            &mut self.traffic.config.dropdown_index,
+            &self.settings.keybindings.dropdown,
+        ) {
+            DropdownResult::Confirmed => {
+                self.traffic.apply_dropdown_selection();
+                self.input.mode = InputMode::Normal;
+                self.needs_full_clear = true;
+                self.status = format!(
+                    "{}: {}",
+                    self.traffic.config.field.label(),
+                    self.traffic.get_config_display(self.traffic.config.field)
+                );
             }
-        }
-
-        // Fall back to dropdown-specific bindings
-        if let Some(cmd) = self.settings.keybindings.dropdown.find_command(&key) {
-            match cmd {
-                DropdownCommand::Confirm => {
-                    self.traffic.apply_dropdown_selection();
-                    self.input.mode = InputMode::Normal;
-                    self.needs_full_clear = true;
-                    self.status = format!(
-                        "{}: {}",
-                        self.traffic.config_field.label(),
-                        self.traffic.get_config_display(self.traffic.config_field)
-                    );
-                }
-                DropdownCommand::Cancel => {
-                    self.input.mode = InputMode::Normal;
-                }
+            DropdownResult::Cancelled => {
+                self.input.mode = InputMode::Normal;
             }
+            DropdownResult::Navigated | DropdownResult::NotHandled => {}
         }
     }
 
@@ -3379,7 +3311,7 @@ impl App {
 
     fn handle_key_config_text_input(&mut self, key: KeyEvent) {
         // For numeric fields, filter out non-numeric characters
-        if self.port_select.config_field.is_numeric_input()
+        if self.port_select.config.field.is_numeric_input()
             && let KeyCode::Char(c) = key.code
             && !c.is_ascii_digit()
         {
@@ -3391,8 +3323,8 @@ impl App {
                 self.port_select.apply_text_input(value.clone());
                 self.status = format!(
                     "{}: {}",
-                    self.port_select.config_field.label(),
-                    self.port_select.get_config_display(self.port_select.config_field)
+                    self.port_select.config.field.label(),
+                    self.port_select.get_config_display(self.port_select.config.field)
                 );
             }
             TextInputResult::Cancel => {
@@ -3408,8 +3340,8 @@ impl App {
                 self.traffic.apply_text_input(value.clone());
                 self.status = format!(
                     "{}: {}",
-                    self.traffic.config_field.label(),
-                    self.traffic.get_config_display(self.traffic.config_field)
+                    self.traffic.config.field.label(),
+                    self.traffic.get_config_display(self.traffic.config.field)
                 );
             }
             TextInputResult::Cancel => {
@@ -3430,7 +3362,7 @@ impl App {
         let mut matches = Vec::new();
 
         match self.search.mode {
-            SearchMode::Regex => {
+            PatternMode::Regex => {
                 // Compile the regex pattern
                 let regex = Regex::new(pattern).map_err(|e| format!("Invalid regex: {}", e))?;
 
@@ -3456,7 +3388,7 @@ impl App {
                     }
                 }
             }
-            SearchMode::Normal => {
+            PatternMode::Normal => {
                 // Case-insensitive literal search (original behavior)
                 let pattern_lower = pattern.to_lowercase();
 
@@ -3713,13 +3645,10 @@ impl App {
                 self.traffic.session_start = Some(std::time::SystemTime::now());
                 
                 // Copy pre-connection file save settings to traffic state
-                self.traffic.save_enabled = self.port_select.save_enabled;
-                self.traffic.save_format = self.port_select.save_format;
-                self.traffic.save_filename = self.port_select.save_filename.clone();
-                self.traffic.save_directory = self.port_select.save_directory.clone();
+                self.traffic.file_save = self.port_select.file_save.clone();
                 
                 // Start file saving if enabled in pre-connection settings
-                if self.traffic.save_enabled {
+                if self.traffic.file_save.enabled {
                     self.start_file_saving();
                 }
                 
@@ -3759,13 +3688,13 @@ impl App {
 
         // Build config
         let mut config = FileSaveConfig::new(
-            self.traffic.save_directory.clone(),
+            self.traffic.file_save.directory.clone(),
             &port_name,
-        ).with_format(self.traffic.save_format);
+        ).with_format(self.traffic.file_save.format);
 
         // Set custom filename if provided
-        if !self.traffic.save_filename.is_empty() {
-            config = config.with_filename(&self.traffic.save_filename);
+        if !self.traffic.file_save.filename.is_empty() {
+            config = config.with_filename(&self.traffic.file_save.filename);
         }
 
         // Start the file saver (spawns async task on the provided runtime)
@@ -3777,7 +3706,7 @@ impl App {
             }
             Err(e) => {
                 self.status = format!("Failed to start file saving: {}", e);
-                self.traffic.save_enabled = false;
+                self.traffic.file_save.enabled = false;
             }
         }
     }
@@ -3800,12 +3729,12 @@ impl App {
     /// Handle toggling a traffic config setting
     /// This is separate from TrafficState::toggle_setting to handle side effects like file saving
     fn handle_traffic_toggle(&mut self) {
-        let field = self.traffic.config_field;
+        let field = self.traffic.config.field;
         
         // Handle SaveEnabled specially - toggling during a session starts/stops file saving
         if field == TrafficConfigField::SaveEnabled {
-            self.traffic.save_enabled = !self.traffic.save_enabled;
-            if self.traffic.save_enabled {
+            self.traffic.file_save.enabled = !self.traffic.file_save.enabled;
+            if self.traffic.file_save.enabled {
                 // Start file saving when enabled during a session
                 self.start_file_saving();
             } else {
@@ -3879,4 +3808,60 @@ impl App {
     fn page_size(&self) -> usize {
         15
     }
+}
+
+/// Result of dropdown navigation
+enum DropdownResult {
+    /// Navigation handled (up/down), stay in dropdown mode
+    Navigated,
+    /// User confirmed selection
+    Confirmed,
+    /// User cancelled
+    Cancelled,
+    /// Key not handled by dropdown
+    NotHandled,
+}
+
+/// Handle dropdown navigation for any dropdown.
+/// This is a free function to avoid borrow checker issues with &mut self.
+fn handle_dropdown_key(
+    key: KeyEvent,
+    options_count: usize,
+    dropdown_index: &mut usize,
+    dropdown_bindings: &crate::settings::CommandBindings<DropdownCommand>,
+) -> DropdownResult {
+    // First try global navigation commands
+    if let Some(nav_cmd) = map_global_nav_key(&key) {
+        match nav_cmd {
+            GlobalNavCommand::Up => {
+                if *dropdown_index > 0 {
+                    *dropdown_index -= 1;
+                }
+                return DropdownResult::Navigated;
+            }
+            GlobalNavCommand::Down => {
+                if *dropdown_index < options_count.saturating_sub(1) {
+                    *dropdown_index += 1;
+                }
+                return DropdownResult::Navigated;
+            }
+            GlobalNavCommand::Confirm => {
+                return DropdownResult::Confirmed;
+            }
+            GlobalNavCommand::Cancel => {
+                return DropdownResult::Cancelled;
+            }
+            _ => {}
+        }
+    }
+
+    // Fall back to dropdown-specific bindings
+    if let Some(cmd) = dropdown_bindings.find_command(&key) {
+        match cmd {
+            DropdownCommand::Confirm => return DropdownResult::Confirmed,
+            DropdownCommand::Cancel => return DropdownResult::Cancelled,
+        }
+    }
+
+    DropdownResult::NotHandled
 }
