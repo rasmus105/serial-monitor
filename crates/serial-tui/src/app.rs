@@ -5,9 +5,10 @@ use std::time::Duration;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use regex::Regex;
 use serial_core::{
-    encode, list_ports, send_file, start_file_saver, DataBits, DataChunk, Encoding, FileSendConfig,
-    FileSendHandle, FileSendProgress, FileSaveConfig, FileSaverHandle, FlowControl, Parity,
-    PortInfo, SaveFormat, SerialConfig, Session, SessionEvent, SessionHandle, StopBits,
+    encode, list_ports, send_file, start_file_saver, ChunkingStrategy, DataBits, DataChunk,
+    Encoding, FileSaveConfig, FileSaverHandle, FileSendConfig, FileSendHandle, FileSendProgress,
+    FlowControl, LineDelimiter, Parity, PortInfo, SaveFormat, SerialConfig, Session,
+    SessionConfig, SessionEvent, SessionHandle, StopBits,
 };
 use strum::{EnumCount, EnumIter, IntoEnumIterator};
 
@@ -142,6 +143,101 @@ impl ConfigOption for SaveFormat {
             SaveFormat::Ascii => "ASCII",
             SaveFormat::Hex => "HEX",
             SaveFormat::Raw => "Raw",
+        }
+    }
+}
+
+// =============================================================================
+// Chunking Configuration Types
+// =============================================================================
+
+/// Chunking mode for UI selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChunkingMode {
+    /// Raw chunking - chunks based on OS read timing
+    #[default]
+    Raw,
+    /// Line-delimited chunking - splits on delimiter
+    LineDelimited,
+}
+
+impl ConfigOption for ChunkingMode {
+    fn all_variants() -> &'static [Self] {
+        &[ChunkingMode::Raw, ChunkingMode::LineDelimited]
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            ChunkingMode::Raw => "Raw",
+            ChunkingMode::LineDelimited => "Line Delimited",
+        }
+    }
+}
+
+/// Delimiter option for UI selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DelimiterOption {
+    /// Unix-style newline: \n
+    #[default]
+    Newline,
+    /// Windows-style: \r\n
+    CrLf,
+    /// Carriage return only: \r
+    Cr,
+    /// Custom delimiter (entered as text)
+    Custom,
+}
+
+impl ConfigOption for DelimiterOption {
+    fn all_variants() -> &'static [Self] {
+        &[
+            DelimiterOption::Newline,
+            DelimiterOption::CrLf,
+            DelimiterOption::Cr,
+            DelimiterOption::Custom,
+        ]
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            DelimiterOption::Newline => "\\n (LF)",
+            DelimiterOption::CrLf => "\\r\\n (CRLF)",
+            DelimiterOption::Cr => "\\r (CR)",
+            DelimiterOption::Custom => "Custom",
+        }
+    }
+}
+
+/// Size unit for max line length
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SizeUnit {
+    Bytes,
+    #[default]
+    KiB,
+    MiB,
+}
+
+impl ConfigOption for SizeUnit {
+    fn all_variants() -> &'static [Self] {
+        &[SizeUnit::Bytes, SizeUnit::KiB, SizeUnit::MiB]
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            SizeUnit::Bytes => "B",
+            SizeUnit::KiB => "KiB",
+            SizeUnit::MiB => "MiB",
+        }
+    }
+}
+
+impl SizeUnit {
+    /// Convert a value with this unit to bytes
+    pub fn to_bytes(&self, value: usize) -> usize {
+        match self {
+            SizeUnit::Bytes => value,
+            SizeUnit::KiB => value * 1024,
+            SizeUnit::MiB => value * 1024 * 1024,
         }
     }
 }
@@ -421,6 +517,17 @@ pub enum ConfigField {
     Parity,
     StopBits,
     FlowControl,
+    // Chunking fields
+    RxChunkingMode,
+    RxDelimiter,
+    RxCustomDelimiter,
+    RxMaxLineLength,
+    RxMaxLineLengthUnit,
+    TxChunkingMode,
+    TxDelimiter,
+    TxCustomDelimiter,
+    TxMaxLineLength,
+    TxMaxLineLengthUnit,
     // File saving fields
     SaveEnabled,
     SaveFormat,
@@ -573,6 +680,19 @@ impl ConfigField {
             ConfigField::Parity => "Parity",
             ConfigField::StopBits => "Stop Bits",
             ConfigField::FlowControl => "Flow Ctrl",
+            // RX Chunking
+            ConfigField::RxChunkingMode => "RX Mode",
+            ConfigField::RxDelimiter => "RX Delimiter",
+            ConfigField::RxCustomDelimiter => "RX Custom",
+            ConfigField::RxMaxLineLength => "RX Max Length",
+            ConfigField::RxMaxLineLengthUnit => "Unit",
+            // TX Chunking
+            ConfigField::TxChunkingMode => "TX Mode",
+            ConfigField::TxDelimiter => "TX Delimiter",
+            ConfigField::TxCustomDelimiter => "TX Custom",
+            ConfigField::TxMaxLineLength => "TX Max Length",
+            ConfigField::TxMaxLineLengthUnit => "Unit",
+            // File saving
             ConfigField::SaveEnabled => "Save to File",
             ConfigField::SaveFormat => "Save Format",
             ConfigField::SaveFilename => "Filename",
@@ -584,7 +704,20 @@ impl ConfigField {
     pub fn is_text_input(&self) -> bool {
         matches!(
             self,
-            ConfigField::SaveFilename | ConfigField::SaveDirectory
+            ConfigField::SaveFilename
+                | ConfigField::SaveDirectory
+                | ConfigField::RxCustomDelimiter
+                | ConfigField::TxCustomDelimiter
+                | ConfigField::RxMaxLineLength
+                | ConfigField::TxMaxLineLength
+        )
+    }
+
+    /// Whether this field is a numeric-only text input
+    pub fn is_numeric_input(&self) -> bool {
+        matches!(
+            self,
+            ConfigField::RxMaxLineLength | ConfigField::TxMaxLineLength
         )
     }
 
@@ -604,9 +737,33 @@ impl ConfigField {
         )
     }
 
+    /// Check if this is an RX chunking field (for section grouping)
+    pub fn is_rx_chunking_field(&self) -> bool {
+        matches!(
+            self,
+            ConfigField::RxChunkingMode
+                | ConfigField::RxDelimiter
+                | ConfigField::RxCustomDelimiter
+                | ConfigField::RxMaxLineLength
+                | ConfigField::RxMaxLineLengthUnit
+        )
+    }
+
+    /// Check if this is a TX chunking field (for section grouping)
+    pub fn is_tx_chunking_field(&self) -> bool {
+        matches!(
+            self,
+            ConfigField::TxChunkingMode
+                | ConfigField::TxDelimiter
+                | ConfigField::TxCustomDelimiter
+                | ConfigField::TxMaxLineLength
+                | ConfigField::TxMaxLineLengthUnit
+        )
+    }
+
     /// Check if this is a serial config field
     pub fn is_serial_field(&self) -> bool {
-        !self.is_file_saving_field()
+        !self.is_file_saving_field() && !self.is_rx_chunking_field() && !self.is_tx_chunking_field()
     }
 }
 
@@ -787,6 +944,28 @@ pub struct PortSelectState {
     pub dropdown_index: usize,
     /// Scroll offset for config panel
     pub config_scroll_offset: usize,
+    // Chunking configuration (RX)
+    /// RX chunking mode
+    pub rx_chunking_mode: ChunkingMode,
+    /// RX delimiter option
+    pub rx_delimiter: DelimiterOption,
+    /// RX custom delimiter (hex string like "00" or "0D0A")
+    pub rx_custom_delimiter: String,
+    /// RX max line length value
+    pub rx_max_line_length: String,
+    /// RX max line length unit
+    pub rx_max_line_length_unit: SizeUnit,
+    // Chunking configuration (TX)
+    /// TX chunking mode
+    pub tx_chunking_mode: ChunkingMode,
+    /// TX delimiter option
+    pub tx_delimiter: DelimiterOption,
+    /// TX custom delimiter (hex string like "00" or "0D0A")
+    pub tx_custom_delimiter: String,
+    /// TX max line length value
+    pub tx_max_line_length: String,
+    /// TX max line length unit
+    pub tx_max_line_length_unit: SizeUnit,
     // File saving configuration (pre-connection)
     /// Whether file saving should start on connect
     pub save_enabled: bool,
@@ -809,6 +988,19 @@ impl Default for PortSelectState {
             serial_config: SerialConfig::default(),
             dropdown_index: 0,
             config_scroll_offset: 0,
+            // RX chunking defaults
+            rx_chunking_mode: ChunkingMode::default(),
+            rx_delimiter: DelimiterOption::default(),
+            rx_custom_delimiter: String::new(),
+            rx_max_line_length: "64".to_string(),
+            rx_max_line_length_unit: SizeUnit::KiB,
+            // TX chunking defaults
+            tx_chunking_mode: ChunkingMode::default(),
+            tx_delimiter: DelimiterOption::default(),
+            tx_custom_delimiter: String::new(),
+            tx_max_line_length: "64".to_string(),
+            tx_max_line_length_unit: SizeUnit::KiB,
+            // File saving defaults
             save_enabled: false,
             save_format: SaveFormat::default(),
             save_filename: String::new(), // Empty = auto-generated
@@ -865,8 +1057,35 @@ impl PortSelectState {
                 .into_iter()
                 .map(String::from)
                 .collect(),
+            // Chunking mode options
+            ConfigField::RxChunkingMode | ConfigField::TxChunkingMode => {
+                ChunkingMode::all_display_names()
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+            // Delimiter options
+            ConfigField::RxDelimiter | ConfigField::TxDelimiter => {
+                DelimiterOption::all_display_names()
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+            // Size unit options
+            ConfigField::RxMaxLineLengthUnit | ConfigField::TxMaxLineLengthUnit => {
+                SizeUnit::all_display_names()
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
             // Toggle and text input fields don't have dropdown options
-            ConfigField::SaveEnabled | ConfigField::SaveFilename | ConfigField::SaveDirectory => vec![],
+            ConfigField::SaveEnabled
+            | ConfigField::SaveFilename
+            | ConfigField::SaveDirectory
+            | ConfigField::RxCustomDelimiter
+            | ConfigField::TxCustomDelimiter
+            | ConfigField::RxMaxLineLength
+            | ConfigField::TxMaxLineLength => vec![],
         }
     }
 
@@ -882,7 +1101,21 @@ impl PortSelectState {
             ConfigField::StopBits => self.serial_config.stop_bits.index(),
             ConfigField::FlowControl => self.serial_config.flow_control.index(),
             ConfigField::SaveFormat => self.save_format.index(),
-            ConfigField::SaveEnabled | ConfigField::SaveFilename | ConfigField::SaveDirectory => 0,
+            // Chunking fields
+            ConfigField::RxChunkingMode => self.rx_chunking_mode.index(),
+            ConfigField::TxChunkingMode => self.tx_chunking_mode.index(),
+            ConfigField::RxDelimiter => self.rx_delimiter.index(),
+            ConfigField::TxDelimiter => self.tx_delimiter.index(),
+            ConfigField::RxMaxLineLengthUnit => self.rx_max_line_length_unit.index(),
+            ConfigField::TxMaxLineLengthUnit => self.tx_max_line_length_unit.index(),
+            // Text input and toggle fields
+            ConfigField::SaveEnabled
+            | ConfigField::SaveFilename
+            | ConfigField::SaveDirectory
+            | ConfigField::RxCustomDelimiter
+            | ConfigField::TxCustomDelimiter
+            | ConfigField::RxMaxLineLength
+            | ConfigField::TxMaxLineLength => 0,
         }
     }
 
@@ -906,6 +1139,30 @@ impl PortSelectState {
                 }
             }
             ConfigField::SaveDirectory => self.save_directory.clone(),
+            // RX Chunking fields
+            ConfigField::RxChunkingMode => self.rx_chunking_mode.display_name().to_string(),
+            ConfigField::RxDelimiter => self.rx_delimiter.display_name().to_string(),
+            ConfigField::RxCustomDelimiter => {
+                if self.rx_custom_delimiter.is_empty() {
+                    "(hex bytes)".to_string()
+                } else {
+                    self.rx_custom_delimiter.clone()
+                }
+            }
+            ConfigField::RxMaxLineLength => self.rx_max_line_length.clone(),
+            ConfigField::RxMaxLineLengthUnit => self.rx_max_line_length_unit.display_name().to_string(),
+            // TX Chunking fields
+            ConfigField::TxChunkingMode => self.tx_chunking_mode.display_name().to_string(),
+            ConfigField::TxDelimiter => self.tx_delimiter.display_name().to_string(),
+            ConfigField::TxCustomDelimiter => {
+                if self.tx_custom_delimiter.is_empty() {
+                    "(hex bytes)".to_string()
+                } else {
+                    self.tx_custom_delimiter.clone()
+                }
+            }
+            ConfigField::TxMaxLineLength => self.tx_max_line_length.clone(),
+            ConfigField::TxMaxLineLengthUnit => self.tx_max_line_length_unit.display_name().to_string(),
         }
     }
 
@@ -937,8 +1194,33 @@ impl PortSelectState {
             ConfigField::SaveFormat => {
                 self.save_format = SaveFormat::from_index(self.dropdown_index);
             }
+            // Chunking dropdown fields
+            ConfigField::RxChunkingMode => {
+                self.rx_chunking_mode = ChunkingMode::from_index(self.dropdown_index);
+            }
+            ConfigField::TxChunkingMode => {
+                self.tx_chunking_mode = ChunkingMode::from_index(self.dropdown_index);
+            }
+            ConfigField::RxDelimiter => {
+                self.rx_delimiter = DelimiterOption::from_index(self.dropdown_index);
+            }
+            ConfigField::TxDelimiter => {
+                self.tx_delimiter = DelimiterOption::from_index(self.dropdown_index);
+            }
+            ConfigField::RxMaxLineLengthUnit => {
+                self.rx_max_line_length_unit = SizeUnit::from_index(self.dropdown_index);
+            }
+            ConfigField::TxMaxLineLengthUnit => {
+                self.tx_max_line_length_unit = SizeUnit::from_index(self.dropdown_index);
+            }
             // Toggle and text input fields don't use dropdown
-            ConfigField::SaveEnabled | ConfigField::SaveFilename | ConfigField::SaveDirectory => {}
+            ConfigField::SaveEnabled
+            | ConfigField::SaveFilename
+            | ConfigField::SaveDirectory
+            | ConfigField::RxCustomDelimiter
+            | ConfigField::TxCustomDelimiter
+            | ConfigField::RxMaxLineLength
+            | ConfigField::TxMaxLineLength => {}
         }
     }
 
@@ -951,15 +1233,31 @@ impl PortSelectState {
             ConfigField::StopBits => StopBits::all_variants().len(),
             ConfigField::FlowControl => FlowControl::all_variants().len(),
             ConfigField::SaveFormat => SaveFormat::all_variants().len(),
-            ConfigField::SaveEnabled | ConfigField::SaveFilename | ConfigField::SaveDirectory => 0,
+            // Chunking dropdown fields
+            ConfigField::RxChunkingMode | ConfigField::TxChunkingMode => {
+                ChunkingMode::all_variants().len()
+            }
+            ConfigField::RxDelimiter | ConfigField::TxDelimiter => {
+                DelimiterOption::all_variants().len()
+            }
+            ConfigField::RxMaxLineLengthUnit | ConfigField::TxMaxLineLengthUnit => {
+                SizeUnit::all_variants().len()
+            }
+            // Toggle and text input fields
+            ConfigField::SaveEnabled
+            | ConfigField::SaveFilename
+            | ConfigField::SaveDirectory
+            | ConfigField::RxCustomDelimiter
+            | ConfigField::TxCustomDelimiter
+            | ConfigField::RxMaxLineLength
+            | ConfigField::TxMaxLineLength => 0,
         }
     }
 
     /// Toggle a boolean setting
     pub fn toggle_setting(&mut self) {
-        match self.config_field {
-            ConfigField::SaveEnabled => self.save_enabled = !self.save_enabled,
-            _ => {}
+        if self.config_field == ConfigField::SaveEnabled {
+            self.save_enabled = !self.save_enabled;
         }
     }
 
@@ -972,6 +1270,24 @@ impl PortSelectState {
             ConfigField::SaveDirectory => {
                 self.save_directory = value;
             }
+            ConfigField::RxCustomDelimiter => {
+                self.rx_custom_delimiter = value;
+            }
+            ConfigField::TxCustomDelimiter => {
+                self.tx_custom_delimiter = value;
+            }
+            ConfigField::RxMaxLineLength => {
+                // Only store if it's a valid number or empty
+                if value.is_empty() || value.parse::<usize>().is_ok() {
+                    self.rx_max_line_length = value;
+                }
+            }
+            ConfigField::TxMaxLineLength => {
+                // Only store if it's a valid number or empty
+                if value.is_empty() || value.parse::<usize>().is_ok() {
+                    self.tx_max_line_length = value;
+                }
+            }
             _ => {}
         }
     }
@@ -981,6 +1297,10 @@ impl PortSelectState {
         match self.config_field {
             ConfigField::SaveFilename => self.save_filename.clone(),
             ConfigField::SaveDirectory => self.save_directory.clone(),
+            ConfigField::RxCustomDelimiter => self.rx_custom_delimiter.clone(),
+            ConfigField::TxCustomDelimiter => self.tx_custom_delimiter.clone(),
+            ConfigField::RxMaxLineLength => self.rx_max_line_length.clone(),
+            ConfigField::TxMaxLineLength => self.tx_max_line_length.clone(),
             _ => String::new(),
         }
     }
@@ -990,11 +1310,19 @@ impl PortSelectState {
     pub fn adjust_scroll(&mut self, visible_height: usize) {
         // The field index gives us the line number of the field
         // We need to account for separators:
+        // - "RX Chunking" section has 2 lines (spacer + separator) before RxChunkingMode
+        // - "TX Chunking" section has 2 lines (spacer + separator) before TxChunkingMode
         // - "File Saving" section has 2 lines (spacer + separator) before SaveEnabled
         let field_idx = self.config_field.index();
-        let line_idx = if self.config_field.is_file_saving_field() {
-            // Add 2 for the "File Saving" separator (spacer + header)
+        let line_idx = if self.config_field.is_rx_chunking_field() {
+            // Add 2 for the "RX Chunking" separator
             field_idx + 2
+        } else if self.config_field.is_tx_chunking_field() {
+            // Add 4 for both "RX Chunking" and "TX Chunking" separators
+            field_idx + 4
+        } else if self.config_field.is_file_saving_field() {
+            // Add 6 for all three separators
+            field_idx + 6
         } else {
             field_idx
         };
@@ -1005,6 +1333,90 @@ impl PortSelectState {
         } else if line_idx >= self.config_scroll_offset + visible_height {
             self.config_scroll_offset = line_idx.saturating_sub(visible_height - 1);
         }
+    }
+
+    /// Build the SessionConfig from the current chunking settings
+    pub fn build_session_config(&self) -> SessionConfig {
+        let rx_chunking = self.build_chunking_strategy(
+            self.rx_chunking_mode,
+            self.rx_delimiter,
+            &self.rx_custom_delimiter,
+            &self.rx_max_line_length,
+            self.rx_max_line_length_unit,
+        );
+        let tx_chunking = self.build_chunking_strategy(
+            self.tx_chunking_mode,
+            self.tx_delimiter,
+            &self.tx_custom_delimiter,
+            &self.tx_max_line_length,
+            self.tx_max_line_length_unit,
+        );
+
+        SessionConfig::new()
+            .with_rx_chunking(rx_chunking)
+            .with_tx_chunking(tx_chunking)
+    }
+
+    /// Build a ChunkingStrategy from UI settings
+    fn build_chunking_strategy(
+        &self,
+        mode: ChunkingMode,
+        delimiter_opt: DelimiterOption,
+        custom_delimiter: &str,
+        max_length: &str,
+        length_unit: SizeUnit,
+    ) -> ChunkingStrategy {
+        match mode {
+            ChunkingMode::Raw => ChunkingStrategy::Raw,
+            ChunkingMode::LineDelimited => {
+                let delimiter = match delimiter_opt {
+                    DelimiterOption::Newline => LineDelimiter::Newline,
+                    DelimiterOption::CrLf => LineDelimiter::CrLf,
+                    DelimiterOption::Cr => LineDelimiter::Cr,
+                    DelimiterOption::Custom => {
+                        // Parse hex string like "00" or "0D0A" into bytes
+                        let bytes = Self::parse_hex_string(custom_delimiter);
+                        if bytes.len() == 1 {
+                            LineDelimiter::Byte(bytes[0])
+                        } else if !bytes.is_empty() {
+                            LineDelimiter::Bytes(bytes)
+                        } else {
+                            // Fallback to newline if parsing fails
+                            LineDelimiter::Newline
+                        }
+                    }
+                };
+
+                let max_line_length = max_length
+                    .parse::<usize>()
+                    .map(|v| length_unit.to_bytes(v))
+                    .unwrap_or(64 * 1024); // Default 64 KiB
+
+                ChunkingStrategy::with_delimiter(delimiter)
+                    .with_max_line_length(max_line_length)
+            }
+        }
+    }
+
+    /// Parse a hex string like "00", "0D0A", or "DE AD BE EF" into bytes
+    fn parse_hex_string(s: &str) -> Vec<u8> {
+        // Remove spaces and parse pairs of hex digits
+        let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+        let mut bytes = Vec::new();
+        let mut chars = clean.chars().peekable();
+        
+        while chars.peek().is_some() {
+            let high = chars.next();
+            let low = chars.next();
+            
+            if let (Some(h), Some(l)) = (high, low)
+                && let Ok(byte) = u8::from_str_radix(&format!("{}{}", h, l), 16)
+            {
+                bytes.push(byte);
+            }
+        }
+        
+        bytes
     }
 }
 
@@ -2966,6 +3378,14 @@ impl App {
     }
 
     fn handle_key_config_text_input(&mut self, key: KeyEvent) {
+        // For numeric fields, filter out non-numeric characters
+        if self.port_select.config_field.is_numeric_input()
+            && let KeyCode::Char(c) = key.code
+            && !c.is_ascii_digit()
+        {
+            return; // Ignore non-numeric characters
+        }
+        
         match self.input.handle_text_input(key) {
             TextInputResult::Submit(value) => {
                 self.port_select.apply_text_input(value.clone());
@@ -3280,11 +3700,12 @@ impl App {
     }
 
     fn connect_to_port(&mut self, port_name: &str) {
-        let config = self.port_select.serial_config.clone();
+        let serial_config = self.port_select.serial_config.clone();
+        let session_config = self.port_select.build_session_config();
 
         self.status = format!("Connecting to {}...", port_name);
 
-        match self.runtime.block_on(Session::connect(port_name, config)) {
+        match self.runtime.block_on(Session::connect_with_config(port_name, serial_config, session_config)) {
             Ok(handle) => {
                 self.connection = ConnectionState::Connected(handle);
                 self.view = View::Connected;

@@ -440,9 +440,35 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     // Build config lines using ConfigField iterator, grouping by section
     let panel_width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
+    let mut in_rx_chunking_section = false;
+    let mut in_tx_chunking_section = false;
     let mut in_file_save_section = false;
 
     for field in ConfigField::iter() {
+        // Add separator before RX chunking section
+        if field.is_rx_chunking_field() && !in_rx_chunking_section {
+            in_rx_chunking_section = true;
+            lines.push(Line::from("")); // Spacer
+            lines.push(Line::from(Span::styled(
+                create_separator("RX Chunking", panel_width),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+        
+        // Add separator before TX chunking section
+        if field.is_tx_chunking_field() && !in_tx_chunking_section {
+            in_tx_chunking_section = true;
+            lines.push(Line::from("")); // Spacer
+            lines.push(Line::from(Span::styled(
+                create_separator("TX Chunking", panel_width),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
+        
         // Add separator before file saving section
         if field.is_file_saving_field() && !in_file_save_section {
             in_file_save_section = true;
