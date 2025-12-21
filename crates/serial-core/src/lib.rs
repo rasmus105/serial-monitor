@@ -4,6 +4,7 @@
 //! - Serial port enumeration and connection
 //! - Data buffering with timestamps and direction tracking
 //! - Async I/O with channel-based communication
+//! - Search and filter utilities for encoded data
 //!
 //! # Design Principles
 //!
@@ -18,6 +19,7 @@ mod error;
 mod file_saver;
 mod file_sender;
 mod port;
+pub mod search;
 mod session;
 
 pub use buffer::{DataBuffer, DataChunk, Direction};
@@ -27,4 +29,5 @@ pub use error::{Error, Result};
 pub use file_saver::{start_file_saver, FileSaveConfig, FileSaverCommand, FileSaverHandle, SaveFormat};
 pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
 pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
+pub use search::{PatternMatcher, PatternMode, SearchEngine, SearchMatch, SearchResult};
 pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};

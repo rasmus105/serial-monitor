@@ -30,7 +30,12 @@ pub enum SaveFormat {
 impl SaveFormat {
     /// Get all available formats
     pub fn all() -> &'static [SaveFormat] {
-        &[SaveFormat::Utf8, SaveFormat::Ascii, SaveFormat::Hex, SaveFormat::Raw]
+        &[
+            SaveFormat::Utf8,
+            SaveFormat::Ascii,
+            SaveFormat::Hex,
+            SaveFormat::Raw,
+        ]
     }
 
     /// Get the display name for this format
@@ -160,9 +165,10 @@ impl FileSaveConfig {
 
     /// Generate the full file path
     pub fn generate_path(&self) -> PathBuf {
-        let filename = self.filename.clone().unwrap_or_else(|| {
-            generate_auto_filename(&self.port_name, self.format)
-        });
+        let filename = self
+            .filename
+            .clone()
+            .unwrap_or_else(|| generate_auto_filename(&self.port_name, self.format));
         self.directory.join(filename)
     }
 }
@@ -213,7 +219,6 @@ fn format_iso8601_timestamp(time: SystemTime) -> String {
 
 /// Convert days since Unix epoch to year, month, day
 fn days_to_ymd(days: i64) -> (i32, u32, u32) {
-    // Algorithm from https://howardhinnant.github.io/date_algorithms.html
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
     let doe = (z - era * 146097) as u32;
@@ -235,9 +240,12 @@ fn format_file_timestamp(time: SystemTime) -> String {
 /// Start a file saver task
 ///
 /// Returns a handle for sending data to be saved.
-/// 
+///
 /// This function must be called with a Tokio runtime handle to spawn the background task.
-pub fn start_file_saver(config: FileSaveConfig, runtime: &tokio::runtime::Handle) -> crate::Result<FileSaverHandle> {
+pub fn start_file_saver(
+    config: FileSaveConfig,
+    runtime: &tokio::runtime::Handle,
+) -> crate::Result<FileSaverHandle> {
     let file_path = config.generate_path();
 
     // Create directory if it doesn't exist
@@ -274,16 +282,14 @@ async fn file_saver_task(
     file_path: PathBuf,
 ) {
     let mut writer = BufWriter::new(file);
-    let mut format_changed = false;
 
     while let Some(cmd) = command_rx.recv().await {
         match cmd {
             FileSaverCommand::Write(chunk) => {
-                if let Err(e) = write_chunk(&mut writer, &chunk, format, format_changed) {
+                if let Err(e) = write_chunk(&mut writer, &chunk, format) {
                     eprintln!("Error writing to file {:?}: {}", file_path, e);
                     break;
                 }
-                format_changed = false;
 
                 // Flush periodically (every write for now, could be optimized)
                 if let Err(e) = writer.flush() {
@@ -294,10 +300,10 @@ async fn file_saver_task(
             FileSaverCommand::ChangeFormat(new_format) => {
                 if new_format != format {
                     format = new_format;
-                    format_changed = true;
                     // Write a format change marker (for non-raw formats)
                     if format != SaveFormat::Raw {
-                        let marker = format!("\n--- Format changed to {} ---\n", format.display_name());
+                        let marker =
+                            format!("\n--- Format changed to {} ---\n", format.display_name());
                         if let Err(e) = writer.write_all(marker.as_bytes()) {
                             eprintln!("Error writing format marker to file {:?}: {}", file_path, e);
                         }
@@ -319,7 +325,6 @@ fn write_chunk(
     writer: &mut BufWriter<File>,
     chunk: &DataChunk,
     format: SaveFormat,
-    _format_changed: bool,
 ) -> std::io::Result<()> {
     match format {
         SaveFormat::Raw => {

@@ -3,13 +3,13 @@
 use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use regex::Regex;
 use serial_core::{
     encode, list_ports, send_file, start_file_saver, ChunkingStrategy, DataBits, DataChunk,
     Encoding, FileSaveConfig, FileSaverHandle, FileSendConfig, FileSendHandle, FileSendProgress,
-    FlowControl, LineDelimiter, Parity, PortInfo, SaveFormat, SerialConfig, Session,
-    SessionConfig, SessionEvent, SessionHandle, StopBits,
+    FlowControl, LineDelimiter, Parity, PatternMatcher, PatternMode, PortInfo, SaveFormat,
+    SearchEngine, SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle, StopBits,
 };
+pub use serial_core::SearchMatch;
 use strum::{EnumCount, EnumIter, IntoEnumIterator, IntoStaticStr, VariantArray};
 
 use crate::command::{map_global_nav_key, DropdownCommand, GlobalNavCommand, PortSelectCommand, TrafficCommand};
@@ -1728,10 +1728,8 @@ pub struct TrafficState {
     // Filtering state
     /// Whether filtering is enabled
     pub filter_enabled: bool,
-    /// Filter mode (Normal or Regex)
-    pub filter_mode: PatternMode,
-    /// Filter pattern
-    pub filter_pattern: String,
+    /// Filter pattern matcher (with cached regex)
+    pub filter: PatternMatcher,
     // File saving state
     /// File save settings
     pub file_save: FileSaveSettings,
@@ -1761,8 +1759,7 @@ impl Default for TrafficState {
             quit_confirm: false,
             // Filtering defaults
             filter_enabled: false,
-            filter_mode: PatternMode::default(),
-            filter_pattern: String::new(),
+            filter: PatternMatcher::new(),
             // File saving defaults
             file_save: FileSaveSettings::new(),
         }
@@ -1799,10 +1796,10 @@ impl TrafficState {
                 if self.filter_enabled { "ON" } else { "OFF" }.to_string()
             }
             TrafficConfigField::FilterPattern => {
-                if self.filter_pattern.is_empty() {
-                    "(none)".to_string()
+                if let Some(pattern) = self.filter.pattern() {
+                    pattern.to_string()
                 } else {
-                    self.filter_pattern.clone()
+                    "(none)".to_string()
                 }
             }
             TrafficConfigField::SaveEnabled => {
@@ -1918,7 +1915,10 @@ impl TrafficState {
     pub fn apply_text_input(&mut self, value: String) {
         match self.config.field {
             TrafficConfigField::FilterPattern => {
-                self.filter_pattern = value;
+                // Set the filter pattern using the PatternMatcher (preserves current mode)
+                let mode = self.filter.mode();
+                // Ignore errors - invalid regex won't hide data
+                let _ = self.filter.set_pattern(&value, mode);
             }
             TrafficConfigField::SaveFilename => {
                 self.file_save.filename = value;
@@ -1933,7 +1933,7 @@ impl TrafficState {
     /// Get the current text value for text input fields
     pub fn get_text_value(&self) -> String {
         match self.config.field {
-            TrafficConfigField::FilterPattern => self.filter_pattern.clone(),
+            TrafficConfigField::FilterPattern => self.filter.pattern().unwrap_or("").to_string(),
             TrafficConfigField::SaveFilename => self.file_save.filename.clone(),
             TrafficConfigField::SaveDirectory => self.file_save.directory.clone(),
             _ => String::new(),
@@ -1952,7 +1952,7 @@ impl TrafficState {
     /// Check if filtering should be applied (enabled, has pattern, and encoding is text-based)
     pub fn should_apply_filter(&self, encoding: Encoding) -> bool {
         self.filter_enabled
-            && !self.filter_pattern.is_empty()
+            && self.filter.has_pattern()
             && matches!(encoding, Encoding::Utf8 | Encoding::Ascii)
     }
 
@@ -1960,106 +1960,116 @@ impl TrafficState {
     /// Returns true if the chunk should be shown.
     pub fn matches_filter(&self, encoded_content: &str) -> bool {
         // If filter is not active or pattern is empty, show everything
-        if !self.filter_enabled || self.filter_pattern.is_empty() {
+        if !self.filter_enabled || !self.filter.has_pattern() {
             return true;
         }
 
-        match self.filter_mode {
-            PatternMode::Regex => {
-                // Try to compile and match regex
-                match Regex::new(&self.filter_pattern) {
-                    Ok(re) => re.is_match(encoded_content),
-                    Err(_) => true, // On invalid regex, show all (don't hide data due to user error)
-                }
-            }
-            PatternMode::Normal => {
-                // Case-insensitive substring search
-                encoded_content
-                    .to_lowercase()
-                    .contains(&self.filter_pattern.to_lowercase())
-            }
-        }
+        // PatternMatcher returns true if no pattern is set (matches everything)
+        // and handles both Normal and Regex modes with cached compilation
+        self.filter.is_match(encoded_content)
     }
 }
 
-/// A single search match occurrence
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SearchMatch {
-    /// Index of the chunk containing this match
-    pub chunk_index: usize,
-    /// Byte offset where the match starts within the encoded content
-    pub byte_start: usize,
-    /// Byte offset where the match ends within the encoded content
-    pub byte_end: usize,
-}
-
-/// Pattern matching mode - determines how patterns are interpreted for search/filter
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
-pub enum PatternMode {
-    /// Normal mode - pattern is interpreted as a literal string (case-insensitive)
-    #[default]
-    Normal,
-    /// Regex mode - pattern is interpreted as a regular expression
-    Regex,
-}
-
-impl PatternMode {
-    pub fn name(&self) -> &'static str {
-        (*self).into()
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            PatternMode::Normal => "Pattern is interpreted as a literal string (case-insensitive)",
-            PatternMode::Regex => "Pattern is interpreted as a regular expression",
-        }
-    }
-
-    pub fn toggle(&self) -> Self {
-        match self {
-            PatternMode::Normal => PatternMode::Regex,
-            PatternMode::Regex => PatternMode::Normal,
-        }
-    }
-}
-
+// Implement ConfigOption for PatternMode from serial_common
 impl ConfigOption for PatternMode {
-    fn all_variants() -> &'static [Self] { Self::VARIANTS }
-    fn display_name(&self) -> &'static str { (*self).into() }
+    fn all_variants() -> &'static [Self] { PatternMode::all() }
+    fn display_name(&self) -> &'static str { self.name() }
 }
 
 /// State for search functionality
+///
+/// This wraps `SearchEngine` from serial_common, providing the same interface
+/// as before but with better performance (regex caching, incremental search).
 #[derive(Debug, Default)]
 pub struct SearchState {
-    /// Current search pattern (if any)
-    pub pattern: Option<String>,
-    /// All match occurrences found
-    pub matches: Vec<SearchMatch>,
-    /// Index into `matches` for the current match (0-based)
-    pub current_match: Option<usize>,
-    /// Search mode (regex or normal)
-    pub mode: PatternMode,
-    /// Error message from regex compilation (if any)
-    pub error: Option<String>,
+    /// The underlying search engine
+    engine: SearchEngine,
 }
 
 impl SearchState {
     /// Clear search state
     pub fn clear(&mut self) {
-        self.pattern = None;
-        self.matches.clear();
-        self.current_match = None;
-        self.error = None;
+        self.engine.clear();
     }
 
     /// Get the total number of matches
     pub fn match_count(&self) -> usize {
-        self.matches.len()
+        self.engine.match_count()
     }
 
     /// Get the current match (if any)
     pub fn current(&self) -> Option<&SearchMatch> {
-        self.current_match.and_then(|idx| self.matches.get(idx))
+        self.engine.current_match()
+    }
+
+    /// Get all matches
+    pub fn matches(&self) -> &[SearchMatch] {
+        self.engine.matches()
+    }
+
+    /// Get matches for a specific chunk
+    pub fn matches_for_chunk(&self, chunk_index: usize) -> impl Iterator<Item = &SearchMatch> {
+        self.engine.matches_for_chunk(chunk_index)
+    }
+
+    /// Check if a match is the current one
+    pub fn is_current_match(&self, m: &SearchMatch) -> bool {
+        self.engine.is_current_match(m)
+    }
+
+    /// Get the current pattern
+    pub fn pattern(&self) -> Option<&str> {
+        self.engine.pattern()
+    }
+
+    /// Check if there's an active pattern
+    pub fn has_pattern(&self) -> bool {
+        self.engine.has_pattern()
+    }
+
+    /// Get the current mode
+    pub fn mode(&self) -> PatternMode {
+        self.engine.mode()
+    }
+
+    /// Set a new pattern
+    pub fn set_pattern(&mut self, pattern: &str, mode: PatternMode) -> Result<(), String> {
+        self.engine.set_pattern(pattern, mode)
+    }
+
+    /// Set the mode (re-compiles pattern)
+    pub fn set_mode(&mut self, mode: PatternMode) -> Result<(), String> {
+        self.engine.set_mode(mode)
+    }
+
+    /// Get any error message
+    pub fn error(&self) -> Option<&str> {
+        self.engine.error()
+    }
+
+    /// Invalidate search results (e.g., when encoding changes)
+    pub fn invalidate(&mut self) {
+        self.engine.invalidate();
+    }
+
+    /// Navigate to next match
+    pub fn goto_next_match(&mut self) -> Option<usize> {
+        self.engine.goto_next_match()
+    }
+
+    /// Navigate to previous match
+    pub fn goto_prev_match(&mut self) -> Option<usize> {
+        self.engine.goto_prev_match()
+    }
+
+    /// Get status message
+    pub fn status_message(&self) -> String {
+        self.engine.status_message()
+    }
+
+    /// Access the underlying engine (for search operations)
+    pub fn engine_mut(&mut self) -> &mut SearchEngine {
+        &mut self.engine
     }
 }
 
@@ -2286,13 +2296,13 @@ impl App {
                     // Open dropdown for the selected setting
                     match self.settings_panel.selected_general_setting {
                         GeneralSetting::SearchMode => {
-                            self.settings_panel.dropdown_index = match self.search.mode {
+                            self.settings_panel.dropdown_index = match self.search.mode() {
                                 PatternMode::Regex => 0,
                                 PatternMode::Normal => 1,
                             };
                         }
                         GeneralSetting::FilterMode => {
-                            self.settings_panel.dropdown_index = match self.traffic.filter_mode {
+                            self.settings_panel.dropdown_index = match self.traffic.filter.mode() {
                                 PatternMode::Regex => 0,
                                 PatternMode::Normal => 1,
                             };
@@ -2580,22 +2590,37 @@ impl App {
     fn apply_settings_dropdown_selection(&mut self) {
         match self.settings_panel.selected_general_setting {
             GeneralSetting::SearchMode => {
-                self.search.mode = match self.settings_panel.dropdown_index {
+                let mode = match self.settings_panel.dropdown_index {
                     0 => PatternMode::Regex,
                     _ => PatternMode::Normal,
                 };
-                self.status = format!("Search mode: {}", self.search.mode.name());
+                // Update mode through the SearchState wrapper
+                if let Err(e) = self.search.set_mode(mode) {
+                    self.status = e;
+                    return;
+                }
+                self.status = format!("Search mode: {}", self.search.mode().name());
                 // Re-run search if there's an active pattern
-                if self.search.pattern.is_some() {
+                if self.search.has_pattern() {
                     self.update_search_matches();
                 }
             }
             GeneralSetting::FilterMode => {
-                self.traffic.filter_mode = match self.settings_panel.dropdown_index {
+                let mode = match self.settings_panel.dropdown_index {
                     0 => PatternMode::Regex,
                     _ => PatternMode::Normal,
                 };
-                self.status = format!("Filter mode: {}", self.traffic.filter_mode.name());
+                // Update filter mode through PatternMatcher
+                if let Some(pattern) = self.traffic.filter.pattern().map(String::from) {
+                    if let Err(e) = self.traffic.filter.set_pattern(&pattern, mode) {
+                        self.status = e;
+                        return;
+                    }
+                } else {
+                    // No pattern set yet, just update the mode for future patterns
+                    let _ = self.traffic.filter.set_pattern("", mode);
+                }
+                self.status = format!("Filter mode: {}", self.traffic.filter.mode().name());
             }
         }
     }
@@ -2700,7 +2725,7 @@ impl App {
                     if config_focused {
                         // When config panel is focused, Esc returns focus to traffic
                         self.traffic.focus = TrafficFocus::Traffic;
-                    } else if self.search.pattern.is_some() {
+                    } else if self.search.has_pattern() {
                         self.search.clear();
                         self.status = "Search cleared.".to_string();
                     }
@@ -2729,7 +2754,9 @@ impl App {
                 self.traffic.encoding = self.traffic.encoding.cycle_next();
                 self.status = format!("Encoding: {}", self.traffic.encoding);
                 self.needs_full_clear = true;
-                if self.search.pattern.is_some() {
+                // Invalidate and re-search when encoding changes
+                if self.search.has_pattern() {
+                    self.search.invalidate();
                     self.update_search_matches();
                 }
             }
@@ -3298,7 +3325,11 @@ impl App {
     fn handle_key_search_input(&mut self, key: KeyEvent) {
         match self.input.handle_text_input(key) {
             TextInputResult::Submit(pattern) => {
-                self.search.pattern = Some(pattern);
+                // Set the pattern using the SearchEngine
+                if let Err(e) = self.search.set_pattern(&pattern, self.search.mode()) {
+                    self.status = e;
+                    return;
+                }
                 self.update_search_matches();
                 self.goto_next_match();
             }
@@ -3351,165 +3382,54 @@ impl App {
         }
     }
 
-    /// Find all match occurrences across all chunks
-    /// Returns Ok(matches) on success, or Err(error_message) if regex is invalid
-    fn find_all_matches(&self) -> Result<Vec<SearchMatch>, String> {
-        let pattern = match &self.search.pattern {
-            Some(p) if !p.is_empty() => p,
-            _ => return Ok(vec![]),
-        };
-
-        let mut matches = Vec::new();
-
-        match self.search.mode {
-            PatternMode::Regex => {
-                // Compile the regex pattern
-                let regex = Regex::new(pattern).map_err(|e| format!("Invalid regex: {}", e))?;
-
-                if let ConnectionState::Connected(ref handle) = self.connection {
-                    let buffer = handle.buffer();
-                    for (chunk_idx, chunk) in buffer.chunks().enumerate() {
-                        let encoded = encode(&chunk.data, self.traffic.encoding);
-                        // Apply hex grouping if in hex mode (same as rendering)
-                        let encoded = if self.traffic.encoding == serial_core::Encoding::Hex {
-                            format_hex_grouped(&encoded, self.traffic.hex_grouping)
-                        } else {
-                            encoded
-                        };
-
-                        // Find all regex matches within this chunk
-                        for mat in regex.find_iter(&encoded) {
-                            matches.push(SearchMatch {
-                                chunk_index: chunk_idx,
-                                byte_start: mat.start(),
-                                byte_end: mat.end(),
-                            });
-                        }
-                    }
-                }
-            }
-            PatternMode::Normal => {
-                // Case-insensitive literal search (original behavior)
-                let pattern_lower = pattern.to_lowercase();
-
-                if let ConnectionState::Connected(ref handle) = self.connection {
-                    let buffer = handle.buffer();
-                    for (chunk_idx, chunk) in buffer.chunks().enumerate() {
-                        let encoded = encode(&chunk.data, self.traffic.encoding);
-                        // Apply hex grouping if in hex mode (same as rendering)
-                        let encoded = if self.traffic.encoding == serial_core::Encoding::Hex {
-                            format_hex_grouped(&encoded, self.traffic.hex_grouping)
-                        } else {
-                            encoded
-                        };
-                        let encoded_lower = encoded.to_lowercase();
-
-                        // Find all occurrences within this chunk
-                        let mut search_start = 0;
-                        while let Some(rel_pos) = encoded_lower[search_start..].find(&pattern_lower)
-                        {
-                            let byte_start = search_start + rel_pos;
-                            let byte_end = byte_start + pattern.len();
-                            matches.push(SearchMatch {
-                                chunk_index: chunk_idx,
-                                byte_start,
-                                byte_end,
-                            });
-                            search_start = byte_end;
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(matches)
-    }
-
+    /// Perform a full search across all chunks using the SearchEngine
     fn update_search_matches(&mut self) {
-        // Clear any previous error
-        self.search.error = None;
-
-        match self.find_all_matches() {
-            Ok(found_matches) => {
-                self.search.matches = found_matches;
-                self.search.current_match = None;
-
-                if self.search.matches.is_empty() {
-                    if let Some(ref pattern) = self.search.pattern {
-                        self.status = format!("Pattern not found: {}", pattern);
-                    }
-                } else {
-                    self.status = format!(
-                        "Found {} match{}",
-                        self.search.match_count(),
-                        if self.search.match_count() == 1 {
-                            ""
-                        } else {
-                            "es"
-                        }
-                    );
-                }
-            }
-            Err(error) => {
-                // Store the error and show in status line
-                self.search.error = Some(error.clone());
-                self.search.matches.clear();
-                self.search.current_match = None;
-                self.status = error;
-            }
+        if !self.search.has_pattern() {
+            self.status = String::new();
+            return;
         }
+
+        // Build encoded chunks iterator for the search engine
+        if let ConnectionState::Connected(ref handle) = self.connection {
+            let buffer = handle.buffer();
+            let encoding = self.traffic.encoding;
+            let hex_grouping = self.traffic.hex_grouping;
+
+            // Create an iterator that encodes each chunk
+            let encoded_chunks = buffer.chunks().map(|chunk| {
+                let encoded = encode(&chunk.data, encoding);
+                // Apply hex grouping if in hex mode (same as rendering)
+                if encoding == serial_core::Encoding::Hex {
+                    format_hex_grouped(&encoded, hex_grouping)
+                } else {
+                    encoded
+                }
+            });
+
+            // Perform the search
+            self.search.engine_mut().search_all(encoded_chunks);
+        }
+
+        // Update status based on results
+        self.status = self.search.status_message();
     }
 
     fn goto_next_match(&mut self) {
-        if self.search.matches.is_empty() {
+        if let Some(chunk_index) = self.search.goto_next_match() {
+            self.traffic.scroll_to_chunk = Some(chunk_index);
+            self.status = self.search.status_message();
+        } else {
             self.status = "No matches".to_string();
-            return;
         }
-
-        // Move to next match, wrapping around
-        let next_idx = match self.search.current_match {
-            Some(current) => (current + 1) % self.search.matches.len(),
-            None => 0,
-        };
-
-        self.search.current_match = Some(next_idx);
-        let m = &self.search.matches[next_idx];
-        self.traffic.scroll_to_chunk = Some(m.chunk_index);
-        self.status = format!(
-            "Match {}/{}: {}",
-            next_idx + 1,
-            self.search.matches.len(),
-            self.search.pattern.as_deref().unwrap_or("")
-        );
     }
 
     fn goto_prev_match(&mut self) {
-        if self.search.matches.is_empty() {
+        if let Some(chunk_index) = self.search.goto_prev_match() {
+            self.traffic.scroll_to_chunk = Some(chunk_index);
+            self.status = self.search.status_message();
+        } else {
             self.status = "No matches".to_string();
-            return;
         }
-
-        // Move to previous match, wrapping around
-        let prev_idx = match self.search.current_match {
-            Some(current) => {
-                if current == 0 {
-                    self.search.matches.len() - 1
-                } else {
-                    current - 1
-                }
-            }
-            None => self.search.matches.len() - 1,
-        };
-
-        self.search.current_match = Some(prev_idx);
-        let m = &self.search.matches[prev_idx];
-        self.traffic.scroll_to_chunk = Some(m.chunk_index);
-        self.status = format!(
-            "Match {}/{}: {}",
-            prev_idx + 1,
-            self.search.matches.len(),
-            self.search.pattern.as_deref().unwrap_or("")
-        );
     }
 
     fn handle_key_file_path_input(&mut self, key: KeyEvent) {

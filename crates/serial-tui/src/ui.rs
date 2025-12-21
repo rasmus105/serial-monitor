@@ -658,8 +658,9 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
 
     // Build filter indicator if filter is active
     let filter_indicator = if app.traffic.should_apply_filter(app.traffic.encoding) {
-        format!("[Filter: {}] ", app.traffic.filter_pattern)
-    } else if app.traffic.filter_enabled && !app.traffic.filter_pattern.is_empty() {
+        let pattern = app.traffic.filter.pattern().unwrap_or("");
+        format!("[Filter: {}] ", pattern)
+    } else if app.traffic.filter_enabled && app.traffic.filter.has_pattern() {
         // Filter is enabled but not applied (wrong encoding)
         "[Filter: N/A] ".to_string()
     } else {
@@ -673,7 +674,7 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
             .map(|p| (p.percentage() * 100.0) as u8)
             .unwrap_or(0);
         format!("{}| [{}] {}[Sending: {}%] ", tab_bar, app.traffic.encoding, filter_indicator, pct)
-    } else if app.search.pattern.is_some() {
+    } else if app.search.has_pattern() {
         let next_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::NextMatch).unwrap_or_else(|| "n".to_string());
         let prev_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::PrevMatch).unwrap_or_else(|| "N".to_string());
         format!(
@@ -785,7 +786,7 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
             .collect();
 
         // Get search state for highlighting
-        let search_matches = &app.search.matches;
+        let search_matches = app.search.matches();
         let current_match = app.search.current();
 
         let mut all_physical_rows = Vec::new();
@@ -1332,7 +1333,7 @@ fn render_general_settings_tab(frame: &mut Frame, app: &App, area: Rect) {
     // Search mode setting
     let is_search_selected = selected_setting == GeneralSetting::SearchMode;
     let search_prefix = if is_search_selected { "> " } else { "  " };
-    let search_mode_display = format!("[ {} ]", app.search.mode.name());
+    let search_mode_display = format!("[ {} ]", app.search.mode().name());
     let search_label_style = if is_search_selected {
         Style::default()
             .fg(Color::Yellow)
@@ -1358,7 +1359,7 @@ fn render_general_settings_tab(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(vec![
         Span::raw("               "),
         Span::styled(
-            app.search.mode.description(),
+            app.search.mode().description(),
             Style::default().fg(Color::DarkGray),
         ),
     ]));
@@ -1377,7 +1378,7 @@ fn render_general_settings_tab(frame: &mut Frame, app: &App, area: Rect) {
     // Filter mode setting
     let is_filter_selected = selected_setting == GeneralSetting::FilterMode;
     let filter_prefix = if is_filter_selected { "> " } else { "  " };
-    let filter_mode_display = format!("[ {} ]", app.traffic.filter_mode.name());
+    let filter_mode_display = format!("[ {} ]", app.traffic.filter.mode().name());
     let filter_label_style = if is_filter_selected {
         Style::default()
             .fg(Color::Yellow)
@@ -1403,7 +1404,7 @@ fn render_general_settings_tab(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(vec![
         Span::raw("              "),
         Span::styled(
-            app.traffic.filter_mode.description(),
+            app.traffic.filter.mode().description(),
             Style::default().fg(Color::DarkGray),
         ),
     ]));

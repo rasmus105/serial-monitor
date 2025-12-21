@@ -10,3 +10,4 @@ tokio = { workspace = true }
 tokio-serial = { workspace = true }
 serialport = { workspace = true }
 thiserror = { workspace = true }
+regex = { workspace = true }

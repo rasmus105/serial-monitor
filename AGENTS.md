@@ -131,12 +131,18 @@ Serial I/O runs on a dedicated async runtime, communicating via channels:
 
 Displays sent/received data with sent data visually differentiated.
 
-**Search/Filter (lives in TUI, not core):**
-- Search operates on the DISPLAYED representation
+**Search/Filter:**
+- Search operates on the DISPLAYED representation (encoded strings, not raw bytes)
 - In Hex mode: search for "DE AD BE EF" (with or without spaces)
 - In UTF-8 mode: search for text
-- Filter (UTF-8): show only lines matching pattern (regex support)
-- Core provides raw data; UI handles encoding conversion and search logic
+- Filter (UTF-8/ASCII): show only lines matching pattern (regex support)
+- Core provides:
+  - Raw data storage and encoding functions
+  - Shared search utilities (`search/` module) with regex caching and incremental search
+- UI handles:
+  - Encoding chunks before passing to search engine
+  - Managing UI state (current match, scroll position)
+  - Rendering highlighted matches
 
 ### 2. Graph View
 

@@ -16,4 +16,3 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = { workspace = true }
 strum = { workspace = true }
-regex = { workspace = true }
