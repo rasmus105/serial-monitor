@@ -14,9 +14,9 @@ use serial_core::{encode, Direction as DataDirection};
 use strum::IntoEnumIterator;
 
 use crate::app::{
-    App, ConfigField, ConfigSection, ConnectionState, HexGrouping, InputMode, PaneContent, PaneFocus,
-    PortSelectFocus, SearchMatch, TrafficConfigField,
-    TrafficFocus, View, WrapMode,
+    App, ConfigField, ConfigSection, ConnectionState, EnumNavigation, HexGrouping, InputMode,
+    PaneContent, PaneFocus, PortSelectFocus, SearchMatch, TrafficConfigField, TrafficFocus, View,
+    WrapMode,
 };
 use crate::command::{GlobalNavCommand, PortSelectCommand, TrafficCommand};
 use crate::settings::{AnyCommand, GeneralSetting, SettingsTab};
@@ -787,7 +787,7 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
 
         // Get search state for highlighting
         let search_matches = app.search.matches();
-        let current_match = app.search.current();
+        let current_match = app.search.current_match();
 
         let mut all_physical_rows = Vec::new();
 

@@ -55,20 +55,46 @@ pub trait ConfigOption: Sized + Copy + PartialEq + 'static {
 }
 
 // =============================================================================
+// EnumNavigation Trait - Navigation helpers for strum-derived enums
+// =============================================================================
+
+/// Trait providing navigation methods for enums that derive `VariantArray` and `IntoStaticStr`.
+/// 
+/// This trait has default implementations using strum's derives, so any enum that
+/// derives `VariantArray` and `IntoStaticStr` can implement this trait with no body.
+pub trait EnumNavigation: Sized + Copy + PartialEq + VariantArray + Into<&'static str> {
+    /// Get the next variant in the list (wrapping)
+    fn next(self) -> Self {
+        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
+        Self::VARIANTS[(idx + 1) % Self::VARIANTS.len()]
+    }
+
+    /// Get the previous variant in the list (wrapping)
+    fn prev(self) -> Self {
+        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
+        Self::VARIANTS[(idx + Self::VARIANTS.len() - 1) % Self::VARIANTS.len()]
+    }
+
+    /// Get the index of this variant in the list
+    fn index(self) -> usize {
+        Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0)
+    }
+
+    /// Get the display label for this variant (from `IntoStaticStr`)
+    fn label(&self) -> &'static str {
+        (*self).into()
+    }
+}
+
+// =============================================================================
 // Config Field Trait and Panel State
 // =============================================================================
 
 /// Trait for config field enums (e.g., ConfigField, TrafficConfigField)
 /// Provides common methods for navigating and querying field properties.
-pub trait ConfigFieldKind: Sized + Copy + PartialEq + Default {
-    /// Get the next field in the list (wrapping)
-    fn next(self) -> Self;
-    /// Get the previous field in the list (wrapping)
-    fn prev(self) -> Self;
-    /// Get the index of this field in the flat field list
-    fn index(self) -> usize;
-    /// Get the display label for this field
-    fn label(&self) -> &'static str;
+/// 
+/// Requires `EnumNavigation` which provides `next()`, `prev()`, `index()`, `label()`.
+pub trait ConfigFieldKind: EnumNavigation + Default {
     /// Whether this field is a toggle (ON/OFF)
     fn is_toggle(&self) -> bool;
     /// Whether this field is a text input
@@ -747,26 +773,10 @@ pub enum TrafficConfigField {
     SaveDirectory,
 }
 
+// Implement EnumNavigation for TrafficConfigField (uses default impls from strum derives)
+impl EnumNavigation for TrafficConfigField {}
+
 impl TrafficConfigField {
-    pub fn next(self) -> Self {
-        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
-        Self::VARIANTS[(idx + 1) % Self::VARIANTS.len()]
-    }
-
-    pub fn prev(self) -> Self {
-        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
-        Self::VARIANTS[(idx + Self::VARIANTS.len() - 1) % Self::VARIANTS.len()]
-    }
-
-    pub fn index(self) -> usize {
-        Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0)
-    }
-
-    /// Get the label for this config field
-    pub fn label(&self) -> &'static str {
-        (*self).into()
-    }
-
     /// Whether this field is a simple toggle (vs a dropdown or text input)
     pub fn is_toggle(&self) -> bool {
         matches!(
@@ -840,35 +850,15 @@ impl TrafficConfigField {
 }
 
 impl ConfigFieldKind for TrafficConfigField {
-    fn next(self) -> Self { self.next() }
-    fn prev(self) -> Self { self.prev() }
-    fn index(self) -> usize { TrafficConfigField::index(self) }
-    fn label(&self) -> &'static str { TrafficConfigField::label(self) }
     fn is_toggle(&self) -> bool { TrafficConfigField::is_toggle(self) }
     fn is_text_input(&self) -> bool { TrafficConfigField::is_text_input(self) }
     fn section(&self) -> ConfigSection { TrafficConfigField::section(self) }
 }
 
+// Implement EnumNavigation for ConfigField (uses default impls from strum derives)
+impl EnumNavigation for ConfigField {}
+
 impl ConfigField {
-    pub fn next(self) -> Self {
-        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
-        Self::VARIANTS[(idx + 1) % Self::VARIANTS.len()]
-    }
-
-    pub fn prev(self) -> Self {
-        let idx = Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0);
-        Self::VARIANTS[(idx + Self::VARIANTS.len() - 1) % Self::VARIANTS.len()]
-    }
-
-    pub fn index(self) -> usize {
-        Self::VARIANTS.iter().position(|&v| v == self).unwrap_or(0)
-    }
-
-    /// Get the label for this config field
-    pub fn label(&self) -> &'static str {
-        (*self).into()
-    }
-
     /// Whether this field is a text input field
     pub fn is_text_input(&self) -> bool {
         matches!(
@@ -893,11 +883,6 @@ impl ConfigField {
     /// Whether this field is a simple toggle
     pub fn is_toggle(&self) -> bool {
         matches!(self, ConfigField::SaveEnabled)
-    }
-
-    /// Check if this is a dropdown field
-    pub fn is_dropdown(&self) -> bool {
-        !self.is_toggle() && !self.is_text_input()
     }
 
     /// Get the section this field belongs to
@@ -951,10 +936,6 @@ impl ConfigField {
 }
 
 impl ConfigFieldKind for ConfigField {
-    fn next(self) -> Self { self.next() }
-    fn prev(self) -> Self { self.prev() }
-    fn index(self) -> usize { ConfigField::index(self) }
-    fn label(&self) -> &'static str { ConfigField::label(self) }
     fn is_toggle(&self) -> bool { ConfigField::is_toggle(self) }
     fn is_text_input(&self) -> bool { ConfigField::is_text_input(self) }
     fn section(&self) -> ConfigSection { ConfigField::section(self) }
@@ -1976,103 +1957,6 @@ impl ConfigOption for PatternMode {
     fn display_name(&self) -> &'static str { self.name() }
 }
 
-/// State for search functionality
-///
-/// This wraps `SearchEngine` from serial_common, providing the same interface
-/// as before but with better performance (regex caching, incremental search).
-#[derive(Debug, Default)]
-pub struct SearchState {
-    /// The underlying search engine
-    engine: SearchEngine,
-}
-
-impl SearchState {
-    /// Clear search state
-    pub fn clear(&mut self) {
-        self.engine.clear();
-    }
-
-    /// Get the total number of matches
-    pub fn match_count(&self) -> usize {
-        self.engine.match_count()
-    }
-
-    /// Get the current match (if any)
-    pub fn current(&self) -> Option<&SearchMatch> {
-        self.engine.current_match()
-    }
-
-    /// Get all matches
-    pub fn matches(&self) -> &[SearchMatch] {
-        self.engine.matches()
-    }
-
-    /// Get matches for a specific chunk
-    pub fn matches_for_chunk(&self, chunk_index: usize) -> impl Iterator<Item = &SearchMatch> {
-        self.engine.matches_for_chunk(chunk_index)
-    }
-
-    /// Check if a match is the current one
-    pub fn is_current_match(&self, m: &SearchMatch) -> bool {
-        self.engine.is_current_match(m)
-    }
-
-    /// Get the current pattern
-    pub fn pattern(&self) -> Option<&str> {
-        self.engine.pattern()
-    }
-
-    /// Check if there's an active pattern
-    pub fn has_pattern(&self) -> bool {
-        self.engine.has_pattern()
-    }
-
-    /// Get the current mode
-    pub fn mode(&self) -> PatternMode {
-        self.engine.mode()
-    }
-
-    /// Set a new pattern
-    pub fn set_pattern(&mut self, pattern: &str, mode: PatternMode) -> Result<(), String> {
-        self.engine.set_pattern(pattern, mode)
-    }
-
-    /// Set the mode (re-compiles pattern)
-    pub fn set_mode(&mut self, mode: PatternMode) -> Result<(), String> {
-        self.engine.set_mode(mode)
-    }
-
-    /// Get any error message
-    pub fn error(&self) -> Option<&str> {
-        self.engine.error()
-    }
-
-    /// Invalidate search results (e.g., when encoding changes)
-    pub fn invalidate(&mut self) {
-        self.engine.invalidate();
-    }
-
-    /// Navigate to next match
-    pub fn goto_next_match(&mut self) -> Option<usize> {
-        self.engine.goto_next_match()
-    }
-
-    /// Navigate to previous match
-    pub fn goto_prev_match(&mut self) -> Option<usize> {
-        self.engine.goto_prev_match()
-    }
-
-    /// Get status message
-    pub fn status_message(&self) -> String {
-        self.engine.status_message()
-    }
-
-    /// Access the underlying engine (for search operations)
-    pub fn engine_mut(&mut self) -> &mut SearchEngine {
-        &mut self.engine
-    }
-}
-
 /// State for file sending
 #[derive(Default)]
 pub struct FileSendState {
@@ -2158,8 +2042,8 @@ pub struct App {
     pub layout: TabLayout,
     /// Traffic view state
     pub traffic: TrafficState,
-    /// Search state
-    pub search: SearchState,
+    /// Search engine
+    pub search: SearchEngine,
     /// File send state
     pub file_send: FileSendState,
     /// Application settings (including keybindings)
@@ -2197,7 +2081,7 @@ impl App {
             port_select,
             layout: TabLayout::new(),
             traffic: TrafficState::default(),
-            search: SearchState::default(),
+            search: SearchEngine::new(),
             file_send: FileSendState::default(),
             settings: Settings::default(),
             settings_panel: SettingsPanelState::default(),
@@ -2594,7 +2478,7 @@ impl App {
                     0 => PatternMode::Regex,
                     _ => PatternMode::Normal,
                 };
-                // Update mode through the SearchState wrapper
+                // Update search mode
                 if let Err(e) = self.search.set_mode(mode) {
                     self.status = e;
                     return;
@@ -3407,7 +3291,7 @@ impl App {
             });
 
             // Perform the search
-            self.search.engine_mut().search_all(encoded_chunks);
+            self.search.search_all(encoded_chunks);
         }
 
         // Update status based on results
