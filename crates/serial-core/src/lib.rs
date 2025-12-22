@@ -18,6 +18,7 @@ mod encoding;
 mod error;
 mod file_saver;
 mod file_sender;
+pub mod graph;
 mod port;
 pub mod search;
 mod session;
@@ -28,6 +29,11 @@ pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8,
 pub use error::{Error, Result};
 pub use file_saver::{start_file_saver, FileSaveConfig, FileSaverCommand, FileSaverHandle, SaveFormat};
 pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
+pub use graph::{
+    GraphBuffer, GraphDataPoint, GraphEngine, GraphEngineConfig, GraphMode, GraphParser,
+    GraphParserConfig, GraphSeries, KeyValueParser, PacketRateData, PacketRateSample, ParsedValue,
+    ParserType, RegexParser, RegexParserConfig,
+};
 pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
 pub use search::{PatternMatcher, PatternMode, SearchEngine, SearchMatch, SearchResult};
 pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};
