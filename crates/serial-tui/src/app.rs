@@ -54,6 +54,30 @@ pub trait ConfigOption: Sized + Copy + PartialEq + 'static {
     }
 }
 
+/// Marker trait for local enums that use strum derives.
+/// This allows the blanket `ConfigOption` impl without conflicting with external types.
+pub trait LocalStrumEnum: Sized + Copy + PartialEq + 'static + VariantArray + Into<&'static str> {}
+
+// Implement marker trait for all local strum enums that need ConfigOption
+impl LocalStrumEnum for ChunkingMode {}
+impl LocalStrumEnum for DelimiterOption {}
+impl LocalStrumEnum for SizeUnit {}
+impl LocalStrumEnum for TimestampFormat {}
+impl LocalStrumEnum for WrapMode {}
+impl LocalStrumEnum for HexGrouping {}
+
+/// Blanket implementation of `ConfigOption` for local enums that derive strum's
+/// `VariantArray` and `IntoStaticStr`. This avoids repetitive manual impls.
+impl<T: LocalStrumEnum> ConfigOption for T {
+    fn all_variants() -> &'static [Self] {
+        Self::VARIANTS
+    }
+
+    fn display_name(&self) -> &'static str {
+        (*self).into()
+    }
+}
+
 // =============================================================================
 // EnumNavigation Trait - Navigation helpers for strum-derived enums
 // =============================================================================
@@ -332,11 +356,6 @@ pub enum ChunkingMode {
     LineDelimited,
 }
 
-impl ConfigOption for ChunkingMode {
-    fn all_variants() -> &'static [Self] { Self::VARIANTS }
-    fn display_name(&self) -> &'static str { (*self).into() }
-}
-
 /// Delimiter option for UI selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum DelimiterOption {
@@ -354,11 +373,6 @@ pub enum DelimiterOption {
     Custom,
 }
 
-impl ConfigOption for DelimiterOption {
-    fn all_variants() -> &'static [Self] { Self::VARIANTS }
-    fn display_name(&self) -> &'static str { (*self).into() }
-}
-
 /// Size unit for max line length
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum SizeUnit {
@@ -369,10 +383,7 @@ pub enum SizeUnit {
     MiB,
 }
 
-impl ConfigOption for SizeUnit {
-    fn all_variants() -> &'static [Self] { Self::VARIANTS }
-    fn display_name(&self) -> &'static str { (*self).into() }
-}
+
 
 impl SizeUnit {
     /// Convert a value with this unit to bytes
@@ -1553,11 +1564,6 @@ pub enum TimestampFormat {
     Absolute,
 }
 
-impl ConfigOption for TimestampFormat {
-    fn all_variants() -> &'static [Self] { Self::VARIANTS }
-    fn display_name(&self) -> &'static str { (*self).into() }
-}
-
 impl TimestampFormat {
     /// Format a SystemTime according to this format
     pub fn format(&self, time: std::time::SystemTime, session_start: std::time::SystemTime) -> String {
@@ -1626,11 +1632,6 @@ pub enum WrapMode {
     Truncate,
 }
 
-impl ConfigOption for WrapMode {
-    fn all_variants() -> &'static [Self] { Self::VARIANTS }
-    fn display_name(&self) -> &'static str { (*self).into() }
-}
-
 /// Hex byte grouping for hex encoding display
 #[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr)]
 pub enum HexGrouping {
@@ -1646,11 +1647,6 @@ pub enum HexGrouping {
     /// Group by 4 bytes (space every 4 bytes)
     #[strum(serialize = "4 bytes")]
     DWord,
-}
-
-impl ConfigOption for HexGrouping {
-    fn all_variants() -> &'static [Self] { Self::VARIANTS }
-    fn display_name(&self) -> &'static str { (*self).into() }
 }
 
 impl HexGrouping {
