@@ -17,14 +17,14 @@ pub mod types;
 // Re-export all public types
 pub use serial_core::SearchMatch;
 pub use state::{
-    FileSendState, InputState, PortSelectState, TabLayout, TabState, TextInputResult, TrafficState,
-    TAB_COUNT,
+    FileSendState, GraphState, GraphTimeWindow, InputState, PortSelectState, TabLayout, TabState,
+    TextInputResult, TrafficState, TAB_COUNT,
 };
 pub use types::{
     ChunkingMode, ConfigField, ConfigFieldKind, ConfigOption, ConfigPanelState, ConfigSection,
-    ConnectionState, DelimiterOption, EnumNavigation, FileSaveSettings, HexGrouping, InputMode,
-    LocalStrumEnum, PaneContent, PaneFocus, PortSelectFocus, SizeUnit, TimestampFormat,
-    TrafficConfigField, TrafficFocus, View, WrapMode,
+    ConnectionState, DelimiterOption, EnumNavigation, FileSaveSettings, GraphConfigField,
+    GraphFocus, HexGrouping, InputMode, LocalStrumEnum, PaneContent, PaneFocus, PortSelectFocus,
+    SizeUnit, TimestampFormat, TrafficConfigField, TrafficFocus, View, WrapMode,
 };
 
 // =============================================================================
@@ -52,6 +52,8 @@ pub struct App {
     pub layout: TabLayout,
     /// Traffic view state
     pub traffic: TrafficState,
+    /// Graph view state
+    pub graph: GraphState,
     /// Search engine
     pub search: SearchEngine,
     /// File send state
@@ -91,6 +93,7 @@ impl App {
             port_select,
             layout: TabLayout::new(),
             traffic: TrafficState::default(),
+            graph: GraphState::default(),
             search: SearchEngine::new(),
             file_send: FileSendState::default(),
             settings: Settings::default(),
@@ -330,10 +333,18 @@ impl App {
                 SessionEvent::DataReceived(chunk) => {
                     // Write received data to file saver
                     self.write_to_file_saver(&chunk);
+                    // Process chunk for graph (if engine is active)
+                    if self.graph.has_engine() {
+                        self.graph.engine_mut().process_chunk(&chunk);
+                    }
                 }
                 SessionEvent::DataSent(chunk) => {
                     // Write sent data to file saver
                     self.write_to_file_saver(&chunk);
+                    // Process chunk for graph (if engine is active)
+                    if self.graph.has_engine() {
+                        self.graph.engine_mut().process_chunk(&chunk);
+                    }
                 }
                 SessionEvent::Connected => {}
             }
@@ -352,5 +363,18 @@ impl App {
     /// Get page size for Ctrl-d/u scrolling (half screen)
     pub(crate) fn page_size(&self) -> usize {
         15
+    }
+
+    /// Initialize the graph engine with historical data (lazy initialization)
+    pub fn initialize_graph(&mut self) {
+        if self.graph.initialized {
+            return;
+        }
+
+        if let ConnectionState::Connected(ref handle) = self.connection {
+            let buffer = handle.buffer();
+            self.graph.engine_mut().initialize(buffer.chunks());
+            self.graph.initialized = true;
+        }
     }
 }

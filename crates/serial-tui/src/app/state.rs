@@ -2,16 +2,16 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serial_core::{
-    ChunkingStrategy, DataBits, Encoding, FlowControl, LineDelimiter, Parity,
-    PatternMatcher, PortInfo, SaveFormat, SerialConfig, SessionConfig, StopBits,
-    FileSendHandle, FileSendProgress, list_ports,
+    ChunkingStrategy, DataBits, Encoding, FlowControl, GraphEngine, GraphMode, LineDelimiter,
+    Parity, ParserType, PatternMatcher, PortInfo, SaveFormat, SerialConfig,
+    SessionConfig, StopBits, FileSendHandle, FileSendProgress, list_ports,
 };
 
 use crate::app::types::{
     ChunkingMode, ConfigField, ConfigOption, ConfigPanelState,
     DelimiterOption, FileSaveSettings, HexGrouping, InputMode, PaneContent,
     PaneFocus, PortSelectFocus, SizeUnit, TimestampFormat, TrafficConfigField,
-    TrafficFocus, WrapMode,
+    TrafficFocus, WrapMode, GraphConfigField, GraphFocus,
 };
 
 // =============================================================================
@@ -916,6 +916,315 @@ impl TrafficState {
         // PatternMatcher returns true if no pattern is set (matches everything)
         // and handles both Normal and Regex modes with cached compilation
         self.filter.is_match(encoded_content)
+    }
+}
+
+// =============================================================================
+// Graph State
+// =============================================================================
+
+/// Time window options for graph display
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GraphTimeWindow {
+    /// Last 10 seconds
+    Seconds10,
+    /// Last 30 seconds
+    #[default]
+    Seconds30,
+    /// Last 1 minute
+    Minute1,
+    /// Last 5 minutes
+    Minutes5,
+    /// All available data
+    All,
+}
+
+impl GraphTimeWindow {
+    /// Get all variants
+    pub fn all_variants() -> &'static [GraphTimeWindow] {
+        &[
+            GraphTimeWindow::Seconds10,
+            GraphTimeWindow::Seconds30,
+            GraphTimeWindow::Minute1,
+            GraphTimeWindow::Minutes5,
+            GraphTimeWindow::All,
+        ]
+    }
+
+    /// Get display name
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            GraphTimeWindow::Seconds10 => "10 seconds",
+            GraphTimeWindow::Seconds30 => "30 seconds",
+            GraphTimeWindow::Minute1 => "1 minute",
+            GraphTimeWindow::Minutes5 => "5 minutes",
+            GraphTimeWindow::All => "All data",
+        }
+    }
+
+    /// Get all display names
+    pub fn all_display_names() -> Vec<&'static str> {
+        Self::all_variants().iter().map(|v| v.display_name()).collect()
+    }
+
+    /// Get index
+    pub fn index(&self) -> usize {
+        Self::all_variants().iter().position(|v| v == self).unwrap_or(0)
+    }
+
+    /// Create from index
+    pub fn from_index(index: usize) -> Self {
+        Self::all_variants().get(index).copied().unwrap_or_default()
+    }
+
+    /// Get duration in seconds (None for All)
+    pub fn as_duration(&self) -> Option<std::time::Duration> {
+        match self {
+            GraphTimeWindow::Seconds10 => Some(std::time::Duration::from_secs(10)),
+            GraphTimeWindow::Seconds30 => Some(std::time::Duration::from_secs(30)),
+            GraphTimeWindow::Minute1 => Some(std::time::Duration::from_secs(60)),
+            GraphTimeWindow::Minutes5 => Some(std::time::Duration::from_secs(300)),
+            GraphTimeWindow::All => None,
+        }
+    }
+}
+
+/// State for graph view
+#[derive(Debug)]
+pub struct GraphState {
+    /// Graph engine (lazy initialized when graph view is first opened)
+    pub engine: Option<GraphEngine>,
+    /// Whether the engine has been initialized with historical data
+    pub initialized: bool,
+    /// Which panel is focused (graph or config)
+    pub focus: GraphFocus,
+    /// Config panel state (field selection, dropdown, scroll)
+    pub config: ConfigPanelState<GraphConfigField>,
+    /// Time window for display
+    pub time_window: GraphTimeWindow,
+    /// Whether to show RX data in packet rate
+    pub show_rx: bool,
+    /// Whether to show TX data in packet rate
+    pub show_tx: bool,
+}
+
+impl Default for GraphState {
+    fn default() -> Self {
+        Self {
+            engine: None,
+            initialized: false,
+            focus: GraphFocus::default(),
+            config: ConfigPanelState::new(),
+            time_window: GraphTimeWindow::default(),
+            show_rx: true,
+            show_tx: true,
+        }
+    }
+}
+
+impl GraphState {
+    /// Get or create the graph engine (lazy initialization)
+    pub fn engine_mut(&mut self) -> &mut GraphEngine {
+        self.engine.get_or_insert_with(GraphEngine::new)
+    }
+
+    /// Check if the engine exists
+    pub fn has_engine(&self) -> bool {
+        self.engine.is_some()
+    }
+
+    /// Get display value for a graph config field
+    pub fn get_config_display(&self, field: GraphConfigField) -> String {
+        match field {
+            GraphConfigField::Mode => self
+                .engine
+                .as_ref()
+                .map(|e| e.mode().name())
+                .unwrap_or(GraphMode::default().name())
+                .to_string(),
+            GraphConfigField::Parser => self
+                .engine
+                .as_ref()
+                .map(|e| e.parser_config().parser_type().name())
+                .unwrap_or(ParserType::default().name())
+                .to_string(),
+            GraphConfigField::RegexPattern => self.get_regex_pattern(),
+            GraphConfigField::TimeWindow => self.time_window.display_name().to_string(),
+            GraphConfigField::ShowRx => if self.show_rx { "ON" } else { "OFF" }.to_string(),
+            GraphConfigField::ShowTx => if self.show_tx { "ON" } else { "OFF" }.to_string(),
+        }
+    }
+
+    /// Get the current regex pattern (if parser is Regex type)
+    pub fn get_regex_pattern(&self) -> String {
+        if let Some(ref engine) = self.engine {
+            if let serial_core::GraphParserConfig::Regex(cfg) = engine.parser_config() {
+                return cfg.pattern.clone();
+            }
+        }
+        // Default pattern
+        r"(?P<key>\w+)[=:]\s*(?P<value>-?\d+\.?\d*)".to_string()
+    }
+
+    /// Set the regex pattern (only effective when parser is Regex type)
+    pub fn set_regex_pattern(&mut self, pattern: String) {
+        if self.engine.is_some() {
+            let config = serial_core::GraphParserConfig::Regex(
+                serial_core::RegexParserConfig { pattern }
+            );
+            self.engine_mut().set_parser_config(config);
+        }
+    }
+
+    /// Check if the regex pattern field should be shown (only for Regex parser)
+    pub fn should_show_regex_pattern(&self) -> bool {
+        self.engine
+            .as_ref()
+            .map(|e| e.parser_config().parser_type() == ParserType::Regex)
+            .unwrap_or(false)
+    }
+
+    /// Get list of series names from parsed data
+    pub fn series_names(&self) -> Vec<String> {
+        self.engine
+            .as_ref()
+            .map(|e| e.series_names().into_iter().map(String::from).collect())
+            .unwrap_or_default()
+    }
+
+    /// Toggle visibility of a series by name
+    pub fn toggle_series_visibility(&mut self, name: &str) {
+        if let Some(ref mut engine) = self.engine {
+            engine.toggle_series_visibility(name);
+        }
+    }
+
+    /// Check if a series is visible
+    pub fn is_series_visible(&self, name: &str) -> bool {
+        self.engine
+            .as_ref()
+            .and_then(|e| e.parsed_data().series(name))
+            .map(|s| s.visible)
+            .unwrap_or(true)
+    }
+
+    /// Get string options for dropdown
+    pub fn get_config_option_strings(&self) -> Vec<String> {
+        match self.config.field {
+            GraphConfigField::Mode => GraphMode::all()
+                .iter()
+                .map(|m| m.name().to_string())
+                .collect(),
+            GraphConfigField::Parser => ParserType::all()
+                .iter()
+                .map(|p| p.name().to_string())
+                .collect(),
+            GraphConfigField::TimeWindow => GraphTimeWindow::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            GraphConfigField::RegexPattern | GraphConfigField::ShowRx | GraphConfigField::ShowTx => vec![],
+        }
+    }
+
+    /// Get the current index for dropdown selection
+    pub fn get_current_config_index(&self) -> usize {
+        match self.config.field {
+            GraphConfigField::Mode => {
+                let mode = self.engine.as_ref().map(|e| e.mode()).unwrap_or_default();
+                GraphMode::all().iter().position(|m| *m == mode).unwrap_or(0)
+            }
+            GraphConfigField::Parser => {
+                let parser_type = self
+                    .engine
+                    .as_ref()
+                    .map(|e| e.parser_config().parser_type())
+                    .unwrap_or_default();
+                ParserType::all()
+                    .iter()
+                    .position(|p| *p == parser_type)
+                    .unwrap_or(0)
+            }
+            GraphConfigField::TimeWindow => self.time_window.index(),
+            GraphConfigField::RegexPattern | GraphConfigField::ShowRx | GraphConfigField::ShowTx => 0,
+        }
+    }
+
+    /// Get the number of options for the current config field
+    pub fn get_options_count(&self) -> usize {
+        match self.config.field {
+            GraphConfigField::Mode => GraphMode::all().len(),
+            GraphConfigField::Parser => ParserType::all().len(),
+            GraphConfigField::TimeWindow => GraphTimeWindow::all_variants().len(),
+            GraphConfigField::RegexPattern | GraphConfigField::ShowRx | GraphConfigField::ShowTx => 0,
+        }
+    }
+
+    /// Open the dropdown for the current config field
+    pub fn open_dropdown(&mut self) {
+        self.config.dropdown_index = self.get_current_config_index();
+    }
+
+    /// Apply the selected dropdown value
+    pub fn apply_dropdown_selection(&mut self) {
+        match self.config.field {
+            GraphConfigField::Mode => {
+                if let Some(mode) = GraphMode::all().get(self.config.dropdown_index) {
+                    self.engine_mut().set_mode(*mode);
+                }
+            }
+            GraphConfigField::Parser => {
+                if let Some(parser_type) = ParserType::all().get(self.config.dropdown_index) {
+                    let config = match parser_type {
+                        ParserType::KeyValue => {
+                            serial_core::GraphParserConfig::KeyValue(Default::default())
+                        }
+                        ParserType::Regex => {
+                            serial_core::GraphParserConfig::Regex(Default::default())
+                        }
+                        ParserType::Csv => {
+                            serial_core::GraphParserConfig::Csv(Default::default())
+                        }
+                        ParserType::Json => serial_core::GraphParserConfig::Json,
+                        ParserType::RawNumber => {
+                            serial_core::GraphParserConfig::RawNumber(Default::default())
+                        }
+                    };
+                    self.engine_mut().set_parser_config(config);
+                }
+            }
+            GraphConfigField::TimeWindow => {
+                self.time_window = GraphTimeWindow::from_index(self.config.dropdown_index);
+            }
+            GraphConfigField::RegexPattern | GraphConfigField::ShowRx | GraphConfigField::ShowTx => {}
+        }
+    }
+
+    /// Toggle a boolean setting
+    pub fn toggle_setting(&mut self) {
+        match self.config.field {
+            GraphConfigField::ShowRx => self.show_rx = !self.show_rx,
+            GraphConfigField::ShowTx => self.show_tx = !self.show_tx,
+            _ => {}
+        }
+    }
+
+    /// Get the current text value for text input fields
+    pub fn get_text_value(&self) -> String {
+        match self.config.field {
+            GraphConfigField::RegexPattern => self.get_regex_pattern(),
+            _ => String::new(),
+        }
+    }
+
+    /// Apply text input value to the appropriate field
+    pub fn apply_text_input(&mut self, value: String) {
+        match self.config.field {
+            GraphConfigField::RegexPattern => {
+                self.set_regex_pattern(value);
+            }
+            _ => {}
+        }
     }
 }
 

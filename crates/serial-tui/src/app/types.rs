@@ -136,6 +136,8 @@ pub enum ConfigSection {
     TrafficDisplay,
     /// Filtering settings
     Filtering,
+    /// Graph settings
+    GraphSettings,
 }
 
 impl ConfigSection {
@@ -149,6 +151,7 @@ impl ConfigSection {
             ConfigSection::FileSave => Some("File Saving"),
             ConfigSection::TrafficDisplay => None, // First section, no header needed
             ConfigSection::Filtering => Some("Filtering"),
+            ConfigSection::GraphSettings => None, // First section, no header needed
         }
     }
 }
@@ -529,6 +532,16 @@ pub enum TrafficFocus {
     Config,
 }
 
+/// Which panel is focused in graph view
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum GraphFocus {
+    /// Graph display panel (left)
+    #[default]
+    Graph,
+    /// Configuration panel (right)
+    Config,
+}
+
 // =============================================================================
 // Config Field Enums
 // =============================================================================
@@ -786,6 +799,48 @@ impl ConfigFieldKind for TrafficConfigField {
     fn section(&self) -> ConfigSection { TrafficConfigField::section(self) }
 }
 
+/// Which configuration field is selected in graph view config panel
+#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr)]
+pub enum GraphConfigField {
+    // Graph settings (section: GraphSettings)
+    #[default]
+    Mode,
+    Parser,
+    #[strum(serialize = "Regex Pattern")]
+    RegexPattern,
+    #[strum(serialize = "Time Window")]
+    TimeWindow,
+    #[strum(serialize = "Show RX")]
+    ShowRx,
+    #[strum(serialize = "Show TX")]
+    ShowTx,
+}
+
+impl EnumNavigation for GraphConfigField {}
+
+impl GraphConfigField {
+    /// Whether this field is a simple toggle (vs a dropdown)
+    pub fn is_toggle(&self) -> bool {
+        matches!(self, GraphConfigField::ShowRx | GraphConfigField::ShowTx)
+    }
+
+    /// Whether this field is a text input field
+    pub fn is_text_input(&self) -> bool {
+        matches!(self, GraphConfigField::RegexPattern)
+    }
+
+    /// Get the section this field belongs to
+    pub fn section(&self) -> ConfigSection {
+        ConfigSection::GraphSettings
+    }
+}
+
+impl ConfigFieldKind for GraphConfigField {
+    fn is_toggle(&self) -> bool { GraphConfigField::is_toggle(self) }
+    fn is_text_input(&self) -> bool { GraphConfigField::is_text_input(self) }
+    fn section(&self) -> ConfigSection { GraphConfigField::section(self) }
+}
+
 /// Which file saving configuration field is selected in port selection config panel
 #[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount)]
 pub enum FileSaveConfigField {
@@ -855,6 +910,8 @@ pub enum InputMode {
     ConfigDropdown,
     /// Traffic config dropdown is open
     TrafficConfigDropdown,
+    /// Graph config dropdown is open
+    GraphConfigDropdown,
     /// Settings dropdown is open (General tab)
     SettingsDropdown,
     /// Waiting for window command after Ctrl+W
@@ -867,6 +924,8 @@ pub enum InputMode {
     ConfigTextInput,
     /// Editing a traffic config text field
     TrafficConfigTextInput,
+    /// Editing a graph config text field (e.g., regex pattern)
+    GraphConfigTextInput,
 }
 
 /// Visual properties for rendering an input mode in the status bar
@@ -889,12 +948,14 @@ impl InputMode {
             InputMode::FilePathInput => "Enter file path to send:",
             InputMode::ConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::TrafficConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
+            InputMode::GraphConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::SettingsDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::WindowCommand => "Ctrl+W: v=vsplit, q=close, h/l=navigate",
             InputMode::CommandLine => "",
             InputMode::SplitSelect => "", // Dynamic based on available splits
             InputMode::ConfigTextInput => "Enter value (Enter: confirm, Esc: cancel)",
             InputMode::TrafficConfigTextInput => "Enter value (Enter: confirm, Esc: cancel)",
+            InputMode::GraphConfigTextInput => "Enter regex pattern (Enter: confirm, Esc: cancel)",
         }
     }
 
@@ -921,6 +982,7 @@ impl InputMode {
             }),
             InputMode::ConfigDropdown => None,         // Uses special rendering
             InputMode::TrafficConfigDropdown => None,  // Uses special rendering
+            InputMode::GraphConfigDropdown => None,    // Uses special rendering
             InputMode::SettingsDropdown => None,       // Uses special rendering
             InputMode::WindowCommand => None,          // Uses status bar message
             InputMode::CommandLine => Some(InputModeStyle {
@@ -933,6 +995,10 @@ impl InputMode {
                 color: Color::Cyan,
             }),
             InputMode::TrafficConfigTextInput => Some(InputModeStyle {
+                prefix: "",
+                color: Color::Cyan,
+            }),
+            InputMode::GraphConfigTextInput => Some(InputModeStyle {
                 prefix: "",
                 color: Color::Cyan,
             }),
