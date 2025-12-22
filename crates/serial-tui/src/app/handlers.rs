@@ -31,6 +31,8 @@ enum TextInputAction {
     ApplyPortConfig,
     /// Apply traffic config text value
     ApplyTrafficConfig,
+    /// Apply graph config text value
+    ApplyGraphConfig,
 }
 
 /// Type of dropdown being handled
@@ -41,6 +43,8 @@ enum DropdownType {
     Settings,
     /// Traffic configuration dropdown
     TrafficConfig,
+    /// Graph configuration dropdown
+    GraphConfig,
 }
 
 /// Result of dropdown navigation
@@ -132,12 +136,14 @@ impl App {
             InputMode::FilePathInput => self.handle_key_file_path_input(key),
             InputMode::ConfigDropdown => self.handle_key_config_dropdown(key),
             InputMode::TrafficConfigDropdown => self.handle_key_traffic_config_dropdown(key),
+            InputMode::GraphConfigDropdown => self.handle_key_graph_config_dropdown(key),
             InputMode::SettingsDropdown => self.handle_key_settings_dropdown(key),
             InputMode::WindowCommand => self.handle_key_window_command(key),
             InputMode::CommandLine => self.handle_key_command_line(key),
             InputMode::SplitSelect => self.handle_key_split_select(key),
             InputMode::ConfigTextInput => self.handle_key_config_text_input(key),
             InputMode::TrafficConfigTextInput => self.handle_key_traffic_config_text_input(key),
+            InputMode::GraphConfigTextInput => self.handle_key_graph_config_text_input(key),
         }
     }
 
@@ -944,13 +950,53 @@ impl App {
         false
     }
 
-    /// Handle key events for graph pane (placeholder)
+    /// Handle key events for graph pane
     pub(super) fn handle_key_graph(&mut self, key: KeyEvent) {
-        // Use shared placeholder handler for common functionality
-        if self.handle_key_placeholder_pane(key) {
-            // Handled by shared handler
+        use crate::app::GraphFocus;
+
+        match key.code {
+            // Toggle config panel with Tab or 'c'
+            KeyCode::Tab | KeyCode::Char('c') => {
+                self.graph.focus = match self.graph.focus {
+                    GraphFocus::Graph => GraphFocus::Config,
+                    GraphFocus::Config => GraphFocus::Graph,
+                };
+            }
+            // Config panel navigation when focused on config
+            KeyCode::Char('j') | KeyCode::Down if matches!(self.graph.focus, GraphFocus::Config) => {
+                self.graph.config.next_field();
+            }
+            KeyCode::Char('k') | KeyCode::Up if matches!(self.graph.focus, GraphFocus::Config) => {
+                self.graph.config.prev_field();
+            }
+            // Open dropdown or toggle for config fields
+            KeyCode::Enter | KeyCode::Char(' ')
+                if matches!(self.graph.focus, GraphFocus::Config) =>
+            {
+                self.confirm_graph_config_field();
+            }
+            // Open dropdown with l or right
+            KeyCode::Char('l') | KeyCode::Right
+                if matches!(self.graph.focus, GraphFocus::Config) =>
+            {
+                let field = self.graph.config.field;
+                if !field.is_toggle() && !field.is_text_input() {
+                    // Open dropdown
+                    self.graph.open_dropdown();
+                    self.input.mode = InputMode::GraphConfigDropdown;
+                }
+            }
+            // Return to graph focus with h or left
+            KeyCode::Char('h') | KeyCode::Left
+                if matches!(self.graph.focus, GraphFocus::Config) =>
+            {
+                self.graph.focus = GraphFocus::Graph;
+            }
+            // Use shared placeholder handler for common functionality (tab switching, etc.)
+            _ => {
+                self.handle_key_placeholder_pane(key);
+            }
         }
-        // Graph-specific keybindings will go here
     }
 
     /// Handle key events for advanced send pane (placeholder)
@@ -1081,6 +1127,10 @@ impl App {
         self.handle_dropdown(key, DropdownType::TrafficConfig);
     }
 
+    pub(super) fn handle_key_graph_config_dropdown(&mut self, key: KeyEvent) {
+        self.handle_dropdown(key, DropdownType::GraphConfig);
+    }
+
     /// Generic handler for dropdown navigation and selection
     fn handle_dropdown(&mut self, key: KeyEvent, dropdown_type: DropdownType) {
         // Get options count and dropdown index reference based on type
@@ -1097,6 +1147,10 @@ impl App {
                 self.traffic.get_options_count(),
                 &mut self.traffic.config.dropdown_index,
             ),
+            DropdownType::GraphConfig => (
+                self.graph.get_options_count(),
+                &mut self.graph.config.dropdown_index,
+            ),
         };
 
         match handle_dropdown_key(key, options_count, dropdown_index, &self.settings.keybindings.dropdown) {
@@ -1112,6 +1166,15 @@ impl App {
                         self.traffic.apply_dropdown_selection();
                         self.needs_full_clear = true;
                         self.status = self.traffic_config_status();
+                    }
+                    DropdownType::GraphConfig => {
+                        self.graph.apply_dropdown_selection();
+                        self.needs_full_clear = true;
+                        self.status = format!(
+                            "Graph: Mode={}, Parser={}",
+                            self.graph.engine.as_ref().map(|e| e.mode().name()).unwrap_or("N/A"),
+                            self.graph.engine.as_ref().map(|e| e.parser_config().parser_type().name()).unwrap_or("N/A")
+                        );
                     }
                 }
                 self.input.mode = InputMode::Normal;
@@ -1157,6 +1220,10 @@ impl App {
         self.handle_simple_text_input(key, TextInputAction::ApplyTrafficConfig, "Input cancelled.");
     }
 
+    pub(super) fn handle_key_graph_config_text_input(&mut self, key: KeyEvent) {
+        self.handle_simple_text_input(key, TextInputAction::ApplyGraphConfig, "Input cancelled.");
+    }
+
     /// Generic handler for simple text input modes
     /// Handles the common pattern of submit->action, cancel->message
     fn handle_simple_text_input(&mut self, key: KeyEvent, action: TextInputAction, cancel_msg: &str) {
@@ -1179,6 +1246,14 @@ impl App {
                     TextInputAction::ApplyTrafficConfig => {
                         self.traffic.apply_text_input(value);
                         self.status = self.traffic_config_status();
+                    }
+                    TextInputAction::ApplyGraphConfig => {
+                        self.graph.apply_text_input(value);
+                        self.status = format!(
+                            "{}: {}",
+                            self.graph.config.field.label(),
+                            self.graph.get_config_display(self.graph.config.field)
+                        );
                     }
                 }
             }
@@ -1240,6 +1315,26 @@ impl App {
         } else {
             self.traffic.open_dropdown();
             self.input.mode = InputMode::TrafficConfigDropdown;
+        }
+    }
+
+    /// Handle confirm action on a graph config field (toggle/text input/dropdown)
+    fn confirm_graph_config_field(&mut self) {
+        let field = self.graph.config.field;
+        if field.is_toggle() {
+            self.graph.toggle_setting();
+            self.status = format!(
+                "{}: {}",
+                field.label(),
+                self.graph.get_config_display(field)
+            );
+        } else if field.is_text_input() {
+            self.input.buffer = self.graph.get_text_value();
+            self.input.mode = InputMode::GraphConfigTextInput;
+            self.status = InputMode::GraphConfigTextInput.entry_prompt().to_string();
+        } else {
+            self.graph.open_dropdown();
+            self.input.mode = InputMode::GraphConfigDropdown;
         }
     }
 

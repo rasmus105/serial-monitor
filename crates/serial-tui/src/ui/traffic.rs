@@ -3,19 +3,21 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    symbols::Marker,
     text::{Line, Span},
     widgets::{
-        Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
+        Axis, Block, Borders, Chart, Clear, Dataset, GraphType, List, ListItem, Paragraph,
+        Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
     Frame,
 };
-use serial_core::{encode, Direction as DataDirection};
+use serial_core::{encode, Direction as DataDirection, GraphMode};
 use strum::IntoEnumIterator;
 
 use crate::app::{
-    App, ConfigSection, ConnectionState, EnumNavigation, HexGrouping, InputMode, PaneContent,
-    PaneFocus, SearchMatch, TrafficConfigField, TrafficFocus, WrapMode,
+    App, ConfigSection, ConnectionState, EnumNavigation, GraphConfigField, GraphFocus,
+    HexGrouping, InputMode, PaneContent, PaneFocus, SearchMatch, TrafficConfigField, TrafficFocus,
+    WrapMode,
 };
 use crate::command::TrafficCommand;
 use crate::wrap::{truncate_line_styled, wrap_line_styled, GutterConfig, StyledSegment};
@@ -222,7 +224,7 @@ fn render_pane_with_title(
             render_traffic_content_with_tab_bar(frame, app, area, focused, active_tab, is_primary)
         }
         PaneContent::Graph => {
-            render_graph_pane_with_tab_bar(frame, area, focused, active_tab, is_primary)
+            render_graph_pane_with_tab_bar(frame, app, area, focused, active_tab, is_primary)
         }
         PaneContent::AdvancedSend => {
             render_send_pane_with_tab_bar(frame, area, focused, active_tab, is_primary)
@@ -232,11 +234,17 @@ fn render_pane_with_title(
 
 fn render_graph_pane_with_tab_bar(
     frame: &mut Frame,
+    app: &mut App,
     area: Rect,
     focused: bool,
     active_tab: u8,
     is_primary: bool,
 ) {
+    // Initialize graph engine if not yet done
+    if !app.graph.initialized {
+        app.initialize_graph();
+    }
+
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
@@ -250,17 +258,50 @@ fn render_graph_pane_with_tab_bar(
         " Graph ".to_string()
     };
 
+    // Layout: graph content on left, config panel on right (if focused)
+    let show_config = matches!(app.graph.focus, GraphFocus::Config) && focused;
+    let chunks = if show_config {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(20), Constraint::Length(30)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(100)])
+            .split(area)
+    };
+
+    // Render graph content
+    let graph_area = chunks[0];
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = block.inner(graph_area);
+    frame.render_widget(block, graph_area);
 
-    let placeholder =
-        Paragraph::new("Graph view - Coming soon").style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(placeholder, inner);
+    // Render the appropriate graph based on mode
+    if let Some(ref engine) = app.graph.engine {
+        match engine.mode() {
+            GraphMode::PacketRate => {
+                render_packet_rate_graph(frame, app, inner);
+            }
+            GraphMode::ParsedData => {
+                render_parsed_data_graph(frame, app, inner);
+            }
+        }
+    } else {
+        let placeholder = Paragraph::new("No data yet. Connect to a serial port to see graphs.")
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(placeholder, inner);
+    }
+
+    // Render config panel if showing
+    if show_config {
+        render_graph_config_panel(frame, app, chunks[1], focused);
+    }
 }
 
 fn render_send_pane_with_tab_bar(
@@ -892,6 +933,510 @@ fn render_traffic_config_dropdown(frame: &mut Frame, app: &App, config_area: Rec
         .enumerate()
         .map(|(i, option)| {
             let is_selected = i == app.traffic.config.dropdown_index;
+            let prefix = if is_selected { "> " } else { "  " };
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            ListItem::new(format!("{}{}", prefix, option)).style(style)
+        })
+        .collect();
+
+    let dropdown_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    let dropdown_list = List::new(items).block(dropdown_block);
+
+    frame.render_widget(dropdown_list, dropdown_area);
+}
+
+// =============================================================================
+// Graph Rendering
+// =============================================================================
+
+fn render_packet_rate_graph(frame: &mut Frame, app: &App, area: Rect) {
+    let engine = match &app.graph.engine {
+        Some(e) => e,
+        None => return,
+    };
+
+    let rate_data = engine.packet_rate();
+
+    // Calculate time bounds based on selected time window
+    let now = std::time::SystemTime::now();
+    let time_window = app.graph.time_window.as_duration();
+    let start_time = time_window.map(|d| now - d);
+
+    // Collect data points for RX and TX
+    let mut rx_data: Vec<(f64, f64)> = Vec::new();
+    let mut tx_data: Vec<(f64, f64)> = Vec::new();
+    let mut min_time = f64::MAX;
+    let mut max_time = f64::MIN;
+    let mut max_count: f64 = 0.0;
+
+    for sample in rate_data.samples() {
+        // Filter by time window
+        if let Some(start) = start_time {
+            if sample.window_start < start {
+                continue;
+            }
+        }
+
+        // Convert timestamp to seconds since epoch for x-axis
+        let time_secs = sample
+            .window_start
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+
+        min_time = min_time.min(time_secs);
+        max_time = max_time.max(time_secs);
+
+        if app.graph.show_rx {
+            let rx_count = sample.rx_count as f64;
+            rx_data.push((time_secs, rx_count));
+            max_count = max_count.max(rx_count);
+        }
+
+        if app.graph.show_tx {
+            let tx_count = sample.tx_count as f64;
+            tx_data.push((time_secs, tx_count));
+            max_count = max_count.max(tx_count);
+        }
+    }
+
+    // Handle empty data
+    if rx_data.is_empty() && tx_data.is_empty() {
+        let placeholder = Paragraph::new("No packet data yet. Waiting for data...")
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(placeholder, area);
+        return;
+    }
+
+    // Ensure we have some range for the axes
+    if (max_time - min_time).abs() < 0.001 {
+        max_time = min_time + 1.0;
+    }
+    if max_count < 1.0 {
+        max_count = 10.0;
+    }
+
+    // Format time labels (show relative seconds)
+    let time_span = max_time - min_time;
+    let x_labels = vec![
+        Span::raw(format!("-{:.0}s", time_span)),
+        Span::raw(format!("-{:.0}s", time_span / 2.0)),
+        Span::raw("now"),
+    ];
+
+    // Build datasets
+    let mut datasets = Vec::new();
+
+    if app.graph.show_rx && !rx_data.is_empty() {
+        datasets.push(
+            Dataset::default()
+                .name("RX")
+                .marker(Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(Color::Green))
+                .data(&rx_data),
+        );
+    }
+
+    if app.graph.show_tx && !tx_data.is_empty() {
+        datasets.push(
+            Dataset::default()
+                .name("TX")
+                .marker(Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(Color::Yellow))
+                .data(&tx_data),
+        );
+    }
+
+    let chart = Chart::new(datasets)
+        .x_axis(
+            Axis::default()
+                .title("Time")
+                .style(Style::default().fg(Color::Gray))
+                .bounds([min_time, max_time])
+                .labels(x_labels),
+        )
+        .y_axis(
+            Axis::default()
+                .title("Packets")
+                .style(Style::default().fg(Color::Gray))
+                .bounds([0.0, max_count * 1.1])
+                .labels(vec![
+                    Span::raw("0"),
+                    Span::raw(format!("{:.0}", max_count / 2.0)),
+                    Span::raw(format!("{:.0}", max_count)),
+                ]),
+        );
+
+    frame.render_widget(chart, area);
+}
+
+fn render_parsed_data_graph(frame: &mut Frame, app: &App, area: Rect) {
+    let engine = match &app.graph.engine {
+        Some(e) => e,
+        None => return,
+    };
+
+    let parsed_data = engine.parsed_data();
+
+    if parsed_data.is_empty() {
+        let placeholder = Paragraph::new(
+            "No parsed data yet.\nEnsure your data contains key=value patterns.",
+        )
+        .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(placeholder, area);
+        return;
+    }
+
+    // Calculate time bounds
+    let now = std::time::SystemTime::now();
+    let time_window = app.graph.time_window.as_duration();
+    let start_time = time_window.map(|d| now - d);
+
+    // Collect data for all visible series
+    let mut all_data: Vec<(String, Vec<(f64, f64)>, Color)> = Vec::new();
+    let mut min_time = f64::MAX;
+    let mut max_time = f64::MIN;
+    let mut min_val = f64::MAX;
+    let mut max_val = f64::MIN;
+
+    let colors = [
+        Color::Green,
+        Color::Yellow,
+        Color::Cyan,
+        Color::Magenta,
+        Color::Red,
+        Color::Blue,
+    ];
+
+    for (idx, series) in parsed_data.all_series().enumerate() {
+        if !series.visible {
+            continue;
+        }
+
+        let mut series_data: Vec<(f64, f64)> = Vec::new();
+        let color = colors[idx % colors.len()];
+
+        for point in &series.points {
+            // Filter by time window
+            if let Some(start) = start_time {
+                if point.timestamp < start {
+                    continue;
+                }
+            }
+
+            // Filter by direction if needed
+            if !app.graph.show_rx && point.direction == serial_core::Direction::Rx {
+                continue;
+            }
+            if !app.graph.show_tx && point.direction == serial_core::Direction::Tx {
+                continue;
+            }
+
+            let time_secs = point
+                .timestamp
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+
+            min_time = min_time.min(time_secs);
+            max_time = max_time.max(time_secs);
+            min_val = min_val.min(point.value);
+            max_val = max_val.max(point.value);
+
+            series_data.push((time_secs, point.value));
+        }
+
+        if !series_data.is_empty() {
+            all_data.push((series.name.clone(), series_data, color));
+        }
+    }
+
+    if all_data.is_empty() {
+        let placeholder =
+            Paragraph::new("No visible data in selected time window.")
+                .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(placeholder, area);
+        return;
+    }
+
+    // Ensure we have some range for the axes
+    if (max_time - min_time).abs() < 0.001 {
+        max_time = min_time + 1.0;
+    }
+    if (max_val - min_val).abs() < 0.001 {
+        min_val -= 1.0;
+        max_val += 1.0;
+    }
+
+    // Add some padding to y-axis
+    let y_range = max_val - min_val;
+    min_val -= y_range * 0.1;
+    max_val += y_range * 0.1;
+
+    // Format time labels
+    let time_span = max_time - min_time;
+    let x_labels = vec![
+        Span::raw(format!("-{:.0}s", time_span)),
+        Span::raw(format!("-{:.0}s", time_span / 2.0)),
+        Span::raw("now"),
+    ];
+
+    // Build datasets - need to store data in a way that outlives the dataset references
+    let datasets: Vec<Dataset> = all_data
+        .iter()
+        .map(|(name, data, color)| {
+            Dataset::default()
+                .name(name.as_str())
+                .marker(Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(*color))
+                .data(data)
+        })
+        .collect();
+
+    let chart = Chart::new(datasets)
+        .x_axis(
+            Axis::default()
+                .title("Time")
+                .style(Style::default().fg(Color::Gray))
+                .bounds([min_time, max_time])
+                .labels(x_labels),
+        )
+        .y_axis(
+            Axis::default()
+                .title("Value")
+                .style(Style::default().fg(Color::Gray))
+                .bounds([min_val, max_val])
+                .labels(vec![
+                    Span::raw(format!("{:.1}", min_val)),
+                    Span::raw(format!("{:.1}", (min_val + max_val) / 2.0)),
+                    Span::raw(format!("{:.1}", max_val)),
+                ]),
+        );
+
+    frame.render_widget(chart, area);
+}
+
+fn render_graph_config_panel(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
+    let dropdown_open = app.input.mode == InputMode::GraphConfigDropdown;
+    let text_input_open = app.input.mode == InputMode::GraphConfigTextInput;
+    
+    let border_style = if (focused && matches!(app.graph.focus, GraphFocus::Config)) || dropdown_open || text_input_open {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .title(" Config ")
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Build config items
+    let mut lines: Vec<Line> = Vec::new();
+    let is_focused = focused && matches!(app.graph.focus, GraphFocus::Config);
+    let panel_width = inner.width as usize;
+
+    // Settings section header
+    let settings_sep = create_separator("Settings", panel_width);
+    lines.push(Line::from(Span::styled(
+        settings_sep,
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    )));
+
+    for field in GraphConfigField::iter() {
+        // Skip RegexPattern if parser is not Regex type
+        if field == GraphConfigField::RegexPattern && !app.graph.should_show_regex_pattern() {
+            continue;
+        }
+
+        let is_selected = app.graph.config.field == field && (is_focused || dropdown_open || text_input_open);
+
+        let name: &'static str = field.into();
+        let value = app.graph.get_config_display(field);
+
+        // For text input fields being edited, show the input buffer with cursor
+        let is_editing_this_field = text_input_open && is_selected && field.is_text_input();
+        let display_value = if is_editing_this_field {
+            format!("{}▌", app.input.buffer)
+        } else {
+            value.clone()
+        };
+
+        let label_style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        let value_style = if is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+
+        let prefix = if is_selected { "> " } else { "  " };
+
+        // For boolean toggles, show a checkbox-style indicator
+        if field.is_toggle() {
+            let (indicator, color) = if value == "ON" {
+                ("[x]", Color::Green)
+            } else {
+                ("[ ]", Color::DarkGray)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, label_style),
+                Span::styled(format!("{}: ", name), label_style),
+                Span::styled(indicator, Style::default().fg(color)),
+            ]));
+        } else if field.is_text_input() {
+            // Text input field - may need wrapping for long patterns
+            let label_text = format!("{}{}: ", prefix, name);
+            let label_len = label_text.chars().count();
+            let available_width = panel_width.saturating_sub(label_len);
+
+            if display_value.chars().count() <= available_width {
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(format!("{}: ", name), label_style),
+                    Span::styled(display_value.clone(), value_style),
+                ]));
+            } else {
+                // Wrap long values
+                let chars: Vec<char> = display_value.chars().collect();
+                let first_line_chars: String = chars.iter().take(available_width).collect();
+                let remaining: String = chars.iter().skip(available_width).collect();
+
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, label_style),
+                    Span::styled(format!("{}: ", name), label_style),
+                    Span::styled(first_line_chars, value_style),
+                ]));
+
+                // Continuation lines
+                let indent = " ".repeat(label_len);
+                let mut remaining_chars: Vec<char> = remaining.chars().collect();
+                while !remaining_chars.is_empty() {
+                    let line_chars: String = remaining_chars.iter().take(available_width).collect();
+                    remaining_chars = remaining_chars.into_iter().skip(available_width).collect();
+                    lines.push(Line::from(vec![
+                        Span::raw(indent.clone()),
+                        Span::styled(line_chars, value_style),
+                    ]));
+                }
+            }
+        } else {
+            // Dropdown field
+            let indicator = " ▼";
+            lines.push(Line::from(vec![
+                Span::styled(prefix, label_style),
+                Span::styled(format!("{}: ", name), label_style),
+                Span::styled(display_value.clone(), value_style),
+                Span::styled(indicator, Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    // Add series section if in ParsedData mode and there are series
+    let series_names = app.graph.series_names();
+    if !series_names.is_empty() 
+        && app.graph.engine.as_ref().map(|e| e.mode()) == Some(GraphMode::ParsedData) 
+    {
+        lines.push(Line::from("")); // Spacer
+        let series_sep = create_separator("Series", panel_width);
+        lines.push(Line::from(Span::styled(
+            series_sep,
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )));
+
+        for name in &series_names {
+            let is_visible = app.graph.is_series_visible(name);
+            let (indicator, color) = if is_visible {
+                ("[x]", Color::Green)
+            } else {
+                ("[ ]", Color::DarkGray)
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{}: ", name), Style::default()),
+                Span::styled(indicator, Style::default().fg(color)),
+            ]));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+
+    // Render dropdown if open
+    if dropdown_open {
+        render_graph_config_dropdown(frame, app, area);
+    }
+}
+
+fn render_graph_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
+    let options = app.graph.get_config_option_strings();
+    if options.is_empty() {
+        return;
+    }
+
+    let field_index = GraphConfigField::iter()
+        .position(|f| f == app.graph.config.field)
+        .unwrap_or(0);
+
+    // Calculate dropdown dimensions
+    let dropdown_width = options.iter().map(|s| s.len()).max().unwrap_or(10) as u16 + 6;
+    let dropdown_height = (options.len() + 2) as u16;
+
+    // Position dropdown next to the selected field
+    let dropdown_y = config_area.y + 1 + field_index as u16;
+    let dropdown_x = config_area.x + config_area.width.saturating_sub(dropdown_width + 1);
+
+    // Ensure dropdown fits on screen
+    let available_height = frame.area().height.saturating_sub(dropdown_y);
+    let actual_height = dropdown_height.min(available_height).max(3);
+
+    let dropdown_area = Rect::new(
+        dropdown_x,
+        dropdown_y,
+        dropdown_width.min(config_area.width),
+        actual_height,
+    );
+
+    // Clear the dropdown area first
+    frame.render_widget(Clear, dropdown_area);
+
+    // Build dropdown items
+    let items: Vec<ListItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, option)| {
+            let is_selected = i == app.graph.config.dropdown_index;
             let prefix = if is_selected { "> " } else { "  " };
 
             let style = if is_selected {
