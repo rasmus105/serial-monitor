@@ -4,7 +4,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{
+        Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
 use serial_core::{encode, Direction as DataDirection};
@@ -153,11 +156,10 @@ fn render_tab_layout(frame: &mut Frame, app: &mut App, area: Rect) {
     let secondary_content = app.layout.secondary();
     let split_ratio = app.layout.split_ratio();
     let pane_focus = app.layout.focus();
-    
+
     // Determine if panes are focused (vs config panel having focus)
-    let config_has_focus = app.traffic.config.visible 
-        && app.traffic.focus == TrafficFocus::Config;
-    
+    let config_has_focus = app.traffic.config.visible && app.traffic.focus == TrafficFocus::Config;
+
     if let Some(secondary_content) = secondary_content {
         // We have a split - create left | right layout
         let chunks = Layout::default()
@@ -170,15 +172,39 @@ fn render_tab_layout(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Render primary pane (left) - focused only if PaneFocus::Primary AND config doesn't have focus
         let primary_focused = pane_focus == PaneFocus::Primary && !config_has_focus;
-        render_pane_with_title(frame, app, chunks[0], primary_content, primary_focused, active_tab, true);
+        render_pane_with_title(
+            frame,
+            app,
+            chunks[0],
+            primary_content,
+            primary_focused,
+            active_tab,
+            true,
+        );
 
         // Render secondary pane (right) - focused only if PaneFocus::Secondary AND config doesn't have focus
         let secondary_focused = pane_focus == PaneFocus::Secondary && !config_has_focus;
-        render_pane_with_title(frame, app, chunks[1], secondary_content, secondary_focused, active_tab, false);
+        render_pane_with_title(
+            frame,
+            app,
+            chunks[1],
+            secondary_content,
+            secondary_focused,
+            active_tab,
+            false,
+        );
     } else {
         // No split - primary pane is focused only if config panel doesn't have focus
         let primary_focused = !config_has_focus;
-        render_pane_with_title(frame, app, area, primary_content, primary_focused, active_tab, true);
+        render_pane_with_title(
+            frame,
+            app,
+            area,
+            primary_content,
+            primary_focused,
+            active_tab,
+            true,
+        );
     }
 }
 
@@ -192,24 +218,25 @@ fn render_pane_with_title(
     is_primary: bool,
 ) {
     match content {
-        PaneContent::Traffic => render_traffic_pane_with_tab_bar(frame, app, area, focused, active_tab, is_primary),
-        PaneContent::Graph => render_graph_pane_with_tab_bar(frame, area, focused, active_tab, is_primary),
-        PaneContent::AdvancedSend => render_send_pane_with_tab_bar(frame, area, focused, active_tab, is_primary),
+        PaneContent::Traffic => {
+            render_traffic_content_with_tab_bar(frame, app, area, focused, active_tab, is_primary)
+        }
+        PaneContent::Graph => {
+            render_graph_pane_with_tab_bar(frame, area, focused, active_tab, is_primary)
+        }
+        PaneContent::AdvancedSend => {
+            render_send_pane_with_tab_bar(frame, area, focused, active_tab, is_primary)
+        }
     }
 }
 
-fn render_traffic_pane_with_tab_bar(
+fn render_graph_pane_with_tab_bar(
     frame: &mut Frame,
-    app: &mut App,
     area: Rect,
     focused: bool,
     active_tab: u8,
     is_primary: bool,
 ) {
-    render_traffic_content_with_tab_bar(frame, app, area, focused, active_tab, is_primary);
-}
-
-fn render_graph_pane_with_tab_bar(frame: &mut Frame, area: Rect, focused: bool, active_tab: u8, is_primary: bool) {
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
@@ -231,12 +258,18 @@ fn render_graph_pane_with_tab_bar(frame: &mut Frame, area: Rect, focused: bool, 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let placeholder = Paragraph::new("Graph view - Coming soon")
-        .style(Style::default().fg(Color::DarkGray));
+    let placeholder =
+        Paragraph::new("Graph view - Coming soon").style(Style::default().fg(Color::DarkGray));
     frame.render_widget(placeholder, inner);
 }
 
-fn render_send_pane_with_tab_bar(frame: &mut Frame, area: Rect, focused: bool, active_tab: u8, is_primary: bool) {
+fn render_send_pane_with_tab_bar(
+    frame: &mut Frame,
+    area: Rect,
+    focused: bool,
+    active_tab: u8,
+    is_primary: bool,
+) {
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
@@ -263,24 +296,56 @@ fn render_send_pane_with_tab_bar(frame: &mut Frame, area: Rect, focused: bool, a
     frame.render_widget(placeholder, inner);
 }
 
+fn format_tab(index: u8, name: &str, active: bool) -> String {
+    if active {
+        format!("[{}:{}]", index, name)
+    } else {
+        format!("{}:{}", index, name)
+    }
+}
+
 /// Build the tab bar title string
 /// Format: " [1:Traffic] - 2:Graph - 3:Send | [extra info] "
 fn build_tab_bar_title(active_tab: u8) -> String {
-    let t1 = if active_tab == 1 { "[1:Traffic]" } else { "1:Traffic" };
-    let t2 = if active_tab == 2 { "[2:Graph]" } else { "2:Graph" };
-    let t3 = if active_tab == 3 { "[3:Send]" } else { "3:Send" };
-    format!(" {} - {} - {} ", t1, t2, t3)
+    format!(
+        " {} - {} - {} ",
+        format_tab(1, "Traffic", active_tab == 1),
+        format_tab(2, "Graph", active_tab == 2),
+        format_tab(3, "Send", active_tab == 3),
+    )
 }
 
 // =============================================================================
 // Traffic Content Rendering
 // =============================================================================
 
-fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: Rect, focused: bool, active_tab: u8, is_primary: bool) {
+fn render_traffic_content_with_tab_bar(
+    frame: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    focused: bool,
+    active_tab: u8,
+    is_primary: bool,
+) {
     // Get dynamic keybinding hints
-    let search_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::EnterSearchMode).unwrap_or_else(|| "/".to_string());
-    let config_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::ToggleConfigPanel).unwrap_or_else(|| "c".to_string());
-    let send_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::EnterSendMode).unwrap_or_else(|| "i".to_string());
+    let search_key = app
+        .settings
+        .keybindings
+        .traffic
+        .shortcut_hint(TrafficCommand::EnterSearchMode)
+        .unwrap_or_else(|| "/".to_string());
+    let config_key = app
+        .settings
+        .keybindings
+        .traffic
+        .shortcut_hint(TrafficCommand::ToggleConfigPanel)
+        .unwrap_or_else(|| "c".to_string());
+    let send_key = app
+        .settings
+        .keybindings
+        .traffic
+        .shortcut_hint(TrafficCommand::EnterSendMode)
+        .unwrap_or_else(|| "i".to_string());
 
     // Build title with tab bar (only for primary pane)
     let tab_bar = if is_primary {
@@ -306,10 +371,23 @@ fn render_traffic_content_with_tab_bar(frame: &mut Frame, app: &mut App, area: R
         let pct = progress
             .map(|p| (p.percentage() * 100.0) as u8)
             .unwrap_or(0);
-        format!("{}| [{}] {}[Sending: {}%] ", tab_bar, app.traffic.encoding, filter_indicator, pct)
+        format!(
+            "{}| [{}] {}[Sending: {}%] ",
+            tab_bar, app.traffic.encoding, filter_indicator, pct
+        )
     } else if app.search.has_pattern() {
-        let next_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::NextMatch).unwrap_or_else(|| "n".to_string());
-        let prev_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::PrevMatch).unwrap_or_else(|| "N".to_string());
+        let next_key = app
+            .settings
+            .keybindings
+            .traffic
+            .shortcut_hint(TrafficCommand::NextMatch)
+            .unwrap_or_else(|| "n".to_string());
+        let prev_key = app
+            .settings
+            .keybindings
+            .traffic
+            .shortcut_hint(TrafficCommand::PrevMatch)
+            .unwrap_or_else(|| "N".to_string());
         format!(
             "{}| [{}] {}[{}: search, {}/{}: next/prev] ",
             tab_bar, app.traffic.encoding, filter_indicator, search_key, next_key, prev_key
@@ -554,8 +632,18 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     // Build dynamic title
-    let back_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::FocusTraffic).unwrap_or_else(|| "h".to_string());
-    let close_key = app.settings.keybindings.traffic.shortcut_hint(TrafficCommand::ToggleConfigPanel).unwrap_or_else(|| "c".to_string());
+    let back_key = app
+        .settings
+        .keybindings
+        .traffic
+        .shortcut_hint(TrafficCommand::FocusTraffic)
+        .unwrap_or_else(|| "h".to_string());
+    let close_key = app
+        .settings
+        .keybindings
+        .traffic
+        .shortcut_hint(TrafficCommand::ToggleConfigPanel)
+        .unwrap_or_else(|| "c".to_string());
     let title = format!(" Config [{}: back, {}: close] ", back_key, close_key);
 
     let block = Block::default()
@@ -613,9 +701,11 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
 
     for field in TrafficConfigField::iter() {
         // Add separator when section changes
-        prev_section = push_section_separator(&mut lines, prev_section, field.section(), panel_width);
+        prev_section =
+            push_section_separator(&mut lines, prev_section, field.section(), panel_width);
 
-        let is_selected = app.traffic.config.field == field && (is_focused || dropdown_open || text_input_open);
+        let is_selected =
+            app.traffic.config.field == field && (is_focused || dropdown_open || text_input_open);
         let prefix = if is_selected { "> " } else { "  " };
 
         let label_style = if is_selected {
@@ -661,13 +751,13 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
         let shortcut_hint = field
             .associated_command()
             .and_then(|cmd| app.settings.keybindings.traffic.shortcut_hint(cmd));
-        
+
         // For SaveDirectory, wrap the value if it's too long
         if field == TrafficConfigField::SaveDirectory {
             let label_text = format!("{}{}: ", prefix, field.label());
             let label_len = label_text.chars().count();
             let available_width = panel_width.saturating_sub(label_len);
-            
+
             if display_value.chars().count() <= available_width {
                 // Fits on one line
                 lines.push(Line::from(vec![
@@ -680,13 +770,13 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
                 let chars: Vec<char> = display_value.chars().collect();
                 let first_line_chars: String = chars.iter().take(available_width).collect();
                 let remaining: String = chars.iter().skip(available_width).collect();
-                
+
                 lines.push(Line::from(vec![
                     Span::styled(prefix, label_style),
                     Span::styled(format!("{}: ", field.label()), label_style),
                     Span::styled(first_line_chars, value_style),
                 ]));
-                
+
                 // Continuation lines - indent to align with value
                 let indent = " ".repeat(label_len);
                 let mut remaining_chars: Vec<char> = remaining.chars().collect();
@@ -724,7 +814,7 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     let visible_height = inner.height as usize;
     let total_lines = lines.len();
     let scroll_offset = app.traffic.config.scroll_offset;
-    
+
     // Only scroll if content exceeds visible height
     let needs_scroll = total_lines > visible_height;
     let actual_scroll = if needs_scroll {
@@ -732,13 +822,17 @@ fn render_traffic_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         0
     };
-    
+
     // Take only the visible lines
-    let visible_lines: Vec<Line> = lines.into_iter().skip(actual_scroll).take(visible_height).collect();
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(actual_scroll)
+        .take(visible_height)
+        .collect();
 
     let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, inner);
-    
+
     // Render scroll indicator if needed
     if needs_scroll {
         let mut scrollbar_state = ScrollbarState::new(total_lines)

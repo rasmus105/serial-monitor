@@ -15,6 +15,34 @@ use super::types::{
 };
 use super::App;
 
+/// Approximate visible height for config panel scroll calculations.
+/// The actual height is set during rendering, but this provides a reasonable default.
+const CONFIG_VISIBLE_HEIGHT: usize = 15;
+
+/// Action to perform after text input submission
+enum TextInputAction {
+    /// Connect to a port
+    ConnectToPort,
+    /// Execute a command
+    ExecuteCommand,
+    /// Send a file
+    SendFile,
+    /// Apply port config text value
+    ApplyPortConfig,
+    /// Apply traffic config text value
+    ApplyTrafficConfig,
+}
+
+/// Type of dropdown being handled
+enum DropdownType {
+    /// Port configuration dropdown
+    PortConfig,
+    /// Settings panel dropdown (pattern mode)
+    Settings,
+    /// Traffic configuration dropdown
+    TrafficConfig,
+}
+
 /// Result of dropdown navigation
 pub(super) enum DropdownResult {
     /// Navigation handled (up/down), stay in dropdown mode
@@ -292,9 +320,6 @@ impl App {
     }
 
     pub(super) fn handle_key_port_select(&mut self, key: KeyEvent) {
-        // Approximate visible height for scroll calculations (actual height is set during render)
-        const CONFIG_VISIBLE_HEIGHT: usize = 15;
-        
         // First check global navigation commands
         if let Some(nav_cmd) = map_global_nav_key(&key) {
             match nav_cmd {
@@ -336,24 +361,7 @@ impl App {
                             }
                         }
                         PortSelectFocus::Config => {
-                            // Check if it's a toggle field
-                            if self.port_select.config.field.is_toggle() {
-                                self.port_select.toggle_setting();
-                                self.status = format!(
-                                    "{}: {}",
-                                    self.port_select.config.field.label(),
-                                    self.port_select.get_config_display(self.port_select.config.field)
-                                );
-                            } else if self.port_select.config.field.is_text_input() {
-                                // Text input field
-                                self.input.buffer = self.port_select.get_text_value();
-                                self.input.mode = InputMode::ConfigTextInput;
-                                self.status = InputMode::ConfigTextInput.entry_prompt().to_string();
-                            } else {
-                                // Dropdown field
-                                self.port_select.open_dropdown();
-                                self.input.mode = InputMode::ConfigDropdown;
-                            }
+                            self.confirm_port_config_field();
                         }
                     }
                     return;
@@ -378,9 +386,7 @@ impl App {
         let Some(cmd) = cmd else {
             // Check for command line entry with ':'
             if key.code == KeyCode::Char(':') && key.modifiers.is_empty() {
-                self.input.mode = InputMode::CommandLine;
-                self.input.buffer.clear();
-                self.status = String::new();
+                self.enter_input_mode(InputMode::CommandLine);
                 return;
             }
             return;
@@ -390,9 +396,7 @@ impl App {
             PortSelectCommand::Quit => self.should_quit = true,
             PortSelectCommand::RefreshPorts => self.refresh_ports(),
             PortSelectCommand::EnterPortPath => {
-                self.input.mode = InputMode::PortInput;
-                self.input.buffer.clear();
-                self.status = InputMode::PortInput.entry_prompt().to_string();
+                self.enter_input_mode(InputMode::PortInput);
             }
             PortSelectCommand::ToggleConfigPanel => {
                 self.port_select.config.visible = !self.port_select.config.visible;
@@ -410,41 +414,11 @@ impl App {
     }
 
     pub(super) fn handle_key_config_dropdown(&mut self, key: KeyEvent) {
-        let options_count = self.port_select.get_options_count();
-        match handle_dropdown_key(
-            key,
-            options_count,
-            &mut self.port_select.config.dropdown_index,
-            &self.settings.keybindings.dropdown,
-        ) {
-            DropdownResult::Confirmed => {
-                self.port_select.apply_dropdown_selection();
-                self.input.mode = InputMode::Normal;
-            }
-            DropdownResult::Cancelled => {
-                self.input.mode = InputMode::Normal;
-            }
-            DropdownResult::Navigated | DropdownResult::NotHandled => {}
-        }
+        self.handle_dropdown(key, DropdownType::PortConfig);
     }
 
     pub(super) fn handle_key_settings_dropdown(&mut self, key: KeyEvent) {
-        const OPTIONS_COUNT: usize = 2; // Regex, Normal
-        match handle_dropdown_key(
-            key,
-            OPTIONS_COUNT,
-            &mut self.settings_panel.dropdown_index,
-            &self.settings.keybindings.dropdown,
-        ) {
-            DropdownResult::Confirmed => {
-                self.apply_settings_dropdown_selection();
-                self.input.mode = InputMode::Normal;
-            }
-            DropdownResult::Cancelled => {
-                self.input.mode = InputMode::Normal;
-            }
-            DropdownResult::Navigated | DropdownResult::NotHandled => {}
-        }
+        self.handle_dropdown(key, DropdownType::Settings);
     }
 
     /// Apply the settings dropdown selection to the appropriate setting
@@ -487,21 +461,10 @@ impl App {
     }
 
     pub(super) fn handle_key_port_input(&mut self, key: KeyEvent) {
-        match self.input.handle_text_input(key) {
-            TextInputResult::Submit(port_path) => {
-                self.connect_to_port(&port_path);
-            }
-            TextInputResult::Cancel => {
-                self.status = "Cancelled.".to_string();
-            }
-            TextInputResult::Continue => {}
-        }
+        self.handle_simple_text_input(key, TextInputAction::ConnectToPort, "Cancelled.");
     }
 
     pub(super) fn handle_key_traffic(&mut self, key: KeyEvent) {
-        // Approximate visible height for scroll calculations (actual height is set during render)
-        const CONFIG_VISIBLE_HEIGHT: usize = 15;
-        
         // Handle quit confirmation dialog first
         if self.traffic.quit_confirm {
             self.handle_key_quit_confirm(key);
@@ -568,17 +531,7 @@ impl App {
                 }
                 GlobalNavCommand::Confirm => {
                     if config_focused {
-                        // Toggle or open dropdown/text input for config field
-                        if self.traffic.config.field.is_toggle() {
-                            self.handle_traffic_toggle();
-                        } else if self.traffic.config.field.is_text_input() {
-                            self.input.buffer = self.traffic.get_text_value();
-                            self.input.mode = InputMode::TrafficConfigTextInput;
-                            self.status = InputMode::TrafficConfigTextInput.entry_prompt().to_string();
-                        } else {
-                            self.traffic.open_dropdown();
-                            self.input.mode = InputMode::TrafficConfigDropdown;
-                        }
+                        self.confirm_traffic_config_field();
                     }
                     return;
                 }
@@ -622,14 +575,10 @@ impl App {
                 }
             }
             TrafficCommand::EnterSendMode => {
-                self.input.mode = InputMode::SendInput;
-                self.input.buffer.clear();
-                self.status = InputMode::SendInput.entry_prompt().to_string();
+                self.enter_input_mode(InputMode::SendInput);
             }
             TrafficCommand::EnterSearchMode => {
-                self.input.mode = InputMode::SearchInput;
-                self.input.buffer.clear();
-                self.status = InputMode::SearchInput.entry_prompt().to_string();
+                self.enter_input_mode(InputMode::SearchInput);
             }
             TrafficCommand::NextMatch => {
                 self.goto_next_match();
@@ -641,9 +590,7 @@ impl App {
                 if self.file_send.handle.is_some() {
                     self.cancel_file_send();
                 } else {
-                    self.input.mode = InputMode::FilePathInput;
-                    self.input.buffer.clear();
-                    self.status = InputMode::FilePathInput.entry_prompt().to_string();
+                    self.enter_input_mode(InputMode::FilePathInput);
                 }
             }
             TrafficCommand::ToggleConfigPanel => {
@@ -700,9 +647,7 @@ impl App {
 
         // Check for command line entry
         if key.modifiers.is_empty() && key.code == KeyCode::Char(':') {
-            self.input.mode = InputMode::CommandLine;
-            self.input.buffer.clear();
-            self.status = String::new();
+            self.enter_input_mode(InputMode::CommandLine);
             return;
         }
 
@@ -771,9 +716,6 @@ impl App {
     /// Handle key events when config panel is focused (works from any pane)
     /// Returns true if the key was handled
     fn handle_key_config_panel(&mut self, key: KeyEvent) -> bool {
-        // Approximate visible height for scroll calculations (actual height is set during render)
-        const CONFIG_VISIBLE_HEIGHT: usize = 15;
-        
         // Global navigation for config panel
         if let Some(nav_cmd) = map_global_nav_key(&key) {
             match nav_cmd {
@@ -788,16 +730,7 @@ impl App {
                     return true;
                 }
                 GlobalNavCommand::Confirm => {
-                    if self.traffic.config.field.is_toggle() {
-                        self.handle_traffic_toggle();
-                    } else if self.traffic.config.field.is_text_input() {
-                        self.input.buffer = self.traffic.get_text_value();
-                        self.input.mode = InputMode::TrafficConfigTextInput;
-                        self.status = InputMode::TrafficConfigTextInput.entry_prompt().to_string();
-                    } else {
-                        self.traffic.open_dropdown();
-                        self.input.mode = InputMode::TrafficConfigDropdown;
-                    }
+                    self.confirm_traffic_config_field();
                     return true;
                 }
                 GlobalNavCommand::Cancel => {
@@ -832,16 +765,7 @@ impl App {
                 if self.layout.is_split() {
                     self.status = "Already split - close with Ctrl+W q first".to_string();
                 } else {
-                    // Enter split selection mode
-                    self.input.mode = InputMode::SplitSelect;
-                    let primary = self.layout.primary_content();
-                    let options = primary.available_splits();
-                    let prompt = options
-                        .iter()
-                        .map(|c| format!("[{}] {}", c.tab_number(), c.display_name()))
-                        .collect::<Vec<_>>()
-                        .join("  ");
-                    self.status = format!("Split with: {}  [Esc: cancel]", prompt);
+                    self.enter_split_select_mode();
                 }
             }
             // Close secondary pane
@@ -904,14 +828,7 @@ impl App {
             }
             _ => {
                 // Invalid selection, show options again
-                let primary = self.layout.primary_content();
-                let options = primary.available_splits();
-                let prompt = options
-                    .iter()
-                    .map(|c| format!("[{}] {}", c.tab_number(), c.display_name()))
-                    .collect::<Vec<_>>()
-                    .join("  ");
-                self.status = format!("Split with: {}  [Esc: cancel]", prompt);
+                self.status = self.split_selection_prompt();
             }
         }
     }
@@ -931,6 +848,24 @@ impl App {
             };
             self.status = format!("Focus: {}{}", content.display_name(), pane_indicator);
         }
+    }
+
+    /// Generate the split selection prompt showing available split options
+    fn split_selection_prompt(&self) -> String {
+        let primary = self.layout.primary_content();
+        let options = primary.available_splits();
+        let prompt = options
+            .iter()
+            .map(|c| format!("[{}] {}", c.tab_number(), c.display_name()))
+            .collect::<Vec<_>>()
+            .join("  ");
+        format!("Split with: {}  [Esc: cancel]", prompt)
+    }
+
+    /// Enter split selection mode with the appropriate prompt
+    fn enter_split_select_mode(&mut self) {
+        self.input.mode = InputMode::SplitSelect;
+        self.status = self.split_selection_prompt();
     }
 
     /// Navigate focus left: Config -> Secondary -> Primary
@@ -1029,15 +964,7 @@ impl App {
 
     /// Handle command line input (after pressing :)
     pub(super) fn handle_key_command_line(&mut self, key: KeyEvent) {
-        match self.input.handle_text_input(key) {
-            TextInputResult::Submit(cmd) => {
-                self.execute_command(&cmd);
-            }
-            TextInputResult::Cancel => {
-                self.status = "Command cancelled".to_string();
-            }
-            TextInputResult::Continue => {}
-        }
+        self.handle_simple_text_input(key, TextInputAction::ExecuteCommand, "Command cancelled");
     }
 
     /// Execute a command line command
@@ -1102,15 +1029,7 @@ impl App {
                     }
                 } else {
                     // No argument: enter split selection mode
-                    self.input.mode = InputMode::SplitSelect;
-                    let primary = self.layout.primary_content();
-                    let options = primary.available_splits();
-                    let prompt = options
-                        .iter()
-                        .map(|c| format!("[{}] {}", c.tab_number(), c.display_name()))
-                        .collect::<Vec<_>>()
-                        .join("  ");
-                    self.status = format!("Split with: {}  [Esc: cancel]", prompt);
+                    self.enter_split_select_mode();
                 }
             }
             "close" => {
@@ -1159,22 +1078,43 @@ impl App {
     }
 
     pub(super) fn handle_key_traffic_config_dropdown(&mut self, key: KeyEvent) {
-        let options_count = self.traffic.get_options_count();
-        match handle_dropdown_key(
-            key,
-            options_count,
-            &mut self.traffic.config.dropdown_index,
-            &self.settings.keybindings.dropdown,
-        ) {
+        self.handle_dropdown(key, DropdownType::TrafficConfig);
+    }
+
+    /// Generic handler for dropdown navigation and selection
+    fn handle_dropdown(&mut self, key: KeyEvent, dropdown_type: DropdownType) {
+        // Get options count and dropdown index reference based on type
+        let (options_count, dropdown_index) = match dropdown_type {
+            DropdownType::PortConfig => (
+                self.port_select.get_options_count(),
+                &mut self.port_select.config.dropdown_index,
+            ),
+            DropdownType::Settings => (
+                2, // Regex, Normal
+                &mut self.settings_panel.dropdown_index,
+            ),
+            DropdownType::TrafficConfig => (
+                self.traffic.get_options_count(),
+                &mut self.traffic.config.dropdown_index,
+            ),
+        };
+
+        match handle_dropdown_key(key, options_count, dropdown_index, &self.settings.keybindings.dropdown) {
             DropdownResult::Confirmed => {
-                self.traffic.apply_dropdown_selection();
+                match dropdown_type {
+                    DropdownType::PortConfig => {
+                        self.port_select.apply_dropdown_selection();
+                    }
+                    DropdownType::Settings => {
+                        self.apply_settings_dropdown_selection();
+                    }
+                    DropdownType::TrafficConfig => {
+                        self.traffic.apply_dropdown_selection();
+                        self.needs_full_clear = true;
+                        self.status = self.traffic_config_status();
+                    }
+                }
                 self.input.mode = InputMode::Normal;
-                self.needs_full_clear = true;
-                self.status = format!(
-                    "{}: {}",
-                    self.traffic.config.field.label(),
-                    self.traffic.get_config_display(self.traffic.config.field)
-                );
             }
             DropdownResult::Cancelled => {
                 self.input.mode = InputMode::Normal;
@@ -1210,36 +1150,96 @@ impl App {
             return; // Ignore non-numeric characters
         }
         
+        self.handle_simple_text_input(key, TextInputAction::ApplyPortConfig, "Input cancelled.");
+    }
+
+    pub(super) fn handle_key_traffic_config_text_input(&mut self, key: KeyEvent) {
+        self.handle_simple_text_input(key, TextInputAction::ApplyTrafficConfig, "Input cancelled.");
+    }
+
+    /// Generic handler for simple text input modes
+    /// Handles the common pattern of submit->action, cancel->message
+    fn handle_simple_text_input(&mut self, key: KeyEvent, action: TextInputAction, cancel_msg: &str) {
         match self.input.handle_text_input(key) {
             TextInputResult::Submit(value) => {
-                self.port_select.apply_text_input(value.clone());
-                self.status = format!(
-                    "{}: {}",
-                    self.port_select.config.field.label(),
-                    self.port_select.get_config_display(self.port_select.config.field)
-                );
+                match action {
+                    TextInputAction::ConnectToPort => {
+                        self.connect_to_port(&value);
+                    }
+                    TextInputAction::ExecuteCommand => {
+                        self.execute_command(&value);
+                    }
+                    TextInputAction::SendFile => {
+                        self.start_file_send(&value);
+                    }
+                    TextInputAction::ApplyPortConfig => {
+                        self.port_select.apply_text_input(value);
+                        self.status = self.port_config_status();
+                    }
+                    TextInputAction::ApplyTrafficConfig => {
+                        self.traffic.apply_text_input(value);
+                        self.status = self.traffic_config_status();
+                    }
+                }
             }
             TextInputResult::Cancel => {
-                self.status = "Input cancelled.".to_string();
+                self.status = cancel_msg.to_string();
             }
             TextInputResult::Continue => {}
         }
     }
 
-    pub(super) fn handle_key_traffic_config_text_input(&mut self, key: KeyEvent) {
-        match self.input.handle_text_input(key) {
-            TextInputResult::Submit(value) => {
-                self.traffic.apply_text_input(value.clone());
-                self.status = format!(
-                    "{}: {}",
-                    self.traffic.config.field.label(),
-                    self.traffic.get_config_display(self.traffic.config.field)
-                );
-            }
-            TextInputResult::Cancel => {
-                self.status = "Input cancelled.".to_string();
-            }
-            TextInputResult::Continue => {}
+    /// Format status message for current port config field
+    fn port_config_status(&self) -> String {
+        format!(
+            "{}: {}",
+            self.port_select.config.field.label(),
+            self.port_select.get_config_display(self.port_select.config.field)
+        )
+    }
+
+    /// Format status message for current traffic config field  
+    fn traffic_config_status(&self) -> String {
+        format!(
+            "{}: {}",
+            self.traffic.config.field.label(),
+            self.traffic.get_config_display(self.traffic.config.field)
+        )
+    }
+
+    /// Enter an input mode with cleared buffer and appropriate status prompt
+    fn enter_input_mode(&mut self, mode: InputMode) {
+        self.input.mode = mode.clone();
+        self.input.buffer.clear();
+        self.status = mode.entry_prompt().to_string();
+    }
+
+    /// Handle confirm action on a port config field (toggle/text input/dropdown)
+    fn confirm_port_config_field(&mut self) {
+        if self.port_select.config.field.is_toggle() {
+            self.port_select.toggle_setting();
+            self.status = self.port_config_status();
+        } else if self.port_select.config.field.is_text_input() {
+            self.input.buffer = self.port_select.get_text_value();
+            self.input.mode = InputMode::ConfigTextInput;
+            self.status = InputMode::ConfigTextInput.entry_prompt().to_string();
+        } else {
+            self.port_select.open_dropdown();
+            self.input.mode = InputMode::ConfigDropdown;
+        }
+    }
+
+    /// Handle confirm action on a traffic config field (toggle/text input/dropdown)
+    fn confirm_traffic_config_field(&mut self) {
+        if self.traffic.config.field.is_toggle() {
+            self.handle_traffic_toggle();
+        } else if self.traffic.config.field.is_text_input() {
+            self.input.buffer = self.traffic.get_text_value();
+            self.input.mode = InputMode::TrafficConfigTextInput;
+            self.status = InputMode::TrafficConfigTextInput.entry_prompt().to_string();
+        } else {
+            self.traffic.open_dropdown();
+            self.input.mode = InputMode::TrafficConfigDropdown;
         }
     }
 
@@ -1296,15 +1296,7 @@ impl App {
     }
 
     pub(super) fn handle_key_file_path_input(&mut self, key: KeyEvent) {
-        match self.input.handle_text_input(key) {
-            TextInputResult::Submit(path) => {
-                self.start_file_send(&path);
-            }
-            TextInputResult::Cancel => {
-                self.status = "File send cancelled.".to_string();
-            }
-            TextInputResult::Continue => {}
-        }
+        self.handle_simple_text_input(key, TextInputAction::SendFile, "File send cancelled.");
     }
 
     pub(super) fn handle_key_send_input(&mut self, key: KeyEvent) {
@@ -1362,11 +1354,7 @@ impl App {
             self.traffic.toggle_setting();
         }
         
-        self.status = format!(
-            "{}: {}",
-            field.label(),
-            self.traffic.get_config_display(field)
-        );
+        self.status = self.traffic_config_status();
         self.needs_full_clear = true;
     }
 }
