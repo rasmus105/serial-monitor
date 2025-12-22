@@ -45,7 +45,10 @@ impl ChunkingStrategy {
 
     /// Create a line-delimited strategy with custom max line length
     pub fn with_max_line_length(mut self, max: usize) -> Self {
-        if let Self::LineDelimited { max_line_length, .. } = &mut self {
+        if let Self::LineDelimited {
+            max_line_length, ..
+        } = &mut self
+        {
             *max_line_length = max;
         }
         self
@@ -72,9 +75,9 @@ impl LineDelimiter {
     /// Get the delimiter as a byte slice
     pub fn as_bytes(&self) -> &[u8] {
         match self {
-            LineDelimiter::Newline => &[b'\n'],
-            LineDelimiter::CrLf => &[b'\r', b'\n'],
-            LineDelimiter::Cr => &[b'\r'],
+            LineDelimiter::Newline => b"\n",
+            LineDelimiter::CrLf => b"\r\n",
+            LineDelimiter::Cr => b"\r",
             LineDelimiter::Byte(b) => std::slice::from_ref(b),
             LineDelimiter::Bytes(v) => v.as_slice(),
         }
@@ -143,7 +146,7 @@ impl Chunker {
                 max_line_length,
             } => {
                 let mut chunks = Vec::new();
-                
+
                 // Add new data to pending buffer
                 self.pending.extend_from_slice(data);
 

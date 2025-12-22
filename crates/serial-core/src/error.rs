@@ -10,7 +10,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// Serial port error
     #[error("Serial port error: {0}")]
-    SerialPort(#[from] serialport::Error),
+    SerialPort(#[from] tokio_serial::Error),
 
     /// I/O error from std::io
     #[error("I/O error: {0}")]

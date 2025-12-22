@@ -59,7 +59,7 @@ impl SaveFormat {
     }
 
     /// Convert to the corresponding Encoding (for non-raw formats)
-    fn to_encoding(&self) -> Option<Encoding> {
+    fn as_encoding(&self) -> Option<Encoding> {
         match self {
             SaveFormat::Utf8 => Some(Encoding::Utf8),
             SaveFormat::Ascii => Some(Encoding::Ascii),
@@ -179,8 +179,7 @@ impl FileSaveConfig {
 fn generate_auto_filename(port_name: &str, format: SaveFormat) -> String {
     // Clean up port name for use in filename
     let clean_port_name = port_name
-        .replace('/', "_")
-        .replace('\\', "_")
+        .replace(['/', '\\'], "_")
         .trim_start_matches("_dev_")
         .to_string();
 
@@ -340,7 +339,7 @@ fn write_chunk(
             };
 
             // Encode the data
-            let encoding = format.to_encoding().unwrap_or(Encoding::Utf8);
+            let encoding = format.as_encoding().unwrap_or(Encoding::Utf8);
             let encoded = encode(&chunk.data, encoding);
 
             // Write formatted line: [timestamp] [direction] data

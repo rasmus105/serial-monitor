@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 
-pub use serialport::{DataBits, FlowControl, Parity, StopBits};
+pub use tokio_serial::{DataBits, FlowControl, Parity, StopBits};
 
 /// Information about an available serial port
 #[derive(Debug, Clone)]
@@ -21,10 +21,10 @@ pub struct PortInfo {
     pub product: Option<String>,
 }
 
-impl From<serialport::SerialPortInfo> for PortInfo {
-    fn from(info: serialport::SerialPortInfo) -> Self {
+impl From<tokio_serial::SerialPortInfo> for PortInfo {
+    fn from(info: tokio_serial::SerialPortInfo) -> Self {
         let (vid, pid, serial_number, manufacturer, product) = match info.port_type {
-            serialport::SerialPortType::UsbPort(usb) => (
+            tokio_serial::SerialPortType::UsbPort(usb) => (
                 Some(usb.vid),
                 Some(usb.pid),
                 usb.serial_number,
@@ -84,6 +84,6 @@ impl SerialConfig {
 
 /// List all available serial ports
 pub fn list_ports() -> Result<Vec<PortInfo>> {
-    let ports = serialport::available_ports()?;
+    let ports = tokio_serial::available_ports()?;
     Ok(ports.into_iter().map(PortInfo::from).collect())
 }
