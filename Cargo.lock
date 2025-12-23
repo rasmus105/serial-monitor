@@ -77,6 +77,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "config"
+version = "0.1.0"
+dependencies = [
+ "config-derive",
+ "thiserror",
+]
+
+[[package]]
+name = "config-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -752,6 +769,7 @@ name = "serial-core"
 version = "0.1.0"
 dependencies = [
  "regex",
+ "strum",
  "thiserror",
  "tokio",
  "tokio-serial",
@@ -769,6 +787,7 @@ dependencies = [
 name = "serial-tui"
 version = "0.1.0"
 dependencies = [
+ "config",
  "crossterm 0.29.0",
  "ratatui",
  "serial-core",
