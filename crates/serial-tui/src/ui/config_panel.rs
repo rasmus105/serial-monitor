@@ -1188,4 +1188,79 @@ mod tests {
         updated_config.apply(&new_values.unwrap()).expect("apply should succeed");
         assert!(!updated_config.enabled);
     }
+    
+    // =========================================================================
+    // Integration test with SerialConfig from serial-core
+    // =========================================================================
+    
+    #[test]
+    fn test_serial_config_with_panel() {
+        use serial_core::{SerialConfig, DataBits, Parity, Configure};
+        
+        // Create a SerialConfig with non-default values
+        let config = SerialConfig {
+            baud_rate: 9600,
+            data_bits: DataBits::Seven,
+            parity: Parity::Even,
+            stop_bits: serial_core::StopBits::Two,
+            flow_control: serial_core::FlowControl::Hardware,
+        };
+        
+        // Initialize panel state with schema
+        let mut state = ConfigPanelState::new();
+        state.init_with_schema(SerialConfig::schema());
+        assert_eq!(state.field_count, 5);
+        
+        // Verify schema has correct labels
+        let schema = SerialConfig::schema();
+        assert_eq!(schema.fields[0].label, "Baud Rate");
+        assert_eq!(schema.fields[1].label, "Data Bits");
+        assert_eq!(schema.fields[2].label, "Parity");
+        
+        // Test navigation
+        state.next_field();
+        assert_eq!(state.selected_field, 1); // Data Bits
+        
+        // Test getting the action for an enum field (should open dropdown)
+        let action = get_confirm_action(&config, &state);
+        assert!(matches!(action, ConfigPanelAction::OpenDropdown { field_index: 1 }));
+        
+        // Test enum dropdown - get variant labels from schema
+        if let FieldType::Enum { variants } = &schema.fields[1].field_type {
+            assert_eq!(variants.len(), 4); // 5, 6, 7, 8 data bits
+            assert_eq!(variants[0].label, "5");
+            assert_eq!(variants[3].label, "8");
+        } else {
+            panic!("Expected Enum field type for data_bits");
+        }
+        
+        // Simulate changing baud rate via text input
+        state.selected_field = 0;
+        let action = get_confirm_action(&config, &state);
+        assert!(matches!(action, ConfigPanelAction::OpenTextInput { field_index: 0, .. }));
+        
+        // Apply a baud rate change
+        let mut values = config.to_values();
+        assert!(set_uint_field(&mut values, 0, "115200"));
+        
+        let mut updated = SerialConfig::default();
+        updated.apply(&values).expect("apply should succeed");
+        assert_eq!(updated.baud_rate, 115200);
+        assert_eq!(updated.data_bits, DataBits::Seven); // Preserved from original values
+    }
+    
+    #[test]
+    fn test_serial_config_enum_variant_change() {
+        use serial_core::{SerialConfig, DataBits, Configure};
+        use config::ConfigValue;
+        
+        let mut config = SerialConfig::default();
+        let mut values = config.to_values();
+        
+        // Change data bits from Eight (index 3) to Six (index 1)
+        set_enum_variant(&mut values, 1, 1);
+        
+        config.apply(&values).expect("apply should succeed");
+        assert_eq!(config.data_bits, DataBits::Six);
+    }
 }
