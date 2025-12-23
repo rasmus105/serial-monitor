@@ -4,18 +4,22 @@
 //! It supports lazy initialization: historical data is parsed on first request,
 //! then new data is parsed incrementally.
 
+use strum::{Display, EnumIter, IntoEnumIterator, IntoStaticStr};
+
 use crate::buffer::DataChunk;
 
 use super::data::{GraphBuffer, GraphDataPoint, PacketRateData};
 use super::parser::{GraphParser, GraphParserConfig, ParsedValue};
 
 /// Graph visualization mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, IntoStaticStr)]
 pub enum GraphMode {
     /// Show packet rate over time (no parsing needed)
     #[default]
+    #[strum(serialize = "Packet Rate")]
     PacketRate,
     /// Show parsed data values
+    #[strum(serialize = "Parsed Data")]
     ParsedData,
 }
 
@@ -27,10 +31,7 @@ impl GraphMode {
 
     /// Get human-readable name
     pub fn name(&self) -> &'static str {
-        match self {
-            GraphMode::PacketRate => "Packet Rate",
-            GraphMode::ParsedData => "Parsed Data",
-        }
+        self.into()
     }
 }
 
