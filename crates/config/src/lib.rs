@@ -75,6 +75,14 @@ mod tests {
         enabled: bool,
     }
 
+    // Static field types for SimpleConfig fields
+    static SIMPLE_CONFIG_NAME_FIELD_TYPE: FieldType = FieldType::String;
+    static SIMPLE_CONFIG_COUNT_FIELD_TYPE: FieldType = FieldType::UInt {
+        min: Some(0),
+        max: Some(100),
+    };
+    static SIMPLE_CONFIG_ENABLED_FIELD_TYPE: FieldType = FieldType::Bool;
+
     // Static schema for SimpleConfig
     static SIMPLE_CONFIG_SCHEMA: ConfigSchema = ConfigSchema {
         name: "SimpleConfig",
@@ -84,29 +92,34 @@ mod tests {
                 name: "name",
                 label: "Name",
                 description: Some("The name of the thing"),
-                field_type: FieldType::String,
+                field_type: &SIMPLE_CONFIG_NAME_FIELD_TYPE,
             },
             FieldSchema {
                 name: "count",
                 label: "Count",
                 description: Some("How many things"),
-                field_type: FieldType::UInt {
-                    min: Some(0),
-                    max: Some(100),
-                },
+                field_type: &SIMPLE_CONFIG_COUNT_FIELD_TYPE,
             },
             FieldSchema {
                 name: "enabled",
                 label: "Enabled",
                 description: None,
-                field_type: FieldType::Bool,
+                field_type: &SIMPLE_CONFIG_ENABLED_FIELD_TYPE,
             },
         ],
+    };
+
+    static SIMPLE_CONFIG_FIELD_TYPE: FieldType = FieldType::Struct {
+        schema: &SIMPLE_CONFIG_SCHEMA,
     };
 
     impl Configure for SimpleConfig {
         fn schema() -> &'static ConfigSchema {
             &SIMPLE_CONFIG_SCHEMA
+        }
+
+        fn field_type() -> &'static FieldType {
+            &SIMPLE_CONFIG_FIELD_TYPE
         }
 
         fn to_values(&self) -> ConfigValues {
@@ -198,6 +211,10 @@ mod tests {
     impl Configure for SimpleEnum {
         fn schema() -> &'static ConfigSchema {
             &SIMPLE_ENUM_SCHEMA
+        }
+
+        fn field_type() -> &'static FieldType {
+            &SIMPLE_ENUM_FIELD_TYPE
         }
 
         fn to_values(&self) -> ConfigValues {
@@ -485,12 +502,12 @@ mod tests {
         assert_eq!(schema.fields[0].name, "name");
         assert_eq!(schema.fields[0].label, "Name");
         assert_eq!(schema.fields[0].description, Some("The name"));
-        assert_eq!(schema.fields[0].field_type, FieldType::String);
+        assert_eq!(*schema.fields[0].field_type, FieldType::String);
 
         assert_eq!(schema.fields[1].name, "count");
         assert_eq!(schema.fields[1].label, "Count");
         assert_eq!(
-            schema.fields[1].field_type,
+            *schema.fields[1].field_type,
             FieldType::UInt {
                 min: Some(0),
                 max: Some(100)
@@ -498,11 +515,11 @@ mod tests {
         );
 
         assert_eq!(schema.fields[2].name, "enabled");
-        assert_eq!(schema.fields[2].field_type, FieldType::Bool);
+        assert_eq!(*schema.fields[2].field_type, FieldType::Bool);
 
         assert_eq!(schema.fields[3].name, "ratio");
         assert_eq!(
-            schema.fields[3].field_type,
+            *schema.fields[3].field_type,
             FieldType::Float { min: None, max: None }
         );
     }
@@ -675,7 +692,7 @@ mod tests {
         assert_eq!(schema.fields.len(), 2);
 
         // Check the optional field type
-        match &schema.fields[1].field_type {
+        match schema.fields[1].field_type {
             FieldType::Optional { inner } => {
                 assert_eq!(
                     **inner,
@@ -747,7 +764,7 @@ mod tests {
         let schema = ListConfig::schema();
         assert_eq!(schema.fields.len(), 1);
 
-        match &schema.fields[0].field_type {
+        match schema.fields[0].field_type {
             FieldType::List {
                 element,
                 min_len,
