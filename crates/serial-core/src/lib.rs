@@ -37,3 +37,6 @@ pub use graph::{
 pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
 pub use search::{PatternMatcher, PatternMode, SearchEngine, SearchMatch, SearchResult};
 pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};
+
+// Re-export config types for convenience
+pub use config::{Configure, ConfigValue, ConfigValues, ConfigSchema, FieldType};
