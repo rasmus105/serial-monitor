@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 serial-core = { workspace = true }
+config = { path = "../config" }
 tokio = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
