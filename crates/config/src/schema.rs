@@ -23,8 +23,8 @@ pub struct FieldSchema {
     pub label: &'static str,
     /// Optional description for tooltips
     pub description: Option<&'static str>,
-    /// Type information for this field
-    pub field_type: FieldType,
+    /// Type information for this field (static reference for const-compatibility)
+    pub field_type: &'static FieldType,
 }
 
 /// Type information for a field.
