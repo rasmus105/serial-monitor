@@ -1,6 +1,5 @@
 //! Type definitions, traits, and enums for the application.
 
-use config::Configure;
 use serial_core::{
     DataBits, Encoding, FlowControl, Parity, PatternMode, SaveFormat, StopBits,
 };
@@ -345,49 +344,40 @@ impl ConfigOption for PatternMode {
 // =============================================================================
 
 /// Chunking mode for UI selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr, Configure)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum ChunkingMode {
     /// Raw chunking - chunks based on OS read timing
     #[default]
-    #[config(label = "Raw")]
     Raw,
     /// Line-delimited chunking - splits on delimiter
     #[strum(serialize = "Line Delimited")]
-    #[config(label = "Line Delimited")]
     LineDelimited,
 }
 
 /// Delimiter option for UI selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr, Configure)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum DelimiterOption {
     /// Unix-style newline: \n
     #[default]
     #[strum(serialize = "\\n (LF)")]
-    #[config(label = "\\n (LF)")]
     Newline,
     /// Windows-style: \r\n
     #[strum(serialize = "\\r\\n (CRLF)")]
-    #[config(label = "\\r\\n (CRLF)")]
     CrLf,
     /// Carriage return only: \r
     #[strum(serialize = "\\r (CR)")]
-    #[config(label = "\\r (CR)")]
     Cr,
     /// Custom delimiter (entered as text)
-    #[config(label = "Custom")]
     Custom,
 }
 
 /// Size unit for max line length
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr, Configure)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum SizeUnit {
     #[strum(serialize = "B")]
-    #[config(label = "Bytes")]
     Bytes,
     #[default]
-    #[config(label = "KiB")]
     KiB,
-    #[config(label = "MiB")]
     MiB,
 }
 
@@ -923,23 +913,19 @@ impl ConfigFieldKind for SendConfigField {
 }
 
 /// Line ending options for sending data
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr, Configure)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum LineEndingOption {
     /// No line ending appended
-    #[config(label = "None")]
     None,
     /// Unix-style newline: \n
     #[default]
     #[strum(serialize = "LF (\\n)")]
-    #[config(label = "LF (\\n)")]
     Lf,
     /// Windows-style: \r\n
     #[strum(serialize = "CRLF (\\r\\n)")]
-    #[config(label = "CRLF (\\r\\n)")]
     CrLf,
     /// Carriage return only: \r
     #[strum(serialize = "CR (\\r)")]
-    #[config(label = "CR (\\r)")]
     Cr,
 }
 
@@ -958,78 +944,16 @@ impl LineEndingOption {
 }
 
 /// Input encoding mode for sending data
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr, Configure)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum InputEncodingMode {
     /// Text mode - send as UTF-8
     #[default]
-    #[config(label = "Text")]
     Text,
     /// Hex mode - parse hex bytes like "DE AD BE EF"
-    #[config(label = "Hex")]
     Hex,
 }
 
 impl LocalStrumEnum for InputEncodingMode {}
-
-// =============================================================================
-// Send Configuration (uses Configure derive)
-// =============================================================================
-
-/// Configuration for the Send panel.
-/// This struct uses the `Configure` derive macro to automatically generate
-/// schema and value extraction for the generic `ConfigPanelWidget`.
-#[derive(Debug, Clone, Default, Configure)]
-#[config(desc = "Send panel settings")]
-pub struct SendConfig {
-    /// File path for file sending
-    #[config(label = "File Path", desc = "Path to file to send")]
-    pub file_path: String,
-
-    /// Chunk size in bytes for file sending
-    #[config(label = "Chunk Size", desc = "Bytes per chunk when sending files")]
-    pub chunk_size: String,
-
-    /// Delay between chunks in milliseconds
-    #[config(label = "Chunk Delay", desc = "Delay between chunks in milliseconds")]
-    pub chunk_delay: String,
-
-    /// Whether to loop the file continuously
-    #[config(label = "Continuous", desc = "Loop file sending continuously")]
-    pub continuous: bool,
-
-    /// Line ending to append when sending
-    #[config(label = "Line Ending", desc = "Line ending to append to sent data")]
-    pub line_ending: LineEndingOption,
-
-    /// Input encoding mode (text vs hex)
-    #[config(label = "Input Mode", desc = "How to interpret input (text or hex bytes)")]
-    pub input_encoding: InputEncodingMode,
-}
-
-impl SendConfig {
-    /// Create a new SendConfig with default values
-    pub fn new() -> Self {
-        Self {
-            file_path: String::new(),
-            chunk_size: "64".to_string(),
-            chunk_delay: "10".to_string(),
-            continuous: false,
-            line_ending: LineEndingOption::default(),
-            input_encoding: InputEncodingMode::default(),
-        }
-    }
-
-    /// Get chunk size as usize
-    pub fn chunk_size_bytes(&self) -> usize {
-        self.chunk_size.parse().unwrap_or(64)
-    }
-
-    /// Get chunk delay as Duration
-    pub fn chunk_delay_duration(&self) -> std::time::Duration {
-        let ms = self.chunk_delay.parse().unwrap_or(10u64);
-        std::time::Duration::from_millis(ms)
-    }
-}
 
 /// Which panel is focused in send view
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1222,19 +1146,16 @@ impl InputMode {
 // =============================================================================
 
 /// Format for displaying timestamps in traffic view
-#[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr, Configure)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr)]
 pub enum TimestampFormat {
     /// Relative time since session start (e.g., "+1.234s")
     #[default]
-    #[config(label = "Relative")]
     Relative,
     /// Absolute time with milliseconds (e.g., "12:34:56.789")
     #[strum(serialize = "HH:MM:SS.mmm")]
-    #[config(label = "HH:MM:SS.mmm")]
     AbsoluteMillis,
     /// Absolute time without milliseconds (e.g., "12:34:56")
     #[strum(serialize = "HH:MM:SS")]
-    #[config(label = "HH:MM:SS")]
     Absolute,
 }
 
@@ -1297,35 +1218,29 @@ impl TimestampFormat {
 }
 
 /// How to handle long lines in traffic view
-#[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr, Configure)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr)]
 pub enum WrapMode {
     /// Wrap long lines to fit the terminal width
     #[default]
-    #[config(label = "Wrap")]
     Wrap,
     /// Truncate long lines (with ellipsis indicator)
-    #[config(label = "Truncate")]
     Truncate,
 }
 
 /// Hex byte grouping for hex encoding display
-#[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr, Configure)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, VariantArray, IntoStaticStr)]
 pub enum HexGrouping {
     /// No grouping (continuous hex)
-    #[config(label = "None")]
     None,
     /// Group by 1 byte (space every byte)
     #[default]
     #[strum(serialize = "1 byte")]
-    #[config(label = "1 byte")]
     Byte,
     /// Group by 2 bytes (space every 2 bytes)
     #[strum(serialize = "2 bytes")]
-    #[config(label = "2 bytes")]
     Word,
     /// Group by 4 bytes (space every 4 bytes)
     #[strum(serialize = "4 bytes")]
-    #[config(label = "4 bytes")]
     DWord,
 }
 
