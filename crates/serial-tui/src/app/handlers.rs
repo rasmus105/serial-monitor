@@ -33,8 +33,6 @@ enum TextInputAction {
     ApplyTrafficConfig,
     /// Apply graph config text value
     ApplyGraphConfig,
-    /// Apply send config text value
-    ApplySendConfig,
 }
 
 /// Type of dropdown being handled
@@ -1029,7 +1027,93 @@ impl App {
     /// Handle key events for advanced send pane
     pub(super) fn handle_key_advanced_send(&mut self, key: KeyEvent) {
         use crate::app::SendFocus;
+        use crate::ui::config_panel::{ConfigInput, ConfigPanelAction, handle_config_nav_input, apply_action_to_values, toggle_bool_at};
+        use config::Configure;
 
+        // Handle config panel navigation when focused on config
+        if matches!(self.send.focus, SendFocus::Config) {
+            // Map key to ConfigInput
+            let config_input = match key.code {
+                KeyCode::Char('j') | KeyCode::Down => Some(ConfigInput::NextField),
+                KeyCode::Char('k') | KeyCode::Up => Some(ConfigInput::PrevField),
+                KeyCode::Enter | KeyCode::Char(' ') => Some(ConfigInput::Confirm),
+                KeyCode::Esc => Some(ConfigInput::Cancel),
+                KeyCode::Char('h') | KeyCode::Left => {
+                    // Return to content focus
+                    self.send.focus = SendFocus::Content;
+                    return;
+                }
+                KeyCode::Char('l') | KeyCode::Right => {
+                    // Open dropdown for enum fields (handled by Confirm action)
+                    Some(ConfigInput::Confirm)
+                }
+                KeyCode::Tab | KeyCode::Char('c') => {
+                    // Toggle to content
+                    self.send.focus = SendFocus::Content;
+                    return;
+                }
+                _ => None,
+            };
+
+            if let Some(input) = config_input {
+                let action = handle_config_nav_input(
+                    &self.send.config,
+                    &mut self.send.config_panel,
+                    input,
+                    CONFIG_VISIBLE_HEIGHT,
+                );
+
+                match action {
+                    ConfigPanelAction::Navigated => {
+                        // Navigation handled by config panel state
+                    }
+                    ConfigPanelAction::ValueChanged => {
+                        // Toggle a boolean field
+                        if let Some(new_values) = toggle_bool_at(&self.send.config, self.send.config_panel.selected_field) {
+                            let _ = self.send.config.apply(&new_values);
+                            self.status = self.send_config_status();
+                            self.needs_full_clear = true;
+                        }
+                    }
+                    ConfigPanelAction::OpenDropdown { field_index: _ } => {
+                        // Open dropdown mode
+                        self.input.mode = InputMode::SendConfigDropdown;
+                    }
+                    ConfigPanelAction::OpenTextInput { field_index: _, initial_value } => {
+                        // Open text input mode
+                        self.input.buffer = initial_value;
+                        self.input.mode = InputMode::SendConfigTextInput;
+                    }
+                    ConfigPanelAction::DropdownConfirmed { field_index: _, variant_index: _ } => {
+                        // Apply dropdown selection
+                        if let Some(new_values) = apply_action_to_values(&self.send.config, &action) {
+                            let _ = self.send.config.apply(&new_values);
+                            self.status = self.send_config_status();
+                            self.needs_full_clear = true;
+                        }
+                    }
+                    ConfigPanelAction::TextInputConfirmed { field_index: _, ref value } => {
+                        // Apply text input - reconstruct action since we borrow value
+                        let action_copy = ConfigPanelAction::TextInputConfirmed {
+                            field_index: self.send.config_panel.selected_field,
+                            value: value.clone(),
+                        };
+                        if let Some(new_values) = apply_action_to_values(&self.send.config, &action_copy) {
+                            let _ = self.send.config.apply(&new_values);
+                            self.status = self.send_config_status();
+                        }
+                    }
+                    ConfigPanelAction::Cancelled => {
+                        // Return focus to content
+                        self.send.focus = SendFocus::Content;
+                    }
+                    ConfigPanelAction::None => {}
+                }
+                return;
+            }
+        }
+
+        // Handle content-focused or unhandled keys
         match key.code {
             // Toggle config panel with Tab or 'c'
             KeyCode::Tab | KeyCode::Char('c') => {
@@ -1038,43 +1122,13 @@ impl App {
                     SendFocus::Config => SendFocus::Content,
                 };
             }
-            // Config panel navigation when focused on config
-            KeyCode::Char('j') | KeyCode::Down if matches!(self.send.focus, SendFocus::Config) => {
-                self.send.config.next_field();
-            }
-            KeyCode::Char('k') | KeyCode::Up if matches!(self.send.focus, SendFocus::Config) => {
-                self.send.config.prev_field();
-            }
-            // Open dropdown or toggle for config fields
-            KeyCode::Enter | KeyCode::Char(' ')
-                if matches!(self.send.focus, SendFocus::Config) =>
-            {
-                self.confirm_send_config_field();
-            }
-            // Open dropdown with l or right
-            KeyCode::Char('l') | KeyCode::Right
-                if matches!(self.send.focus, SendFocus::Config) =>
-            {
-                let field = self.send.config.field;
-                if !field.is_toggle() && !field.is_text_input() {
-                    // Open dropdown
-                    self.send.open_dropdown();
-                    self.input.mode = InputMode::SendConfigDropdown;
-                }
-            }
-            // Return to content focus with h or left
-            KeyCode::Char('h') | KeyCode::Left
-                if matches!(self.send.focus, SendFocus::Config) =>
-            {
-                self.send.focus = SendFocus::Content;
-            }
             // Content pane: Start file send with 's' or Enter
             KeyCode::Char('s') | KeyCode::Enter
                 if matches!(self.send.focus, SendFocus::Content) =>
             {
                 // Start file send if we have a valid file path
-                if !self.send.file_path.is_empty() {
-                    let path = self.send.file_path.clone();
+                if !self.send.config.file_path.is_empty() {
+                    let path = self.send.config.file_path.clone();
                     self.start_file_send(&path);
                 } else {
                     self.status = "No file path set. Configure in the settings panel (Tab or 'c').".to_string();
@@ -1240,10 +1294,17 @@ impl App {
                 self.graph.get_options_count(),
                 &mut self.graph.config.dropdown_index,
             ),
-            DropdownType::SendConfig => (
-                self.send.get_options_count(),
-                &mut self.send.config.dropdown_index,
-            ),
+            DropdownType::SendConfig => {
+                // Get options count from schema for the new generic approach
+                use config::Configure;
+                use crate::ui::config_panel::get_dropdown_options;
+                let schema = <crate::app::SendConfig as Configure>::schema();
+                let field_index = self.send.config_panel.selected_field;
+                let count = schema.fields.get(field_index)
+                    .map(|f| get_dropdown_options(&f.field_type).len())
+                    .unwrap_or(0);
+                (count, &mut self.send.config_panel.dropdown_index)
+            }
         };
 
         match handle_dropdown_key(key, options_count, dropdown_index, &self.settings.keybindings.dropdown) {
@@ -1270,7 +1331,17 @@ impl App {
                         );
                     }
                     DropdownType::SendConfig => {
-                        self.send.apply_dropdown_selection();
+                        // Use the new ConfigPanelAction approach
+                        use config::Configure;
+                        use crate::ui::config_panel::{ConfigPanelAction, apply_action_to_values};
+                        let action = ConfigPanelAction::DropdownConfirmed {
+                            field_index: self.send.config_panel.selected_field,
+                            variant_index: self.send.config_panel.dropdown_index,
+                        };
+                        if let Some(new_values) = apply_action_to_values(&self.send.config, &action) {
+                            let _ = self.send.config.apply(&new_values);
+                        }
+                        self.send.config_panel.close_dropdown();
                         self.needs_full_clear = true;
                         self.status = self.send_config_status();
                     }
@@ -1323,15 +1394,44 @@ impl App {
     }
 
     pub(super) fn handle_key_send_config_text_input(&mut self, key: KeyEvent) {
+        use config::Configure;
+        use crate::ui::config_panel::{ConfigPanelAction, apply_action_to_values};
+        
         // For numeric fields, filter out non-numeric characters
-        if self.send.config.field.is_numeric_input()
+        // Check if the current field is numeric by looking at the schema
+        let schema = super::types::SendConfig::schema();
+        let field_idx = self.send.config_panel.selected_field;
+        let is_numeric = if let Some(field) = schema.fields.get(field_idx) {
+            matches!(field.field_type, config::FieldType::UInt { .. } | config::FieldType::Int { .. })
+        } else {
+            false
+        };
+        
+        if is_numeric
             && let KeyCode::Char(c) = key.code
             && !c.is_ascii_digit()
         {
             return; // Ignore non-numeric characters
         }
         
-        self.handle_simple_text_input(key, TextInputAction::ApplySendConfig, "Input cancelled.");
+        match self.input.handle_text_input(key) {
+            TextInputResult::Submit(value) => {
+                let action = ConfigPanelAction::TextInputConfirmed {
+                    field_index: field_idx,
+                    value,
+                };
+                if let Some(new_values) = apply_action_to_values(&self.send.config, &action) {
+                    let _ = self.send.config.apply(&new_values);
+                }
+                self.send.config_panel.close_text_input();
+                self.status = self.send_config_status();
+            }
+            TextInputResult::Cancel => {
+                self.send.config_panel.close_text_input();
+                self.status = "Input cancelled.".to_string();
+            }
+            TextInputResult::Continue => {}
+        }
     }
 
     /// Generic handler for simple text input modes
@@ -1365,10 +1465,6 @@ impl App {
                             self.graph.get_config_display(self.graph.config.field)
                         );
                     }
-                    TextInputAction::ApplySendConfig => {
-                        self.send.apply_text_input(value);
-                        self.status = self.send_config_status();
-                    }
                 }
             }
             TextInputResult::Cancel => {
@@ -1398,11 +1494,22 @@ impl App {
 
     /// Format status message for current send config field
     fn send_config_status(&self) -> String {
-        format!(
-            "{}: {}",
-            self.send.config.field.label(),
-            self.send.get_config_display(self.send.config.field)
-        )
+        use config::Configure;
+        use crate::ui::config_panel::format_value;
+        
+        let schema = super::types::SendConfig::schema();
+        let values = self.send.config.to_values();
+        let field_idx = self.send.config_panel.selected_field;
+        
+        if let (Some(field_schema), Some(field_value)) = (schema.fields.get(field_idx), values.values.get(field_idx)) {
+            format!(
+                "{}: {}",
+                field_schema.label,
+                format_value(field_value, &field_schema.field_type)
+            )
+        } else {
+            "Send config".to_string()
+        }
     }
 
     /// Enter an input mode with cleared buffer and appropriate status prompt
@@ -1458,22 +1565,6 @@ impl App {
         } else {
             self.graph.open_dropdown();
             self.input.mode = InputMode::GraphConfigDropdown;
-        }
-    }
-
-    /// Handle confirm action on a send config field (toggle/text input/dropdown)
-    fn confirm_send_config_field(&mut self) {
-        let field = self.send.config.field;
-        if field.is_toggle() {
-            self.send.toggle_setting();
-            self.status = self.send_config_status();
-        } else if field.is_text_input() {
-            self.input.buffer = self.send.get_text_value();
-            self.input.mode = InputMode::SendConfigTextInput;
-            self.status = InputMode::SendConfigTextInput.entry_prompt().to_string();
-        } else {
-            self.send.open_dropdown();
-            self.input.mode = InputMode::SendConfigDropdown;
         }
     }
 
@@ -1547,16 +1638,16 @@ impl App {
                     self.send.add_to_history(data.clone());
                     
                     // Parse based on input encoding mode
-                    let bytes = match self.send.input_encoding {
+                    let bytes = match self.send.config.input_encoding {
                         InputEncodingMode::Text => {
                             let mut bytes = data.into_bytes();
-                            bytes.extend_from_slice(self.send.line_ending.as_bytes());
+                            bytes.extend_from_slice(self.send.config.line_ending.as_bytes());
                             Some(bytes)
                         }
                         InputEncodingMode::Hex => {
                             match parse_hex_string(&data) {
                                 Some(mut bytes) => {
-                                    bytes.extend_from_slice(self.send.line_ending.as_bytes());
+                                    bytes.extend_from_slice(self.send.config.line_ending.as_bytes());
                                     Some(bytes)
                                 }
                                 None => {
@@ -1607,7 +1698,7 @@ impl App {
                     self.send.add_to_history(data.clone());
                     
                     // Parse based on input encoding mode
-                    let bytes = match self.send.input_encoding {
+                    let bytes = match self.send.config.input_encoding {
                         InputEncodingMode::Text => Some(data.into_bytes()),
                         InputEncodingMode::Hex => {
                             match parse_hex_string(&data) {
