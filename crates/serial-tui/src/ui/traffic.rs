@@ -373,7 +373,7 @@ fn render_send_content(frame: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     // File send info section
-    let file_info = if app.send.config.file_path.is_empty() {
+    let file_info = if app.send.file_path.is_empty() {
         vec![
             Line::from(Span::styled("No file selected", Style::default().fg(Color::DarkGray))),
             Line::from(""),
@@ -386,23 +386,23 @@ fn render_send_content(frame: &mut Frame, app: &App, area: Rect) {
         vec![
             Line::from(vec![
                 Span::styled("File: ", Style::default().fg(Color::Gray)),
-                Span::styled(&app.send.config.file_path, Style::default().fg(Color::White)),
+                Span::styled(&app.send.file_path, Style::default().fg(Color::White)),
             ]),
             Line::from(vec![
                 Span::styled("Chunk size: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    format!("{} bytes", app.send.config.chunk_size),
+                    format!("{} bytes", app.send.chunk_size),
                     Style::default().fg(Color::Cyan),
                 ),
                 Span::styled("  Delay: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    format!("{} ms", app.send.config.chunk_delay),
+                    format!("{} ms", app.send.chunk_delay),
                     Style::default().fg(Color::Cyan),
                 ),
                 Span::styled("  Loop: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    if app.send.config.continuous { "ON" } else { "OFF" },
-                    Style::default().fg(if app.send.config.continuous { Color::Green } else { Color::DarkGray }),
+                    if app.send.continuous { "ON" } else { "OFF" },
+                    Style::default().fg(if app.send.continuous { Color::Green } else { Color::DarkGray }),
                 ),
             ]),
         ]
@@ -438,7 +438,7 @@ fn render_send_content(frame: &mut Frame, app: &App, area: Rect) {
             )
         };
 
-        let loop_info = if app.send.config.continuous && progress.loops_completed > 0 {
+        let loop_info = if app.send.continuous && progress.loops_completed > 0 {
             format!(" (loop {})", progress.loops_completed + 1)
         } else {
             String::new()
@@ -470,7 +470,7 @@ fn render_send_content(frame: &mut Frame, app: &App, area: Rect) {
                 Span::raw(" - Cancel transfer"),
             ]),
         ]
-    } else if !app.send.config.file_path.is_empty() {
+    } else if !app.send.file_path.is_empty() {
         vec![
             Line::from(""),
             Line::from(vec![
@@ -500,59 +500,123 @@ fn render_send_content(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(instructions_widget, chunks[2]);
 }
 
-/// Render the send config panel using the generic ConfigPanelWidget
-fn render_send_config_panel(frame: &mut Frame, app: &mut App, area: Rect, focused: bool) {
-    use crate::ui::config_panel::ConfigPanelWidget;
+/// Render the send config panel
+fn render_send_config_panel(frame: &mut Frame, app: &mut App, area: Rect, _focused: bool) {
+    use crate::app::{ConfigSection, SendConfigField};
+    use super::push_list_section_separator;
     
-    // Sync UI state flags from input mode
-    app.send.config_panel.dropdown_open = app.input.mode == InputMode::SendConfigDropdown;
-    app.send.config_panel.text_input_open = app.input.mode == InputMode::SendConfigTextInput;
-    if app.send.config_panel.text_input_open {
-        app.send.config_panel.text_buffer = app.input.buffer.clone();
+    let block = Block::default()
+        .title(" Send Config ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let panel_width = inner.width as usize;
+
+    // Build the list of config fields
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut field_positions: Vec<usize> = Vec::new();
+    let mut current_section: Option<ConfigSection> = None;
+
+    for field in SendConfigField::iter() {
+        // Add section separator if section changed
+        let section = field.section();
+        current_section = push_list_section_separator(&mut items, current_section, section, panel_width);
+
+        field_positions.push(items.len());
+
+        let is_selected = field == app.send.config.field;
+        let label = field.label();
+        let value = app.send.get_config_display(field);
+
+        let style = if is_selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        // Format value display based on field type
+        let value_display = if field.is_toggle() {
+            let (on_style, off_style) = if value == "ON" {
+                (Style::default().fg(Color::Green), Style::default().fg(Color::DarkGray))
+            } else {
+                (Style::default().fg(Color::DarkGray), Style::default().fg(Color::Red))
+            };
+            vec![
+                Span::styled(format!("{:<14}", label), style),
+                if value == "ON" {
+                    Span::styled("[x]", on_style)
+                } else {
+                    Span::styled("[ ]", off_style)
+                },
+            ]
+        } else {
+            vec![
+                Span::styled(format!("{:<14}", label), style),
+                Span::styled(format!("[ {} ]", value), style.fg(Color::Yellow)),
+            ]
+        };
+
+        items.push(ListItem::new(Line::from(value_display)));
     }
-    
-    // Determine if panel is focused
-    let is_focused = focused && matches!(app.send.focus, crate::app::SendFocus::Config);
-    
-    // Render using the generic widget
-    let widget = ConfigPanelWidget::new(&app.send.config, &mut app.send.config_panel)
-        .title("Send Config")
-        .focused(is_focused);
-    
-    frame.render_widget(widget, area);
-    
-    // Render dropdown overlay if in dropdown mode
+
+    // Update field positions for scroll calculation
+    app.send.config.set_field_line_positions(field_positions);
+    app.send.config.adjust_scroll(inner.height as usize);
+
+    let list = List::new(items);
+    frame.render_widget(list, inner);
+
+    // Render dropdown if in dropdown mode
     if app.input.mode == InputMode::SendConfigDropdown {
-        render_send_config_dropdown_generic(frame, app, area);
+        render_send_config_dropdown(frame, app, inner);
     }
 }
 
-/// Render dropdown for send config using generic helpers
-fn render_send_config_dropdown_generic(frame: &mut Frame, app: &App, config_area: Rect) {
-    use crate::ui::config_panel::{get_dropdown_options, render_dropdown};
-    use config::Configure;
-    
-    let schema = <crate::app::SendConfig as Configure>::schema();
-    let field_index = app.send.config_panel.selected_field;
-    
-    if let Some(field_schema) = schema.fields.get(field_index) {
-        let options = get_dropdown_options(&field_schema.field_type);
-        if !options.is_empty() {
-            // Calculate anchor position based on field index
-            // Account for description header (2 lines) + field lines
-            let anchor_y = (field_index + 2) as u16; // +2 for description header
-            let anchor_x = 15; // After label
-            
-            render_dropdown(
-                frame.buffer_mut(),
-                config_area,
-                &options,
-                app.send.config_panel.dropdown_index,
-                anchor_y,
-                anchor_x,
-            );
-        }
+/// Render a dropdown for send config fields
+fn render_send_config_dropdown(frame: &mut Frame, app: &App, config_area: Rect) {
+    let options = app.send.get_config_option_strings();
+    if options.is_empty() {
+        return;
     }
+
+    let field_idx = app.send.config.field.index();
+    let dropdown_y = config_area.y + field_idx as u16 + 1; // +1 for border
+
+    let dropdown_height = (options.len() as u16 + 2).min(config_area.height);
+    let dropdown_width = 20u16.min(config_area.width);
+
+    let dropdown_area = Rect {
+        x: config_area.x + 14, // After label
+        y: dropdown_y.min(config_area.y + config_area.height - dropdown_height),
+        width: dropdown_width,
+        height: dropdown_height,
+    };
+
+    frame.render_widget(Clear, dropdown_area);
+
+    let items: Vec<ListItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, opt)| {
+            let style = if i == app.send.config.dropdown_index {
+                Style::default().fg(Color::Black).bg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(Span::styled(opt.as_str(), style))
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
+
+    frame.render_widget(list, dropdown_area);
 }
 
 fn format_tab(index: u8, name: &str, active: bool) -> String {

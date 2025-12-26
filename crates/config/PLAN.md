@@ -542,18 +542,18 @@ impl ConfigValue {
 - [x] 1.20 Integration tests with both crates
 
 ### Phase 2: TUI Integration
-- [x] 2.1 Create generic ConfigPanel widget
-- [x] 2.2 Implement field renderers (bool, int, string, char)
-- [x] 2.3 Implement Optional field renderer
-- [x] 2.4 Implement enum dropdown renderer
-- [x] 2.5 Implement nested config rendering (enum variants with data)
-- [x] 2.6 Implement input handling (navigation, edit, apply)
-- [x] 2.7 Add helper methods (enum_variant_label, etc.)
-- [x] 2.8 Replace one existing config panel as proof-of-concept
+- [ ] 2.1 Create generic ConfigPanel widget
+- [ ] 2.2 Implement field renderers (bool, int, string, char)
+- [ ] 2.3 Implement Optional field renderer
+- [ ] 2.4 Implement enum dropdown renderer
+- [ ] 2.5 Implement nested config rendering (enum variants with data)
+- [ ] 2.6 Implement input handling (navigation, edit, apply)
+- [ ] 2.7 Add helper methods (enum_variant_label, etc.)
+- [ ] 2.8 Replace one existing config panel as proof-of-concept
 
 ### Phase 3: Full Migration
-- [x] 3.1 Add Configure derives to all serial-core configs
-- [x] 3.2 Implement Configure for external types (DataBits, Parity, StopBits, FlowControl)
+- [ ] 3.1 Add Configure derives to all serial-core configs
+- [ ] 3.2 Implement Configure for external types (DataBits, Parity, StopBits, FlowControl)
 - [ ] 3.3 Replace all TUI config panels
 - [ ] 3.4 Remove old boilerplate code
 - [ ] 3.5 Update documentation

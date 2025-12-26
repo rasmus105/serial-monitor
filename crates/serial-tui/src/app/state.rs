@@ -11,10 +11,9 @@ use crate::app::types::{
     ChunkingMode, ConfigField, ConfigOption, ConfigPanelState,
     DelimiterOption, FileSaveSettings, HexGrouping, InputMode, PaneContent,
     PaneFocus, PortSelectFocus, SizeUnit, TimestampFormat, TrafficConfigField,
-    TrafficFocus, WrapMode, GraphConfigField, GraphFocus,
-    SendFocus, SendConfig,
+    TrafficFocus, WrapMode, GraphConfigField, GraphFocus, SendConfigField,
+    SendFocus, LineEndingOption, InputEncodingMode,
 };
-use crate::ui::config_panel::ConfigPanelState as GenericConfigPanelState;
 
 // =============================================================================
 // Tab Layout State
@@ -1239,10 +1238,20 @@ impl GraphState {
 pub struct SendState {
     /// Which panel is focused (content or config)
     pub focus: SendFocus,
-    /// Generic config panel state (for ConfigPanelWidget)
-    pub config_panel: GenericConfigPanelState,
-    /// Config values (using Configure derive)
-    pub config: SendConfig,
+    /// Config panel state (field selection, dropdown, scroll)
+    pub config: ConfigPanelState<SendConfigField>,
+    /// File path for file sending
+    pub file_path: String,
+    /// Chunk size in bytes for file sending
+    pub chunk_size: String,
+    /// Delay between chunks in milliseconds
+    pub chunk_delay: String,
+    /// Whether to loop the file continuously
+    pub continuous: bool,
+    /// Line ending to append when sending
+    pub line_ending: LineEndingOption,
+    /// Input encoding mode (text vs hex)
+    pub input_encoding: InputEncodingMode,
     /// Send history (ring buffer of previously sent data)
     pub history: Vec<String>,
     /// Current position in history (for arrow navigation)
@@ -1255,8 +1264,13 @@ impl Default for SendState {
     fn default() -> Self {
         Self {
             focus: SendFocus::default(),
-            config_panel: GenericConfigPanelState::with_visible(true),
-            config: SendConfig::new(),
+            config: ConfigPanelState::with_visible(true),
+            file_path: String::new(),
+            chunk_size: "64".to_string(),
+            chunk_delay: "10".to_string(),
+            continuous: false,
+            line_ending: LineEndingOption::default(),
+            input_encoding: InputEncodingMode::default(),
             history: Vec::new(),
             history_index: None,
             history_max_size: 100,
@@ -1265,6 +1279,117 @@ impl Default for SendState {
 }
 
 impl SendState {
+    /// Get display value for a send config field
+    pub fn get_config_display(&self, field: SendConfigField) -> String {
+        match field {
+            SendConfigField::FilePath => {
+                if self.file_path.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    self.file_path.clone()
+                }
+            }
+            SendConfigField::ChunkSize => format!("{} bytes", self.chunk_size),
+            SendConfigField::ChunkDelay => format!("{} ms", self.chunk_delay),
+            SendConfigField::Continuous => {
+                if self.continuous { "ON" } else { "OFF" }.to_string()
+            }
+            SendConfigField::LineEnding => self.line_ending.display_name().to_string(),
+            SendConfigField::InputEncoding => self.input_encoding.display_name().to_string(),
+        }
+    }
+
+    /// Get string options for dropdown
+    pub fn get_config_option_strings(&self) -> Vec<String> {
+        match self.config.field {
+            SendConfigField::LineEnding => LineEndingOption::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            SendConfigField::InputEncoding => InputEncodingMode::all_display_names()
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            // Text input fields don't have dropdowns
+            _ => vec![],
+        }
+    }
+
+    /// Get the current index for dropdown selection
+    pub fn get_current_config_index(&self) -> usize {
+        match self.config.field {
+            SendConfigField::LineEnding => self.line_ending.index(),
+            SendConfigField::InputEncoding => self.input_encoding.index(),
+            _ => 0,
+        }
+    }
+
+    /// Get the number of options for the current config field
+    pub fn get_options_count(&self) -> usize {
+        match self.config.field {
+            SendConfigField::LineEnding => LineEndingOption::all_variants().len(),
+            SendConfigField::InputEncoding => InputEncodingMode::all_variants().len(),
+            _ => 0,
+        }
+    }
+
+    /// Open the dropdown for the current config field
+    pub fn open_dropdown(&mut self) {
+        self.config.dropdown_index = self.get_current_config_index();
+    }
+
+    /// Apply the selected dropdown value
+    pub fn apply_dropdown_selection(&mut self) {
+        match self.config.field {
+            SendConfigField::LineEnding => {
+                self.line_ending = LineEndingOption::from_index(self.config.dropdown_index);
+            }
+            SendConfigField::InputEncoding => {
+                self.input_encoding = InputEncodingMode::from_index(self.config.dropdown_index);
+            }
+            _ => {}
+        }
+    }
+
+    /// Toggle a boolean setting
+    pub fn toggle_setting(&mut self) {
+        if self.config.field == SendConfigField::Continuous {
+            self.continuous = !self.continuous;
+        }
+    }
+
+    /// Get the current text value for text input fields
+    pub fn get_text_value(&self) -> String {
+        match self.config.field {
+            SendConfigField::FilePath => self.file_path.clone(),
+            SendConfigField::ChunkSize => self.chunk_size.clone(),
+            SendConfigField::ChunkDelay => self.chunk_delay.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// Apply text input value to the appropriate field
+    pub fn apply_text_input(&mut self, value: String) {
+        match self.config.field {
+            SendConfigField::FilePath => {
+                self.file_path = value;
+            }
+            SendConfigField::ChunkSize => {
+                // Only store if it's a valid number or empty
+                if value.is_empty() || value.parse::<usize>().is_ok() {
+                    self.chunk_size = value;
+                }
+            }
+            SendConfigField::ChunkDelay => {
+                // Only store if it's a valid number or empty
+                if value.is_empty() || value.parse::<u64>().is_ok() {
+                    self.chunk_delay = value;
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Add a command to history
     pub fn add_to_history(&mut self, cmd: String) {
         // Don't add empty or duplicate of most recent
@@ -1326,14 +1451,15 @@ impl SendState {
         self.history_index = None;
     }
 
-    /// Get chunk size as usize (delegates to config)
+    /// Get chunk size as usize
     pub fn chunk_size_bytes(&self) -> usize {
-        self.config.chunk_size_bytes()
+        self.chunk_size.parse().unwrap_or(64)
     }
 
-    /// Get chunk delay as Duration (delegates to config)
+    /// Get chunk delay as Duration
     pub fn chunk_delay_duration(&self) -> std::time::Duration {
-        self.config.chunk_delay_duration()
+        let ms = self.chunk_delay.parse().unwrap_or(10u64);
+        std::time::Duration::from_millis(ms)
     }
 }
 

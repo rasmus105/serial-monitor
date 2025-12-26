@@ -24,7 +24,7 @@ pub use types::{
     ChunkingMode, ConfigField, ConfigFieldKind, ConfigOption, ConfigPanelState, ConfigSection,
     ConnectionState, DelimiterOption, EnumNavigation, FileSaveSettings, GraphConfigField,
     GraphFocus, HexGrouping, InputMode, InputEncodingMode, LineEndingOption, LocalStrumEnum,
-    PaneContent, PaneFocus, PortSelectFocus, SendConfig, SendConfigField, SendFocus, SizeUnit,
+    PaneContent, PaneFocus, PortSelectFocus, SendConfigField, SendFocus, SizeUnit,
     TimestampFormat, TrafficConfigField, TrafficFocus, View, WrapMode,
 };
 
@@ -196,7 +196,7 @@ impl App {
             let config = FileSendConfig::default()
                 .with_chunk_size(self.send.chunk_size_bytes())
                 .with_delay(self.send.chunk_delay_duration())
-                .with_continuous(self.send.config.continuous);
+                .with_continuous(self.send.continuous);
 
             match self.runtime.block_on(send_file(handle, path, config)) {
                 Ok(file_handle) => {
