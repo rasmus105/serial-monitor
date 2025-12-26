@@ -235,6 +235,14 @@ mod tests {
     }
 
     #[test]
+    fn key_value_colon_separator_multiple() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temperature: 41.3, hum: 13.3, pre:9"));
+
+        assert_eq!(engine.series["temperature"].points[0].value, 41.3);
+    }
+
+    #[test]
     fn key_value_negative_number() {
         let mut engine = engine(KeyValue);
         engine.process_chunk(&chunk("offset=-12.5"));
