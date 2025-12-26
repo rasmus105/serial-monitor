@@ -1,206 +1,163 @@
-//! Graph parsers
-//!
-//! Parsers extract numeric values from data chunks for graphing.
-//! Each parser implements the [`GraphParser`] trait.
+use std::collections::HashSet;
 
-use regex::Regex;
-use strum::{AsRefStr, Display, EnumIter};
+use enum_dispatch::enum_dispatch;
+use strum::{AsRefStr, Display};
 
-use crate::buffer::DataChunk;
+use crate::DataChunk;
 
-/// A parsed value with its series name
-#[derive(Debug, Clone)]
+/// A parsed value with series name.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedValue {
-    /// Name of the series this value belongs to
+    /// Series name (e.g., "temperature", "col0"). Naming scheme is parser-specific.
     pub series: String,
-    /// The numeric value
+    /// The numeric value.
     pub value: f64,
 }
 
-impl ParsedValue {
-    /// Create a new parsed value
-    pub fn new(series: impl Into<String>, value: f64) -> Self {
-        Self {
-            series: series.into(),
-            value,
-        }
-    }
-}
-
-/// Available parser types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, AsRefStr, EnumIter)]
-pub enum ParserType {
-    /// Key-value parser: extracts `key=value` or `key: value` patterns
-    #[default]
-    #[strum(serialize = "Key=Value")]
-    KeyValue,
-    /// Regex parser: user-defined pattern with capture groups
-    #[strum(serialize = "Regex")]
-    Regex,
-    /// CSV parser: parse comma-separated values
-    #[strum(serialize = "CSV")]
-    Csv,
-    /// JSON parser: extract numeric fields from JSON
-    #[strum(serialize = "JSON")]
-    Json,
-    /// Raw number parser: extract any numbers found
-    #[strum(serialize = "Raw Numbers")]
-    RawNumber,
-}
-
-/// Configuration for creating a parser
-#[derive(Debug, Clone)]
-pub enum GraphParserConfig {
-    /// Key-value parser config
-    KeyValue(KeyValueParserConfig),
-    /// Regex parser config
-    Regex(RegexParserConfig),
-    /// CSV parser config
-    Csv(CsvParserConfig),
-    /// JSON parser config (no extra config needed)
-    Json,
-    /// Raw number parser config
-    RawNumber(RawNumberParserConfig),
-}
-
-impl Default for GraphParserConfig {
-    fn default() -> Self {
-        GraphParserConfig::KeyValue(KeyValueParserConfig::default())
-    }
-}
-
-impl GraphParserConfig {
-    /// Get the parser type for this config
-    pub fn parser_type(&self) -> ParserType {
-        match self {
-            GraphParserConfig::KeyValue(_) => ParserType::KeyValue,
-            GraphParserConfig::Regex(_) => ParserType::Regex,
-            GraphParserConfig::Csv(_) => ParserType::Csv,
-            GraphParserConfig::Json => ParserType::Json,
-            GraphParserConfig::RawNumber(_) => ParserType::RawNumber,
-        }
-    }
-
-    /// Create a parser from this config
-    pub fn create_parser(&self) -> Box<dyn GraphParser> {
-        match self {
-            GraphParserConfig::KeyValue(cfg) => Box::new(KeyValueParser::new(cfg.clone())),
-            GraphParserConfig::Regex(cfg) => Box::new(RegexParser::new(cfg.clone())),
-            GraphParserConfig::Csv(cfg) => Box::new(CsvParser::new(cfg.clone())),
-            GraphParserConfig::Json => Box::new(JsonParser::new()),
-            GraphParserConfig::RawNumber(cfg) => Box::new(RawNumberParser::new(cfg.clone())),
-        }
-    }
-}
-
-/// Trait for graph data parsers
-///
-/// Parsers take a [`DataChunk`] and extract zero or more named numeric values.
-pub trait GraphParser: Send + Sync {
-    /// Get the parser type
-    fn parser_type(&self) -> ParserType;
-
-    /// Parse a chunk and return extracted values
-    ///
-    /// Returns a list of (series_name, value) pairs. A single chunk can
-    /// produce multiple values for multiple series.
+/// Parses data chunks into named numeric values.
+#[enum_dispatch]
+pub trait GraphParser: Send + Sync + std::fmt::Debug {
+    /// Parse a chunk of data, returning zero or more named values.
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue>;
 }
 
+#[enum_dispatch(GraphParser)]
+#[derive(Debug, Clone, Display, AsRefStr)]
+pub enum GraphParserType {
+    /// Extract key-value patterns (e.g. `key=value`, `key: value`, etc.)
+    #[strum(serialize = "Key Value")]
+    KeyValue,
+    /// User-defined regex with named capture groups
+    #[strum(serialize = "Regex")]
+    Regex,
+    /// Parse comma-separated values
+    #[strum(serialize = "CSV")]
+    Csv,
+    /// Parse JSON data
+    #[strum(serialize = "JSON")]
+    Json,
+    /// Extract all numbers found in text
+    #[strum(serialize = "Raw Numbers")]
+    RawNumbers,
+}
+
 // ============================================================================
-// Key-Value Parser
+// Key Value Parser
 // ============================================================================
 
-/// Configuration for the key-value parser
-#[derive(Debug, Clone)]
-pub struct KeyValueParserConfig {
-    /// Separators between key and value (e.g., "=" or ":")
-    pub key_value_separators: Vec<char>,
-    /// Separators between pairs (e.g., "," or " ")
-    pub pair_separators: Vec<char>,
-}
+/// Extracts `key=value`, `key:value` or `key: value` patterns.
+#[derive(Debug, Clone, Default)]
+pub struct KeyValue;
 
-impl Default for KeyValueParserConfig {
-    fn default() -> Self {
-        Self {
-            key_value_separators: vec!['=', ':'],
-            pair_separators: vec![',', ' ', '\t', ';'],
-        }
+impl KeyValue {
+    /// Check if byte is a pair separator
+    #[inline]
+    fn is_pair_separator(b: u8) -> bool {
+        matches!(b, b',' | b' ' | b'\t' | b';')
+    }
+
+    /// Check if byte is a key-value separator
+    #[inline]
+    fn is_kv_separator(b: u8) -> bool {
+        matches!(b, b'=' | b':')
+    }
+
+    /// Extract key bytes by scanning backwards from separator position.
+    /// Returns the trimmed key slice.
+    fn extract_key(data: &[u8], sep_pos: usize) -> &[u8] {
+        let before_sep = &data[..sep_pos];
+
+        // Trim trailing whitespace
+        let end = before_sep
+            .iter()
+            .rposition(|&b| b != b' ' && b != b'\t')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+
+        // Find start of key (after last pair separator)
+        let start = before_sep[..end]
+            .iter()
+            .rposition(|&b| Self::is_pair_separator(b))
+            .map(|p| p + 1)
+            .unwrap_or(0);
+
+        // Trim leading whitespace from key
+        let key = &before_sep[start..end];
+        let trim_start = key
+            .iter()
+            .position(|&b| b != b' ' && b != b'\t')
+            .unwrap_or(key.len());
+
+        &key[trim_start..]
+    }
+
+    /// Extract value bytes by scanning forwards from separator position.
+    /// Returns the trimmed value slice.
+    fn extract_value(data: &[u8], sep_pos: usize) -> &[u8] {
+        let after_sep = &data[sep_pos + 1..];
+
+        // Trim leading whitespace
+        let start = after_sep
+            .iter()
+            .position(|&b| b != b' ' && b != b'\t')
+            .unwrap_or(after_sep.len());
+
+        // Find end of value (before next pair separator)
+        let end = after_sep[start..]
+            .iter()
+            .position(|&b| Self::is_pair_separator(b))
+            .unwrap_or(after_sep.len() - start);
+
+        // Trim trailing whitespace from value
+        let value = &after_sep[start..start + end];
+        let trim_end = value
+            .iter()
+            .rposition(|&b| b != b' ' && b != b'\t')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+
+        &value[..trim_end]
     }
 }
 
-/// Parser for key=value or key: value patterns
-///
-/// Examples:
-/// - `temp=25.5` -> ("temp", 25.5)
-/// - `temperature: 41.3, humidity: 60` -> [("temperature", 41.3), ("humidity", 60.0)]
-pub struct KeyValueParser {
-    config: KeyValueParserConfig,
-}
-
-impl KeyValueParser {
-    /// Create a new key-value parser with default config
-    pub fn new(config: KeyValueParserConfig) -> Self {
-        Self { config }
-    }
-}
-
-impl Default for KeyValueParser {
-    fn default() -> Self {
-        Self::new(KeyValueParserConfig::default())
-    }
-}
-
-impl GraphParser for KeyValueParser {
-    fn parser_type(&self) -> ParserType {
-        ParserType::KeyValue
-    }
-
+impl GraphParser for KeyValue {
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let mut results = Vec::new();
+        let data = &chunk.data;
+        let mut results = Vec::with_capacity(8);
+        let mut seen_keys: HashSet<&[u8]> = HashSet::new();
 
-        // Try to decode as UTF-8
-        let text = match std::str::from_utf8(&chunk.data) {
-            Ok(s) => s,
-            Err(_) => return results,
-        };
-
-        // For each key-value separator, find all key=value patterns
-        for &sep in &self.config.key_value_separators {
-            let mut remaining = text;
-
-            while let Some(sep_pos) = remaining.find(sep) {
-                // Find the key (scan backwards from separator to find word boundary)
-                let before_sep = &remaining[..sep_pos];
-                let key = before_sep
-                    .trim_end()
-                    .split(|c: char| self.config.pair_separators.contains(&c))
-                    .last()
-                    .unwrap_or("")
-                    .trim();
-
-                // Find the value (scan forwards from separator to find end)
-                let after_sep = &remaining[sep_pos + sep.len_utf8()..];
-                let value_str = after_sep
-                    .trim_start()
-                    .split(|c: char| self.config.pair_separators.contains(&c))
-                    .next()
-                    .unwrap_or("")
-                    .trim();
-
-                // Try to parse the value as a number
-                if !key.is_empty() {
-                    if let Ok(value) = value_str.parse::<f64>() {
-                        // Avoid duplicates (same key-value might be found by multiple separators)
-                        if !results.iter().any(|r: &ParsedValue| r.series == key) {
-                            results.push(ParsedValue::new(key, value));
-                        }
-                    }
-                }
-
-                // Move past this separator
-                remaining = &remaining[sep_pos + sep.len_utf8()..];
+        // Single pass: find all key-value separators
+        for (pos, &byte) in data.iter().enumerate() {
+            if !Self::is_kv_separator(byte) {
+                continue;
             }
+
+            let key_bytes = Self::extract_key(data, pos);
+            if key_bytes.is_empty() || seen_keys.contains(key_bytes) {
+                continue;
+            }
+
+            let value_bytes = Self::extract_value(data, pos);
+
+            // Only convert to UTF-8 for the value we need to parse
+            let Ok(value_str) = std::str::from_utf8(value_bytes) else {
+                continue;
+            };
+
+            let Ok(value) = value_str.parse::<f64>() else {
+                continue;
+            };
+
+            // Only convert key to string when we have a valid value
+            let Ok(key_str) = std::str::from_utf8(key_bytes) else {
+                continue;
+            };
+
+            seen_keys.insert(key_bytes);
+            results.push(ParsedValue {
+                series: key_str.to_string(),
+                value,
+            });
         }
 
         results
@@ -211,92 +168,85 @@ impl GraphParser for KeyValueParser {
 // Regex Parser
 // ============================================================================
 
-/// Configuration for the regex parser
+/// User-defined regex with named capture groups becoming series names.
+///
+/// Supports two modes:
+/// 1. **Key/Value mode**: Pattern contains `(?P<key>...)` and `(?P<value>...)` groups.
+///    Each match extracts a dynamic series name from `key` and its value from `value`.
+/// 2. **Named groups mode**: Each named capture group becomes a series, and the
+///    captured text is parsed as a number.
 #[derive(Debug, Clone)]
-pub struct RegexParserConfig {
-    /// The regex pattern with named capture groups
-    /// Named groups become series names, captured values should be numeric
-    pub pattern: String,
+pub struct Regex {
+    /// Pre-compiled regex pattern
+    regex: regex::Regex,
+    /// True if pattern uses key/value capture groups
+    has_key_value_groups: bool,
+    /// Cached named capture group names (excludes "key" and "value")
+    group_names: Vec<String>,
 }
 
-impl Default for RegexParserConfig {
-    fn default() -> Self {
-        Self {
-            // Default: match "name: number" or "name=number"
-            pattern: r"(?P<key>\w+)[=:]\s*(?P<value>-?\d+\.?\d*)".to_string(),
+impl Regex {
+    /// Create a new Regex parser with the given pattern.
+    ///
+    /// Returns an error if the pattern is invalid.
+    pub fn new(pattern: &str) -> Result<Self, regex::Error> {
+        let regex = regex::Regex::new(pattern)?;
+
+        let mut has_key_value_groups = false;
+        let mut group_names = Vec::new();
+
+        for name in regex.capture_names().flatten() {
+            if name == "key" || name == "value" {
+                has_key_value_groups = true;
+            } else {
+                group_names.push(name.to_string());
+            }
         }
-    }
-}
 
-/// Parser using user-defined regex with capture groups
-///
-/// Named capture groups become series names. The captured value should be numeric.
-///
-/// Example pattern: `temp=(?P<temperature>\d+\.?\d*)`
-pub struct RegexParser {
-    config: RegexParserConfig,
-    regex: Option<Regex>,
-}
-
-impl RegexParser {
-    /// Create a new regex parser
-    pub fn new(config: RegexParserConfig) -> Self {
-        let regex = Regex::new(&config.pattern).ok();
-        Self { config, regex }
+        Ok(Self {
+            regex,
+            has_key_value_groups,
+            group_names,
+        })
     }
 
-    /// Check if the regex pattern is valid
-    pub fn is_valid(&self) -> bool {
-        self.regex.is_some()
-    }
-
-    /// Get the pattern
+    /// Returns the original pattern string.
     pub fn pattern(&self) -> &str {
-        &self.config.pattern
+        self.regex.as_str()
     }
 }
 
-impl GraphParser for RegexParser {
-    fn parser_type(&self) -> ParserType {
-        ParserType::Regex
-    }
-
+impl GraphParser for Regex {
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let mut results = Vec::new();
-
-        let regex = match &self.regex {
-            Some(r) => r,
-            None => return results,
-        };
-
         let text = match std::str::from_utf8(&chunk.data) {
             Ok(s) => s,
-            Err(_) => return results,
+            Err(_) => return Vec::new(),
         };
 
-        // Check if we have 'key' and 'value' named groups (generic pattern)
-        let has_key_value_groups = regex
-            .capture_names()
-            .flatten()
-            .any(|n| n == "key" || n == "value");
+        let mut results = Vec::with_capacity(8);
 
-        for caps in regex.captures_iter(text) {
-            if has_key_value_groups {
-                // Generic key/value pattern
+        for caps in self.regex.captures_iter(text) {
+            if self.has_key_value_groups {
+                // Generic key/value pattern: (?P<key>...) and (?P<value>...)
                 if let (Some(key_match), Some(value_match)) =
                     (caps.name("key"), caps.name("value"))
+                    && let Ok(value) = value_match.as_str().parse::<f64>()
                 {
-                    if let Ok(value) = value_match.as_str().parse::<f64>() {
-                        results.push(ParsedValue::new(key_match.as_str(), value));
-                    }
+                    results.push(ParsedValue {
+                        series: key_match.as_str().to_string(),
+                        value,
+                    });
                 }
             } else {
-                // Named groups are series names
-                for name in regex.capture_names().flatten() {
-                    if let Some(m) = caps.name(name) {
-                        if let Ok(value) = m.as_str().parse::<f64>() {
-                            results.push(ParsedValue::new(name, value));
-                        }
+                // Named groups are series names, captured values are parsed as numbers
+                for name in &self.group_names {
+                    if let Some(m) = caps.name(name)
+                        && let Ok(value) = m.as_str().parse::<f64>()
+                    {
+                        results.push(ParsedValue {
+                            series: name.clone(),
+                            value,
+                        });
                     }
                 }
             }
@@ -310,84 +260,111 @@ impl GraphParser for RegexParser {
 // CSV Parser
 // ============================================================================
 
-/// Configuration for the CSV parser
+/// Parses delimiter-separated numeric values.
 #[derive(Debug, Clone)]
-pub struct CsvParserConfig {
-    /// Column delimiter
+pub struct Csv {
     pub delimiter: char,
-    /// Column names (if known). If empty, uses column indices as names.
+    /// Column names. If empty, uses "col0", "col1", etc.
     pub column_names: Vec<String>,
-    /// Whether the first row is a header row
-    pub has_header: bool,
 }
 
-impl Default for CsvParserConfig {
+impl Default for Csv {
     fn default() -> Self {
         Self {
             delimiter: ',',
             column_names: Vec::new(),
-            has_header: false,
         }
     }
 }
 
-/// Parser for CSV data
-///
-/// Parses comma-separated (or other delimiter) values, extracting numeric columns.
-pub struct CsvParser {
-    config: CsvParserConfig,
-    /// Cached header from first row (if has_header is true)
-    header: Option<Vec<String>>,
-}
-
-impl CsvParser {
-    /// Create a new CSV parser
-    pub fn new(config: CsvParserConfig) -> Self {
-        Self {
-            config,
-            header: None,
-        }
-    }
-}
-
-impl GraphParser for CsvParser {
-    fn parser_type(&self) -> ParserType {
-        ParserType::Csv
-    }
-
+impl GraphParser for Csv {
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let mut results = Vec::new();
+        let data = &chunk.data;
 
-        let text = match std::str::from_utf8(&chunk.data) {
-            Ok(s) => s.trim(),
-            Err(_) => return results,
-        };
+        // Only support ASCII delimiters for byte-level parsing
+        if !self.delimiter.is_ascii() {
+            return Vec::new();
+        }
+        let delim_byte = self.delimiter as u8;
 
-        // Split into fields
-        let fields: Vec<&str> = text.split(self.config.delimiter).map(|s| s.trim()).collect();
+        let mut results = Vec::with_capacity(self.column_names.len().max(8));
+        let mut col_index = 0;
+        let mut start = 0;
 
-        // Get column names
-        let column_names: Vec<String> = if !self.config.column_names.is_empty() {
-            self.config.column_names.clone()
-        } else if let Some(ref header) = self.header {
-            header.clone()
-        } else {
-            // Use column indices as names
-            (0..fields.len()).map(|i| format!("col{}", i)).collect()
-        };
-
-        // Parse each field
-        for (i, field) in fields.iter().enumerate() {
-            if let Ok(value) = field.parse::<f64>() {
-                let name = column_names
-                    .get(i)
-                    .cloned()
-                    .unwrap_or_else(|| format!("col{}", i));
-                results.push(ParsedValue::new(name, value));
+        // Process each field
+        for (pos, &byte) in data.iter().enumerate() {
+            if byte == delim_byte {
+                self.parse_field(data, start, pos, col_index, &mut results);
+                col_index += 1;
+                start = pos + 1;
             }
         }
 
+        // Parse the last field (after final delimiter or if no delimiters)
+        if start <= data.len() {
+            self.parse_field(data, start, data.len(), col_index, &mut results);
+        }
+
         results
+    }
+}
+
+impl Csv {
+    /// Parse a single field and add to results if it's a valid number.
+    fn parse_field(
+        &self,
+        data: &[u8],
+        start: usize,
+        end: usize,
+        col_index: usize,
+        results: &mut Vec<ParsedValue>,
+    ) {
+        let field = &data[start..end];
+
+        // Trim whitespace
+        let trimmed = Self::trim_bytes(field);
+        if trimmed.is_empty() {
+            return;
+        }
+
+        // Parse as UTF-8 string, then as f64
+        let Ok(field_str) = std::str::from_utf8(trimmed) else {
+            return;
+        };
+
+        let Ok(value) = field_str.parse::<f64>() else {
+            return;
+        };
+
+        // Get series name
+        let series = if col_index < self.column_names.len() {
+            self.column_names[col_index].clone()
+        } else {
+            format!("col{}", col_index)
+        };
+
+        results.push(ParsedValue { series, value });
+    }
+
+    /// Trim leading and trailing ASCII whitespace from bytes.
+    #[inline]
+    fn trim_bytes(data: &[u8]) -> &[u8] {
+        let start = data
+            .iter()
+            .position(|&b| !b.is_ascii_whitespace())
+            .unwrap_or(data.len());
+
+        let end = data
+            .iter()
+            .rposition(|&b| !b.is_ascii_whitespace())
+            .map(|p| p + 1)
+            .unwrap_or(0);
+
+        if start >= end {
+            &[]
+        } else {
+            &data[start..end]
+        }
     }
 }
 
@@ -395,387 +372,163 @@ impl GraphParser for CsvParser {
 // JSON Parser
 // ============================================================================
 
-/// Parser for JSON data
-///
 /// Extracts numeric fields from JSON objects.
-pub struct JsonParser;
-
-impl JsonParser {
-    /// Create a new JSON parser
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for JsonParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl GraphParser for JsonParser {
-    fn parser_type(&self) -> ParserType {
-        ParserType::Json
-    }
-
-    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let mut results = Vec::new();
-
-        let text = match std::str::from_utf8(&chunk.data) {
-            Ok(s) => s.trim(),
-            Err(_) => return results,
-        };
-
-        // Simple JSON parsing without external dependencies
-        // This is a basic implementation that handles simple cases
-        Self::parse_json_values(text, "", &mut results);
-
-        results
-    }
-}
-
-impl JsonParser {
-    /// Recursively parse JSON values and extract numbers
-    fn parse_json_values(text: &str, prefix: &str, results: &mut Vec<ParsedValue>) {
-        let text = text.trim();
-
-        // Try to parse as a simple number
-        if let Ok(value) = text.parse::<f64>() {
-            if !prefix.is_empty() {
-                results.push(ParsedValue::new(prefix, value));
-            }
-            return;
-        }
-
-        // Handle objects: {"key": value, ...}
-        if text.starts_with('{') && text.ends_with('}') {
-            let inner = &text[1..text.len() - 1];
-            Self::parse_json_object(inner, prefix, results);
-            return;
-        }
-
-        // Handle arrays: [value, value, ...]
-        if text.starts_with('[') && text.ends_with(']') {
-            let inner = &text[1..text.len() - 1];
-            Self::parse_json_array(inner, prefix, results);
-        }
-    }
-
-    fn parse_json_object(text: &str, prefix: &str, results: &mut Vec<ParsedValue>) {
-        // Very basic JSON object parsing
-        // Split by commas that are not inside braces or brackets
-        let mut depth = 0;
-        let mut current_key: Option<String> = None;
-        let mut value_start: Option<usize> = None;
-        let mut in_string = false;
-        let mut escape_next = false;
-
-        let chars: Vec<char> = text.chars().collect();
-        let mut i = 0;
-
-        while i < chars.len() {
-            let c = chars[i];
-
-            if escape_next {
-                escape_next = false;
-                i += 1;
-                continue;
-            }
-
-            if c == '\\' {
-                escape_next = true;
-                i += 1;
-                continue;
-            }
-
-            if c == '"' {
-                in_string = !in_string;
-                if in_string && current_key.is_none() {
-                    // Start of key
-                    let key_start = i + 1;
-                    // Find end of key
-                    let mut key_end = key_start;
-                    while key_end < chars.len() {
-                        if chars[key_end] == '\\' {
-                            key_end += 2;
-                            continue;
-                        }
-                        if chars[key_end] == '"' {
-                            break;
-                        }
-                        key_end += 1;
-                    }
-                    current_key = Some(chars[key_start..key_end].iter().collect());
-                    i = key_end;
-                    in_string = false;
-                }
-                i += 1;
-                continue;
-            }
-
-            if in_string {
-                i += 1;
-                continue;
-            }
-
-            match c {
-                '{' | '[' => depth += 1,
-                '}' | ']' => depth -= 1,
-                ':' if depth == 0 && current_key.is_some() => {
-                    value_start = Some(i + 1);
-                }
-                ',' if depth == 0 => {
-                    if let (Some(key), Some(start)) = (current_key.take(), value_start.take()) {
-                        let value_text: String = chars[start..i].iter().collect();
-                        let full_key = if prefix.is_empty() {
-                            key
-                        } else {
-                            format!("{}.{}", prefix, key)
-                        };
-                        Self::parse_json_values(&value_text, &full_key, results);
-                    }
-                }
-                _ => {}
-            }
-
-            i += 1;
-        }
-
-        // Handle last key-value pair
-        if let (Some(key), Some(start)) = (current_key, value_start) {
-            let value_text: String = chars[start..].iter().collect();
-            let full_key = if prefix.is_empty() {
-                key
-            } else {
-                format!("{}.{}", prefix, key)
-            };
-            Self::parse_json_values(&value_text, &full_key, results);
-        }
-    }
-
-    fn parse_json_array(text: &str, prefix: &str, results: &mut Vec<ParsedValue>) {
-        let mut depth = 0;
-        let mut start = 0;
-        let mut index = 0;
-        let mut in_string = false;
-        let mut escape_next = false;
-
-        let chars: Vec<char> = text.chars().collect();
-
-        for (i, &c) in chars.iter().enumerate() {
-            if escape_next {
-                escape_next = false;
-                continue;
-            }
-
-            if c == '\\' {
-                escape_next = true;
-                continue;
-            }
-
-            if c == '"' {
-                in_string = !in_string;
-                continue;
-            }
-
-            if in_string {
-                continue;
-            }
-
-            match c {
-                '{' | '[' => depth += 1,
-                '}' | ']' => depth -= 1,
-                ',' if depth == 0 => {
-                    let value_text: String = chars[start..i].iter().collect();
-                    let key = if prefix.is_empty() {
-                        format!("[{}]", index)
-                    } else {
-                        format!("{}[{}]", prefix, index)
-                    };
-                    Self::parse_json_values(&value_text, &key, results);
-                    start = i + 1;
-                    index += 1;
-                }
-                _ => {}
-            }
-        }
-
-        // Handle last element
-        if start < chars.len() {
-            let value_text: String = chars[start..].iter().collect();
-            let key = if prefix.is_empty() {
-                format!("[{}]", index)
-            } else {
-                format!("{}[{}]", prefix, index)
-            };
-            Self::parse_json_values(&value_text, &key, results);
-        }
-    }
-}
-
-// ============================================================================
-// Raw Number Parser
-// ============================================================================
-
-/// Configuration for the raw number parser
-#[derive(Debug, Clone)]
-pub struct RawNumberParserConfig {
-    /// Prefix for series names (e.g., "value" -> "value0", "value1", ...)
-    pub series_prefix: String,
-}
-
-impl Default for RawNumberParserConfig {
-    fn default() -> Self {
-        Self {
-            series_prefix: "value".to_string(),
-        }
-    }
-}
-
-/// Parser that extracts all numbers found in the data
 ///
-/// This is the simplest parser - it just finds any numbers in the text.
-pub struct RawNumberParser {
-    config: RawNumberParserConfig,
-    regex: Regex,
-}
+/// Supports:
+/// - Flat objects: `{"temperature": 25.5}` -> series "temperature"
+/// - Nested objects: `{"sensor": {"temp": 25.5}}` -> series "sensor.temp"
+/// - Arrays: `{"values": [1, 2, 3]}` -> series "values.0", "values.1", "values.2"
+///
+/// Non-numeric fields (strings, booleans, nulls) are silently skipped.
+#[derive(Debug, Clone, Default)]
+pub struct Json;
 
-impl RawNumberParser {
-    /// Create a new raw number parser
-    pub fn new(config: RawNumberParserConfig) -> Self {
-        // Match integers and floats, including negative numbers
-        let regex = Regex::new(r"-?\d+\.?\d*").unwrap();
-        Self { config, regex }
+impl Json {
+    /// Recursively extract numeric values from a JSON value.
+    fn extract_values(value: &serde_json::Value, prefix: &str, results: &mut Vec<ParsedValue>) {
+        match value {
+            serde_json::Value::Number(n) => {
+                if let Some(f) = n.as_f64() {
+                    results.push(ParsedValue {
+                        series: prefix.to_string(),
+                        value: f,
+                    });
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (key, val) in map {
+                    let new_prefix = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{}.{}", prefix, key)
+                    };
+                    Self::extract_values(val, &new_prefix, results);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for (idx, val) in arr.iter().enumerate() {
+                    let new_prefix = if prefix.is_empty() {
+                        idx.to_string()
+                    } else {
+                        format!("{}.{}", prefix, idx)
+                    };
+                    Self::extract_values(val, &new_prefix, results);
+                }
+            }
+            // Skip strings, booleans, and nulls
+            _ => {}
+        }
     }
 }
 
-impl Default for RawNumberParser {
-    fn default() -> Self {
-        Self::new(RawNumberParserConfig::default())
-    }
-}
-
-impl GraphParser for RawNumberParser {
-    fn parser_type(&self) -> ParserType {
-        ParserType::RawNumber
-    }
-
+impl GraphParser for Json {
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let mut results = Vec::new();
-
         let text = match std::str::from_utf8(&chunk.data) {
             Ok(s) => s,
-            Err(_) => return results,
+            Err(_) => return Vec::new(),
         };
 
-        for (i, m) in self.regex.find_iter(text).enumerate() {
-            if let Ok(value) = m.as_str().parse::<f64>() {
-                let series_name = format!("{}{}", self.config.series_prefix, i);
-                results.push(ParsedValue::new(series_name, value));
-            }
-        }
+        let value: serde_json::Value = match serde_json::from_str(text) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
 
+        let mut results = Vec::with_capacity(8);
+        Self::extract_values(&value, "", &mut results);
         results
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Direction;
+// ============================================================================
+// Raw Numbers Parser
+// ============================================================================
 
-    fn make_chunk(data: &str) -> DataChunk {
-        DataChunk::new(Direction::Rx, data.as_bytes().to_vec())
+/// Extracts all numbers found in text. Series names are "0", "1", "2", etc.
+///
+/// Supports integers and floating-point numbers, including:
+/// - Integers: `42`, `-17`
+/// - Floats: `3.14`, `-0.5`, `.25`
+/// - Scientific notation: `1e10`, `2.5E-3`
+///
+/// Numbers are extracted in order of appearance.
+#[derive(Debug, Clone, Default)]
+pub struct RawNumbers;
+
+impl RawNumbers {
+    /// Check if a byte can start a number (digit, minus, or decimal point).
+    #[inline]
+    fn can_start_number(b: u8) -> bool {
+        b.is_ascii_digit() || b == b'-' || b == b'.'
     }
 
-    #[test]
-    fn test_key_value_parser() {
-        let parser = KeyValueParser::default();
-
-        let chunk = make_chunk("temp=25.5, humidity=60");
-        let values = parser.parse(&chunk);
-
-        assert_eq!(values.len(), 2);
-        assert_eq!(values[0].series, "temp");
-        assert!((values[0].value - 25.5).abs() < f64::EPSILON);
-        assert_eq!(values[1].series, "humidity");
-        assert!((values[1].value - 60.0).abs() < f64::EPSILON);
+    /// Check if a byte can be part of a number.
+    #[inline]
+    fn is_number_char(b: u8) -> bool {
+        b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'+' || b == b'e' || b == b'E'
     }
 
-    #[test]
-    fn test_key_value_parser_colon() {
-        let parser = KeyValueParser::default();
-
-        let chunk = make_chunk("temperature: 41.3");
-        let values = parser.parse(&chunk);
-
-        assert_eq!(values.len(), 1);
-        assert_eq!(values[0].series, "temperature");
-        assert!((values[0].value - 41.3).abs() < f64::EPSILON);
+    /// Check if the byte before a potential number start is a valid boundary.
+    /// Numbers shouldn't be extracted from the middle of identifiers.
+    #[inline]
+    fn is_valid_boundary(b: u8) -> bool {
+        !b.is_ascii_alphanumeric() && b != b'_'
     }
+}
 
-    #[test]
-    fn test_regex_parser_named_groups() {
-        let config = RegexParserConfig {
-            pattern: r"T:(?P<temp>\d+\.?\d*)\s+H:(?P<humidity>\d+\.?\d*)".to_string(),
-        };
-        let parser = RegexParser::new(config);
+impl GraphParser for RawNumbers {
+    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
+        let data = &chunk.data;
+        let mut results = Vec::with_capacity(8);
+        let mut i = 0;
 
-        let chunk = make_chunk("T:25.5 H:60");
-        let values = parser.parse(&chunk);
+        while i < data.len() {
+            // Look for potential number start
+            if !Self::can_start_number(data[i]) {
+                i += 1;
+                continue;
+            }
 
-        assert_eq!(values.len(), 2);
-        assert!(values.iter().any(|v| v.series == "temp" && (v.value - 25.5).abs() < f64::EPSILON));
-        assert!(
-            values
-                .iter()
-                .any(|v| v.series == "humidity" && (v.value - 60.0).abs() < f64::EPSILON)
-        );
-    }
+            // Check boundary before this position
+            if i > 0 && !Self::is_valid_boundary(data[i - 1]) {
+                i += 1;
+                continue;
+            }
 
-    #[test]
-    fn test_csv_parser() {
-        let config = CsvParserConfig {
-            delimiter: ',',
-            column_names: vec!["time".to_string(), "temp".to_string(), "humidity".to_string()],
-            has_header: false,
-        };
-        let parser = CsvParser::new(config);
+            // Handle lone minus or dot - need at least one digit
+            if (data[i] == b'-' || data[i] == b'.')
+                && (i + 1 >= data.len() || !data[i + 1].is_ascii_digit())
+            {
+                // Special case: "-.5" pattern
+                if data[i] == b'-'
+                    && i + 2 < data.len()
+                    && data[i + 1] == b'.'
+                    && data[i + 2].is_ascii_digit()
+                {
+                    // Continue to parse
+                } else {
+                    i += 1;
+                    continue;
+                }
+            }
 
-        let chunk = make_chunk("1000, 25.5, 60");
-        let values = parser.parse(&chunk);
+            // Find end of number
+            let start = i;
+            while i < data.len() && Self::is_number_char(data[i]) {
+                i += 1;
+            }
 
-        assert_eq!(values.len(), 3);
-        assert_eq!(values[0].series, "time");
-        assert_eq!(values[1].series, "temp");
-        assert_eq!(values[2].series, "humidity");
-    }
+            // Try to parse the candidate
+            let candidate = &data[start..i];
+            if let Ok(s) = std::str::from_utf8(candidate)
+                && let Ok(value) = s.parse::<f64>()
+            {
+                results.push(ParsedValue {
+                    series: results.len().to_string(),
+                    value,
+                });
+            }
+        }
 
-    #[test]
-    fn test_json_parser() {
-        let parser = JsonParser::new();
-
-        let chunk = make_chunk(r#"{"temp": 25.5, "humidity": 60}"#);
-        let values = parser.parse(&chunk);
-
-        assert_eq!(values.len(), 2);
-        assert!(values.iter().any(|v| v.series == "temp" && (v.value - 25.5).abs() < f64::EPSILON));
-        assert!(
-            values
-                .iter()
-                .any(|v| v.series == "humidity" && (v.value - 60.0).abs() < f64::EPSILON)
-        );
-    }
-
-    #[test]
-    fn test_raw_number_parser() {
-        let parser = RawNumberParser::default();
-
-        let chunk = make_chunk("Reading: 25.5 degrees at 60% humidity");
-        let values = parser.parse(&chunk);
-
-        assert_eq!(values.len(), 2);
-        assert!((values[0].value - 25.5).abs() < f64::EPSILON);
-        assert!((values[1].value - 60.0).abs() < f64::EPSILON);
+        results
     }
 }

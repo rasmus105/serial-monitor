@@ -1,108 +1,207 @@
-//! Graph engine
-//!
-//! The [`GraphEngine`] manages graph data parsing and storage.
-//! It supports lazy initialization: historical data is parsed on first request,
-//! then new data is parsed incrementally.
+use std::{
+    collections::{HashMap, VecDeque},
+    time::{Duration, SystemTime},
+};
 
-use strum::{AsRefStr, Display, EnumIter};
+use crate::{DataChunk, Direction};
 
-use crate::buffer::DataChunk;
+use super::parser::{GraphParser, GraphParserType};
 
-use super::data::{GraphBuffer, GraphDataPoint, PacketRateData};
-use super::parser::{GraphParser, GraphParserConfig, ParsedValue};
+// ============================================================================
+// Graph Mode
+// ============================================================================
 
-/// Graph visualization mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, AsRefStr, EnumIter)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GraphMode {
-    /// Show packet rate over time (no parsing needed)
+    /// Parse serial data and display as points on a graph.
     #[default]
-    #[strum(serialize = "Packet Rate")]
-    PacketRate,
-    /// Show parsed data values
-    #[strum(serialize = "Parsed Data")]
     ParsedData,
+    /// Display the incoming/outcoming packet rates over time.
+    PacketRate,
 }
 
-/// Configuration for the graph engine
+// ============================================================================
+// Graph Data Point
+// ============================================================================
+
+/// A single data point for graphing
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphDataPoint {
+    /// When this value was recorded
+    pub timestamp: SystemTime,
+    /// The numeric value
+    pub value: f64,
+    /// Which direction the source chunk came from
+    pub direction: Direction,
+}
+
+// ============================================================================
+// Graph Series
+// ============================================================================
+
 #[derive(Debug, Clone)]
-pub struct GraphEngineConfig {
-    /// Current graph mode
-    pub mode: GraphMode,
-    /// Parser configuration (for ParsedData mode)
-    pub parser_config: GraphParserConfig,
-    /// Maximum points per series
-    pub max_points_per_series: usize,
-    /// Maximum packet rate samples
-    pub max_rate_samples: usize,
+pub struct GraphSeries {
+    /// Data points in chronological order
+    pub points: VecDeque<GraphDataPoint>,
+    /// Optional color hint (index into a color palette) - mostly for frontend
+    /// (mostly intended to allow frontend to store color)
+    pub color: u8,
+    /// Whether this series is visible in the UI
+    /// (mostly intended to allow frontend to store visibility bool)
+    pub visible: bool,
 }
 
-impl Default for GraphEngineConfig {
-    fn default() -> Self {
-        Self {
-            mode: GraphMode::PacketRate,
-            parser_config: GraphParserConfig::default(),
-            max_points_per_series: GraphBuffer::DEFAULT_MAX_POINTS,
-            max_rate_samples: PacketRateData::DEFAULT_MAX_SAMPLES,
+// ============================================================================
+// Packet Rate Tracking
+// ============================================================================
+
+/// A single time window sample for packet rate visualization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PacketRateSample {
+    /// Window start time as nanoseconds since UNIX epoch
+    pub window_start_nanos: u64,
+    pub rx_count: u32,
+    pub tx_count: u32,
+    pub rx_bytes: usize,
+    pub tx_bytes: usize,
+}
+
+impl PacketRateSample {
+    /// Get the window start time as a `SystemTime`
+    pub fn window_start(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_nanos(self.window_start_nanos)
+    }
+}
+
+/// Packet rate tracking data
+///
+/// Tracks RX and TX packet counts over time windows for rate visualization.
+/// This doesn't require any parsing - it just counts chunks.
+#[derive(Debug, Clone)]
+pub struct PacketRateData {
+    /// Time-windowed packet counts
+    pub samples: VecDeque<PacketRateSample>,
+    /// Size of each time window
+    pub window_size: Duration,
+    /// Maximum number of samples to keep
+    pub max_samples: usize,
+}
+
+impl PacketRateData {
+    /// Record a packet in the appropriate time window.
+    pub fn record(&mut self, timestamp: SystemTime, direction: Direction, bytes: usize) {
+        let window_nanos = self.window_bucket_nanos(timestamp);
+
+        // Check if we need a new sample
+        let needs_new_sample = self
+            .samples
+            .back()
+            .map(|s| s.window_start_nanos != window_nanos)
+            .unwrap_or(true);
+
+        if needs_new_sample {
+            // Trim old samples if at capacity
+            while self.samples.len() >= self.max_samples {
+                self.samples.pop_front();
+            }
+            self.samples.push_back(PacketRateSample {
+                window_start_nanos: window_nanos,
+                rx_count: 0,
+                tx_count: 0,
+                rx_bytes: 0,
+                tx_bytes: 0,
+            });
+        }
+
+        // Record in the current sample
+        if let Some(sample) = self.samples.back_mut() {
+            match direction {
+                Direction::Rx => {
+                    sample.rx_count += 1;
+                    sample.rx_bytes += bytes;
+                }
+                Direction::Tx => {
+                    sample.tx_count += 1;
+                    sample.tx_bytes += bytes;
+                }
+            }
         }
     }
+
+    /// Round timestamp down to window boundary, returning nanoseconds since epoch.
+    fn window_bucket_nanos(&self, timestamp: SystemTime) -> u64 {
+        let nanos = timestamp
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_nanos() as u64;
+        let window_nanos = self.window_size.as_nanos() as u64;
+        (nanos / window_nanos) * window_nanos
+    }
 }
 
-/// Main graph engine that manages parsing and data storage
-///
-/// The engine supports two modes:
-/// - **PacketRate**: Counts packets per time window (no parsing)
-/// - **ParsedData**: Extracts numeric values using a configurable parser
-///
-/// # Lazy Initialization
-///
-/// The engine is designed for lazy initialization. When first created, it has
-/// no data. Call [`initialize`](Self::initialize) with historical chunks to
-/// populate it with existing data, then call [`process_chunk`](Self::process_chunk)
-/// for new data.
+// ============================================================================
+// Graph Engine Config
+// ============================================================================
+
+#[derive(Debug)]
+pub struct GraphEngineConfig {
+    /// Parse incoming serial data as points to be displayed on a graph.
+    pub parser: Box<dyn GraphParser>,
+    /// Keep track of incoming/outcoming packes rates over time (for `PacketRate` mode)
+    pub packet_rate: PacketRateData,
+}
+
+// ============================================================================
+// Graph Engine
+// ============================================================================
+
+/// Main entry struct for usage of graph parsing.
+/// Allows lazy-initialization.
 #[derive(Debug)]
 pub struct GraphEngine {
-    /// Current configuration
-    config: GraphEngineConfig,
-    /// Packet rate data (always tracked)
-    packet_rate: PacketRateData,
-    /// Parsed data buffer
-    parsed_data: GraphBuffer,
-    /// The active parser instance
-    parser: Box<dyn GraphParser>,
-    /// Number of chunks processed (for tracking)
-    chunks_processed: usize,
-}
+    /// configuration for *how* data should be parsed.
+    pub config: GraphEngineConfig,
 
-impl std::fmt::Debug for Box<dyn GraphParser> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GraphParser")
-            .field("type", &self.parser_type().to_string())
-            .finish()
-    }
+    /// All different graph series and their data
+    pub series: HashMap<String, GraphSeries>,
+
+    /// Maximum points per series (oldest points are trimmed when exceeded)
+    pub max_points_per_series: usize,
+
+    /// Counter for assigning colors to new series
+    next_color: u8,
+
+    pub chunks_processed: usize,
 }
 
 impl GraphEngine {
-    /// Create a new graph engine with default configuration
-    pub fn new() -> Self {
-        Self::with_config(GraphEngineConfig::default())
-    }
+    /// Default max points per series
+    pub const DEFAULT_MAX_POINTS: usize = 10000;
 
-    /// Create a new graph engine with custom configuration
-    pub fn with_config(config: GraphEngineConfig) -> Self {
-        let parser = config.parser_config.create_parser();
-        let packet_rate = PacketRateData::with_config(
-            PacketRateData::DEFAULT_WINDOW_SIZE,
-            config.max_rate_samples,
-        );
-        let parsed_data = GraphBuffer::with_max_points(config.max_points_per_series);
-
+    pub fn from_parser(parser: GraphParserType) -> Self {
         Self {
-            config,
-            packet_rate,
-            parsed_data,
-            parser,
+            config: GraphEngineConfig {
+                parser: Box::new(parser),
+                packet_rate: PacketRateData {
+                    samples: VecDeque::new(),
+                    window_size: Duration::from_millis(100),
+                    max_samples: 6000, // 10 minutes at 100ms windows
+                },
+            },
+            series: HashMap::new(),
+            max_points_per_series: Self::DEFAULT_MAX_POINTS,
+            next_color: 0,
             chunks_processed: 0,
         }
+    }
+
+    pub fn reparse_with_parser<'a>(
+        &mut self,
+        parser: GraphParserType,
+        chunks: impl Iterator<Item = &'a DataChunk>,
+    ) {
+        self.config.parser = Box::new(parser);
+        self.initialize(chunks);
     }
 
     /// Initialize the engine with historical data
@@ -111,217 +210,269 @@ impl GraphEngine {
     /// existing buffered data.
     pub fn initialize<'a>(&mut self, chunks: impl Iterator<Item = &'a DataChunk>) {
         for chunk in chunks {
-            self.process_chunk_internal(chunk);
+            self.process_chunk(chunk);
         }
     }
 
-    /// Process a new data chunk
-    ///
-    /// Call this for each new chunk received after initialization.
     pub fn process_chunk(&mut self, chunk: &DataChunk) {
-        self.process_chunk_internal(chunk);
-    }
-
-    /// Internal chunk processing
-    fn process_chunk_internal(&mut self, chunk: &DataChunk) {
         self.chunks_processed += 1;
 
-        // Always update packet rate data
-        self.packet_rate
+        // Update packet rate tracking
+        self.config
+            .packet_rate
             .record(chunk.timestamp, chunk.direction, chunk.data.len());
 
-        // Parse data for the parsed data buffer
-        let values = self.parser.parse(chunk);
-        for ParsedValue { series, value } in values {
-            self.parsed_data.push(
-                &series,
-                GraphDataPoint::new(chunk.timestamp, value, chunk.direction),
-            );
-        }
-    }
+        // Parse and store data points
+        let values = self.config.parser.parse(chunk);
+        for value in values {
+            self.next_color = self.next_color.wrapping_add(1);
+            let entry = self.series.entry(value.series).or_insert(GraphSeries {
+                points: VecDeque::new(),
+                color: self.next_color,
+                visible: true,
+            });
 
-    /// Get the packet rate data
-    pub fn packet_rate(&self) -> &PacketRateData {
-        &self.packet_rate
-    }
-
-    /// Get the parsed data buffer
-    pub fn parsed_data(&self) -> &GraphBuffer {
-        &self.parsed_data
-    }
-
-    /// Get a mutable reference to the parsed data buffer
-    pub fn parsed_data_mut(&mut self) -> &mut GraphBuffer {
-        &mut self.parsed_data
-    }
-
-    /// Get the current mode
-    pub fn mode(&self) -> GraphMode {
-        self.config.mode
-    }
-
-    /// Set the graph mode
-    pub fn set_mode(&mut self, mode: GraphMode) {
-        self.config.mode = mode;
-    }
-
-    /// Get the current parser configuration
-    pub fn parser_config(&self) -> &GraphParserConfig {
-        &self.config.parser_config
-    }
-
-    /// Set a new parser configuration
-    ///
-    /// This creates a new parser instance. Existing parsed data is NOT cleared -
-    /// call [`clear_parsed_data`](Self::clear_parsed_data) if you want to reparse.
-    pub fn set_parser_config(&mut self, config: GraphParserConfig) {
-        self.parser = config.create_parser();
-        self.config.parser_config = config;
-    }
-
-    /// Change the parser and reparse all data
-    ///
-    /// This is a convenience method that changes the parser and then
-    /// reparses all provided chunks from scratch.
-    pub fn reparse_with_config<'a>(
-        &mut self,
-        config: GraphParserConfig,
-        chunks: impl Iterator<Item = &'a DataChunk>,
-    ) {
-        self.set_parser_config(config);
-        self.clear_parsed_data();
-
-        // Re-parse all chunks (packet rate is already populated)
-        for chunk in chunks {
-            let values = self.parser.parse(chunk);
-            for ParsedValue { series, value } in values {
-                self.parsed_data.push(
-                    &series,
-                    GraphDataPoint::new(chunk.timestamp, value, chunk.direction),
-                );
+            // Trim oldest points if at capacity
+            while entry.points.len() >= self.max_points_per_series {
+                entry.points.pop_front();
             }
+
+            entry.points.push_back(GraphDataPoint {
+                timestamp: chunk.timestamp,
+                value: value.value,
+                direction: chunk.direction,
+            });
         }
     }
-
-    /// Get series names from parsed data
-    pub fn series_names(&self) -> Vec<&str> {
-        self.parsed_data.series_names().collect()
-    }
-
-    /// Toggle visibility of a series
-    pub fn toggle_series_visibility(&mut self, name: &str) {
-        self.parsed_data.toggle_visibility(name);
-    }
-
-    /// Get the number of chunks processed
-    pub fn chunks_processed(&self) -> usize {
-        self.chunks_processed
-    }
-
-    /// Clear parsed data (keeps packet rate data)
-    pub fn clear_parsed_data(&mut self) {
-        self.parsed_data.clear();
-    }
-
-    /// Clear all data
-    pub fn clear(&mut self) {
-        self.packet_rate.clear();
-        self.parsed_data.clear();
-        self.chunks_processed = 0;
-    }
-
-    /// Check if there is any data
-    pub fn is_empty(&self) -> bool {
-        self.chunks_processed == 0
-    }
 }
 
-impl Default for GraphEngine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Direction;
+    use crate::graph::parser::{Csv, Json, KeyValue, RawNumbers, Regex};
 
-    fn make_chunk(data: &str) -> DataChunk {
+    fn chunk(data: &str) -> DataChunk {
         DataChunk::new(Direction::Rx, data.as_bytes().to_vec())
     }
 
-    #[test]
-    fn test_engine_basic() {
-        let mut engine = GraphEngine::new();
-        assert!(engine.is_empty());
+    fn engine(parser: impl Into<GraphParserType>) -> GraphEngine {
+        GraphEngine::from_parser(parser.into())
+    }
 
-        engine.process_chunk(&make_chunk("temp=25.5"));
-        assert!(!engine.is_empty());
-        assert_eq!(engine.chunks_processed(), 1);
+    // -------------------------------------------------------------------------
+    // KeyValue Parser Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn key_value_simple() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temp=25.5"));
+
+        assert_eq!(engine.series["temp"].points[0].value, 25.5);
     }
 
     #[test]
-    fn test_engine_packet_rate() {
-        let mut engine = GraphEngine::new();
+    fn key_value_multiple_pairs() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temp=25.5, humidity=60"));
 
-        engine.process_chunk(&make_chunk("data1"));
-        engine.process_chunk(&make_chunk("data2"));
-        engine.process_chunk(&make_chunk("data3"));
+        assert_eq!(engine.series["temp"].points[0].value, 25.5);
+        assert_eq!(engine.series["humidity"].points[0].value, 60.0);
+    }
 
-        let rate = engine.packet_rate();
-        let samples: Vec<_> = rate.samples().collect();
+    #[test]
+    fn key_value_colon_separator() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temperature: 41.3"));
 
-        // All should be in the same time window (test runs fast)
+        assert_eq!(engine.series["temperature"].points[0].value, 41.3);
+    }
+
+    #[test]
+    fn key_value_colon_separator_multiple() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temperature: 41.3, hum: 13.3, pre:9"));
+
+        assert_eq!(engine.series["temperature"].points[0].value, 41.3);
+    }
+
+    #[test]
+    fn key_value_negative_number() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("offset=-12.5"));
+
+        assert_eq!(engine.series["offset"].points[0].value, -12.5);
+    }
+
+    // -------------------------------------------------------------------------
+    // CSV Parser Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn csv_simple() {
+        let mut engine = engine(Csv::default());
+        engine.process_chunk(&chunk("1.0,2.0,3.0"));
+
+        assert_eq!(engine.series["col0"].points[0].value, 1.0);
+        assert_eq!(engine.series["col1"].points[0].value, 2.0);
+        assert_eq!(engine.series["col2"].points[0].value, 3.0);
+    }
+
+    #[test]
+    fn csv_with_column_names() {
+        let parser = Csv {
+            delimiter: ',',
+            column_names: vec!["time".into(), "temp".into(), "humidity".into()],
+        };
+        let mut engine = engine(parser);
+        engine.process_chunk(&chunk("1000,25.5,60"));
+
+        assert_eq!(engine.series["time"].points[0].value, 1000.0);
+        assert_eq!(engine.series["temp"].points[0].value, 25.5);
+        assert_eq!(engine.series["humidity"].points[0].value, 60.0);
+    }
+
+    #[test]
+    fn csv_semicolon_delimiter() {
+        let parser = Csv {
+            delimiter: ';',
+            column_names: Vec::new(),
+        };
+        let mut engine = engine(parser);
+        engine.process_chunk(&chunk("1.0;2.0;3.0"));
+
+        assert_eq!(engine.series["col0"].points[0].value, 1.0);
+        assert_eq!(engine.series["col1"].points[0].value, 2.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // JSON Parser Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn json_simple_object() {
+        let mut engine = engine(Json);
+        engine.process_chunk(&chunk(r#"{"temp": 25.5, "humidity": 60}"#));
+
+        assert_eq!(engine.series["temp"].points[0].value, 25.5);
+        assert_eq!(engine.series["humidity"].points[0].value, 60.0);
+    }
+
+    #[test]
+    fn json_nested_object() {
+        let mut engine = engine(Json);
+        engine.process_chunk(&chunk(r#"{"sensor": {"temp": 25.5}}"#));
+
+        assert_eq!(engine.series["sensor.temp"].points[0].value, 25.5);
+    }
+
+    #[test]
+    fn json_array_of_numbers() {
+        let mut engine = engine(Json);
+        engine.process_chunk(&chunk(r#"{"values": [1, 2, 3]}"#));
+
+        assert_eq!(engine.series["values.0"].points[0].value, 1.0);
+        assert_eq!(engine.series["values.1"].points[0].value, 2.0);
+        assert_eq!(engine.series["values.2"].points[0].value, 3.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // RawNumbers Parser Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn raw_numbers_simple() {
+        let mut engine = engine(RawNumbers);
+        engine.process_chunk(&chunk("Reading: 25.5 degrees"));
+
+        assert_eq!(engine.series["0"].points[0].value, 25.5);
+    }
+
+    #[test]
+    fn raw_numbers_multiple() {
+        let mut engine = engine(RawNumbers);
+        engine.process_chunk(&chunk("Values: 10, 20.5, 30"));
+
+        assert_eq!(engine.series["0"].points[0].value, 10.0);
+        assert_eq!(engine.series["1"].points[0].value, 20.5);
+        assert_eq!(engine.series["2"].points[0].value, 30.0);
+    }
+
+    #[test]
+    fn raw_numbers_negative() {
+        let mut engine = engine(RawNumbers);
+        engine.process_chunk(&chunk("Temp: -15.3"));
+
+        assert_eq!(engine.series["0"].points[0].value, -15.3);
+    }
+
+    // -------------------------------------------------------------------------
+    // Regex Parser Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn regex_named_capture() {
+        let parser = Regex::new(r"T:(?P<temp>\d+\.?\d*)").unwrap();
+        let mut engine = engine(parser);
+        engine.process_chunk(&chunk("T:25.5"));
+
+        assert_eq!(engine.series["temp"].points[0].value, 25.5);
+    }
+
+    #[test]
+    fn regex_multiple_captures() {
+        let parser = Regex::new(r"T:(?P<temp>\d+\.?\d*)\s+H:(?P<humidity>\d+\.?\d*)").unwrap();
+        let mut engine = engine(parser);
+        engine.process_chunk(&chunk("T:25.5 H:60"));
+
+        assert_eq!(engine.series["temp"].points[0].value, 25.5);
+        assert_eq!(engine.series["humidity"].points[0].value, 60.0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Engine Behavior Tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn engine_multiple_chunks_same_series() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temp=20"));
+        engine.process_chunk(&chunk("temp=21"));
+        engine.process_chunk(&chunk("temp=22"));
+
+        let series = &engine.series["temp"];
+        assert_eq!(series.points.len(), 3);
+        assert_eq!(series.points[0].value, 20.0);
+        assert_eq!(series.points[1].value, 21.0);
+        assert_eq!(series.points[2].value, 22.0);
+    }
+
+    #[test]
+    fn engine_auto_color_assignment() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temp=25"));
+        engine.process_chunk(&chunk("humidity=60"));
+        engine.process_chunk(&chunk("pressure=1013"));
+
+        assert_eq!(engine.series["temp"].color, 1);
+        assert_eq!(engine.series["humidity"].color, 2);
+        assert_eq!(engine.series["pressure"].color, 3);
+    }
+
+    #[test]
+    fn packet_rate_recording() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temp=25"));
+        engine.process_chunk(&chunk("temp=26"));
+        engine.process_chunk(&chunk("temp=27"));
+
+        let samples: Vec<_> = engine.config.packet_rate.samples.iter().collect();
         assert!(!samples.is_empty());
+        // All chunks processed in same time window (test runs fast)
         assert!(samples[0].rx_count >= 1);
-    }
-
-    #[test]
-    fn test_engine_parsed_data() {
-        let mut engine = GraphEngine::new();
-
-        engine.process_chunk(&make_chunk("temp=25.5, humidity=60"));
-        engine.process_chunk(&make_chunk("temp=26.0, humidity=58"));
-
-        let parsed = engine.parsed_data();
-        assert_eq!(parsed.series_count(), 2);
-
-        let temp = parsed.series("temp").unwrap();
-        assert_eq!(temp.len(), 2);
-
-        let humidity = parsed.series("humidity").unwrap();
-        assert_eq!(humidity.len(), 2);
-    }
-
-    #[test]
-    fn test_engine_initialize() {
-        let mut engine = GraphEngine::new();
-
-        let chunks = vec![
-            make_chunk("temp=20"),
-            make_chunk("temp=21"),
-            make_chunk("temp=22"),
-        ];
-
-        engine.initialize(chunks.iter());
-
-        assert_eq!(engine.chunks_processed(), 3);
-        assert_eq!(engine.parsed_data().series("temp").unwrap().len(), 3);
-    }
-
-    #[test]
-    fn test_engine_series_visibility() {
-        let mut engine = GraphEngine::new();
-
-        engine.process_chunk(&make_chunk("temp=25, humidity=60"));
-
-        assert!(engine.parsed_data().series("temp").unwrap().visible);
-
-        engine.toggle_series_visibility("temp");
-        assert!(!engine.parsed_data().series("temp").unwrap().visible);
-
-        engine.toggle_series_visibility("temp");
-        assert!(engine.parsed_data().series("temp").unwrap().visible);
     }
 }
