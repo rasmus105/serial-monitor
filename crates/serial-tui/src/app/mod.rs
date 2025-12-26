@@ -17,15 +17,14 @@ pub mod types;
 // Re-export all public types
 pub use serial_core::SearchMatch;
 pub use state::{
-    FileSendState, GraphState, GraphTimeWindow, InputState, PortSelectState, SendState,
-    TabLayout, TabState, TextInputResult, TrafficState, TAB_COUNT,
+    FileSendState, GraphState, GraphTimeWindow, InputState, PortSelectState, TabLayout, TabState,
+    TextInputResult, TrafficState, TAB_COUNT,
 };
 pub use types::{
     ChunkingMode, ConfigField, ConfigFieldKind, ConfigOption, ConfigPanelState, ConfigSection,
     ConnectionState, DelimiterOption, EnumNavigation, FileSaveSettings, GraphConfigField,
-    GraphFocus, HexGrouping, InputMode, InputEncodingMode, LineEndingOption, LocalStrumEnum,
-    PaneContent, PaneFocus, PortSelectFocus, SendConfigField, SendFocus, SizeUnit,
-    TimestampFormat, TrafficConfigField, TrafficFocus, View, WrapMode,
+    GraphFocus, HexGrouping, InputMode, LocalStrumEnum, PaneContent, PaneFocus, PortSelectFocus,
+    SizeUnit, TimestampFormat, TrafficConfigField, TrafficFocus, View, WrapMode,
 };
 
 // =============================================================================
@@ -55,8 +54,6 @@ pub struct App {
     pub traffic: TrafficState,
     /// Graph view state
     pub graph: GraphState,
-    /// Send view state
-    pub send: SendState,
     /// Search engine
     pub search: SearchEngine,
     /// File send state
@@ -97,7 +94,6 @@ impl App {
             layout: TabLayout::new(),
             traffic: TrafficState::default(),
             graph: GraphState::default(),
-            send: SendState::default(),
             search: SearchEngine::new(),
             file_send: FileSendState::default(),
             settings: Settings::default(),
@@ -194,9 +190,8 @@ impl App {
     pub(crate) fn start_file_send(&mut self, path: &str) {
         if let ConnectionState::Connected(ref handle) = self.connection {
             let config = FileSendConfig::default()
-                .with_chunk_size(self.send.chunk_size_bytes())
-                .with_delay(self.send.chunk_delay_duration())
-                .with_continuous(self.send.continuous);
+                .with_chunk_size(64)
+                .with_delay(std::time::Duration::from_millis(10));
 
             match self.runtime.block_on(send_file(handle, path, config)) {
                 Ok(file_handle) => {

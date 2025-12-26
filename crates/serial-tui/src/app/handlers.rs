@@ -33,8 +33,6 @@ enum TextInputAction {
     ApplyTrafficConfig,
     /// Apply graph config text value
     ApplyGraphConfig,
-    /// Apply send config text value
-    ApplySendConfig,
 }
 
 /// Type of dropdown being handled
@@ -47,8 +45,6 @@ enum DropdownType {
     TrafficConfig,
     /// Graph configuration dropdown
     GraphConfig,
-    /// Send configuration dropdown
-    SendConfig,
 }
 
 /// Result of dropdown navigation
@@ -61,27 +57,6 @@ pub(super) enum DropdownResult {
     Cancelled,
     /// Key not handled by dropdown
     NotHandled,
-}
-
-/// Parse a hex string like "DE AD BE EF" or "DEADBEEF" into bytes.
-/// Returns None if the string is invalid hex.
-fn parse_hex_string(s: &str) -> Option<Vec<u8>> {
-    // Remove spaces and collect hex characters
-    let hex_chars: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    
-    // Must have even number of characters
-    if !hex_chars.len().is_multiple_of(2) {
-        return None;
-    }
-    
-    let mut bytes = Vec::with_capacity(hex_chars.len() / 2);
-    for chunk in hex_chars.as_bytes().chunks(2) {
-        let high = char::from(chunk[0]).to_digit(16)?;
-        let low = char::from(chunk[1]).to_digit(16)?;
-        bytes.push(((high << 4) | low) as u8);
-    }
-    
-    Some(bytes)
 }
 
 /// Handle dropdown navigation for any dropdown.
@@ -162,7 +137,6 @@ impl App {
             InputMode::ConfigDropdown => self.handle_key_config_dropdown(key),
             InputMode::TrafficConfigDropdown => self.handle_key_traffic_config_dropdown(key),
             InputMode::GraphConfigDropdown => self.handle_key_graph_config_dropdown(key),
-            InputMode::SendConfigDropdown => self.handle_key_send_config_dropdown(key),
             InputMode::SettingsDropdown => self.handle_key_settings_dropdown(key),
             InputMode::WindowCommand => self.handle_key_window_command(key),
             InputMode::CommandLine => self.handle_key_command_line(key),
@@ -170,7 +144,6 @@ impl App {
             InputMode::ConfigTextInput => self.handle_key_config_text_input(key),
             InputMode::TrafficConfigTextInput => self.handle_key_traffic_config_text_input(key),
             InputMode::GraphConfigTextInput => self.handle_key_graph_config_text_input(key),
-            InputMode::SendConfigTextInput => self.handle_key_send_config_text_input(key),
         }
     }
 
@@ -1026,71 +999,13 @@ impl App {
         }
     }
 
-    /// Handle key events for advanced send pane
+    /// Handle key events for advanced send pane (placeholder)
     pub(super) fn handle_key_advanced_send(&mut self, key: KeyEvent) {
-        use crate::app::SendFocus;
-
-        match key.code {
-            // Toggle config panel with Tab or 'c'
-            KeyCode::Tab | KeyCode::Char('c') => {
-                self.send.focus = match self.send.focus {
-                    SendFocus::Content => SendFocus::Config,
-                    SendFocus::Config => SendFocus::Content,
-                };
-            }
-            // Config panel navigation when focused on config
-            KeyCode::Char('j') | KeyCode::Down if matches!(self.send.focus, SendFocus::Config) => {
-                self.send.config.next_field();
-            }
-            KeyCode::Char('k') | KeyCode::Up if matches!(self.send.focus, SendFocus::Config) => {
-                self.send.config.prev_field();
-            }
-            // Open dropdown or toggle for config fields
-            KeyCode::Enter | KeyCode::Char(' ')
-                if matches!(self.send.focus, SendFocus::Config) =>
-            {
-                self.confirm_send_config_field();
-            }
-            // Open dropdown with l or right
-            KeyCode::Char('l') | KeyCode::Right
-                if matches!(self.send.focus, SendFocus::Config) =>
-            {
-                let field = self.send.config.field;
-                if !field.is_toggle() && !field.is_text_input() {
-                    // Open dropdown
-                    self.send.open_dropdown();
-                    self.input.mode = InputMode::SendConfigDropdown;
-                }
-            }
-            // Return to content focus with h or left
-            KeyCode::Char('h') | KeyCode::Left
-                if matches!(self.send.focus, SendFocus::Config) =>
-            {
-                self.send.focus = SendFocus::Content;
-            }
-            // Content pane: Start file send with 's' or Enter
-            KeyCode::Char('s') | KeyCode::Enter
-                if matches!(self.send.focus, SendFocus::Content) =>
-            {
-                // Start file send if we have a valid file path
-                if !self.send.file_path.is_empty() {
-                    let path = self.send.file_path.clone();
-                    self.start_file_send(&path);
-                } else {
-                    self.status = "No file path set. Configure in the settings panel (Tab or 'c').".to_string();
-                }
-            }
-            // Cancel active file send with 'x' or Escape
-            KeyCode::Char('x') | KeyCode::Esc
-                if matches!(self.send.focus, SendFocus::Content) && self.file_send.handle.is_some() =>
-            {
-                self.cancel_file_send();
-            }
-            // Use shared placeholder handler for common functionality (tab switching, etc.)
-            _ => {
-                self.handle_key_placeholder_pane(key);
-            }
+        // Use shared placeholder handler for common functionality
+        if self.handle_key_placeholder_pane(key) {
+            // Handled by shared handler
         }
+        // Send-specific keybindings will go here
     }
 
     /// Handle command line input (after pressing :)
@@ -1216,10 +1131,6 @@ impl App {
         self.handle_dropdown(key, DropdownType::GraphConfig);
     }
 
-    pub(super) fn handle_key_send_config_dropdown(&mut self, key: KeyEvent) {
-        self.handle_dropdown(key, DropdownType::SendConfig);
-    }
-
     /// Generic handler for dropdown navigation and selection
     fn handle_dropdown(&mut self, key: KeyEvent, dropdown_type: DropdownType) {
         // Get options count and dropdown index reference based on type
@@ -1239,10 +1150,6 @@ impl App {
             DropdownType::GraphConfig => (
                 self.graph.get_options_count(),
                 &mut self.graph.config.dropdown_index,
-            ),
-            DropdownType::SendConfig => (
-                self.send.get_options_count(),
-                &mut self.send.config.dropdown_index,
             ),
         };
 
@@ -1268,11 +1175,6 @@ impl App {
                             self.graph.engine.as_ref().map(|e| e.mode().name()).unwrap_or("N/A"),
                             self.graph.engine.as_ref().map(|e| e.parser_config().parser_type().name()).unwrap_or("N/A")
                         );
-                    }
-                    DropdownType::SendConfig => {
-                        self.send.apply_dropdown_selection();
-                        self.needs_full_clear = true;
-                        self.status = self.send_config_status();
                     }
                 }
                 self.input.mode = InputMode::Normal;
@@ -1322,18 +1224,6 @@ impl App {
         self.handle_simple_text_input(key, TextInputAction::ApplyGraphConfig, "Input cancelled.");
     }
 
-    pub(super) fn handle_key_send_config_text_input(&mut self, key: KeyEvent) {
-        // For numeric fields, filter out non-numeric characters
-        if self.send.config.field.is_numeric_input()
-            && let KeyCode::Char(c) = key.code
-            && !c.is_ascii_digit()
-        {
-            return; // Ignore non-numeric characters
-        }
-        
-        self.handle_simple_text_input(key, TextInputAction::ApplySendConfig, "Input cancelled.");
-    }
-
     /// Generic handler for simple text input modes
     /// Handles the common pattern of submit->action, cancel->message
     fn handle_simple_text_input(&mut self, key: KeyEvent, action: TextInputAction, cancel_msg: &str) {
@@ -1365,10 +1255,6 @@ impl App {
                             self.graph.get_config_display(self.graph.config.field)
                         );
                     }
-                    TextInputAction::ApplySendConfig => {
-                        self.send.apply_text_input(value);
-                        self.status = self.send_config_status();
-                    }
                 }
             }
             TextInputResult::Cancel => {
@@ -1393,15 +1279,6 @@ impl App {
             "{}: {}",
             self.traffic.config.field.label(),
             self.traffic.get_config_display(self.traffic.config.field)
-        )
-    }
-
-    /// Format status message for current send config field
-    fn send_config_status(&self) -> String {
-        format!(
-            "{}: {}",
-            self.send.config.field.label(),
-            self.send.get_config_display(self.send.config.field)
         )
     }
 
@@ -1458,22 +1335,6 @@ impl App {
         } else {
             self.graph.open_dropdown();
             self.input.mode = InputMode::GraphConfigDropdown;
-        }
-    }
-
-    /// Handle confirm action on a send config field (toggle/text input/dropdown)
-    fn confirm_send_config_field(&mut self) {
-        let field = self.send.config.field;
-        if field.is_toggle() {
-            self.send.toggle_setting();
-            self.status = self.send_config_status();
-        } else if field.is_text_input() {
-            self.input.buffer = self.send.get_text_value();
-            self.input.mode = InputMode::SendConfigTextInput;
-            self.status = InputMode::SendConfigTextInput.entry_prompt().to_string();
-        } else {
-            self.send.open_dropdown();
-            self.input.mode = InputMode::SendConfigDropdown;
         }
     }
 
@@ -1534,102 +1395,35 @@ impl App {
     }
 
     pub(super) fn handle_key_send_input(&mut self, key: KeyEvent) {
-        use super::InputEncodingMode;
-        
-        // Send input is special: Enter sends with configured line ending but stays in input mode,
-        // Ctrl+J sends without line ending, Esc exits
-        // Up/Down arrows navigate send history
+        // Send input is special: Enter sends with newline but stays in input mode,
+        // Ctrl+J sends without newline, Esc exits
         match key.code {
             KeyCode::Enter => {
                 if !self.input.buffer.is_empty() {
-                    let data = self.input.buffer.clone();
-                    // Add to send history (without the line ending)
-                    self.send.add_to_history(data.clone());
-                    
-                    // Parse based on input encoding mode
-                    let bytes = match self.send.input_encoding {
-                        InputEncodingMode::Text => {
-                            let mut bytes = data.into_bytes();
-                            bytes.extend_from_slice(self.send.line_ending.as_bytes());
-                            Some(bytes)
-                        }
-                        InputEncodingMode::Hex => {
-                            match parse_hex_string(&data) {
-                                Some(mut bytes) => {
-                                    bytes.extend_from_slice(self.send.line_ending.as_bytes());
-                                    Some(bytes)
-                                }
-                                None => {
-                                    self.status = "Invalid hex format. Use e.g. 'DE AD BE EF' or 'DEADBEEF'".to_string();
-                                    None
-                                }
-                            }
-                        }
-                    };
-                    
-                    if let Some(bytes) = bytes {
-                        self.send_data(bytes);
-                        self.input.buffer.clear();
-                    }
+                    let mut data = self.input.buffer.clone();
+                    data.push('\n');
+                    self.send_data(data.into_bytes());
+                    self.input.buffer.clear();
                 }
             }
             KeyCode::Esc => {
                 self.input.mode = InputMode::Normal;
                 self.input.buffer.clear();
-                self.send.reset_history_index();
                 self.status = "Send cancelled.".to_string();
             }
             KeyCode::Backspace => {
                 self.input.buffer.pop();
-                // Reset history navigation when user types
-                self.send.reset_history_index();
-            }
-            KeyCode::Up => {
-                // Navigate up in history (older)
-                if let Some(cmd) = self.send.history_up() {
-                    self.input.buffer = cmd.to_string();
-                }
-            }
-            KeyCode::Down => {
-                // Navigate down in history (newer)
-                if let Some(cmd) = self.send.history_down() {
-                    self.input.buffer = cmd.to_string();
-                } else {
-                    // At the end of history, clear the buffer
-                    self.input.buffer.clear();
-                }
             }
             KeyCode::Char(c) if c == 'j' && key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Ctrl+J: send without line ending
+                // Ctrl+J: send without newline
                 if !self.input.buffer.is_empty() {
                     let data = self.input.buffer.clone();
-                    // Add to send history
-                    self.send.add_to_history(data.clone());
-                    
-                    // Parse based on input encoding mode
-                    let bytes = match self.send.input_encoding {
-                        InputEncodingMode::Text => Some(data.into_bytes()),
-                        InputEncodingMode::Hex => {
-                            match parse_hex_string(&data) {
-                                Some(bytes) => Some(bytes),
-                                None => {
-                                    self.status = "Invalid hex format. Use e.g. 'DE AD BE EF' or 'DEADBEEF'".to_string();
-                                    None
-                                }
-                            }
-                        }
-                    };
-                    
-                    if let Some(bytes) = bytes {
-                        self.send_data(bytes);
-                        self.input.buffer.clear();
-                    }
+                    self.send_data(data.into_bytes());
+                    self.input.buffer.clear();
                 }
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.input.buffer.push(c);
-                // Reset history navigation when user types
-                self.send.reset_history_index();
             }
             _ => {}
         }

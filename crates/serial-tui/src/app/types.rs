@@ -138,10 +138,6 @@ pub enum ConfigSection {
     Filtering,
     /// Graph settings
     GraphSettings,
-    /// Send tab - File Send settings
-    SendFile,
-    /// Send tab - Quick Send / Input settings
-    SendInput,
 }
 
 impl ConfigSection {
@@ -156,8 +152,6 @@ impl ConfigSection {
             ConfigSection::TrafficDisplay => None, // First section, no header needed
             ConfigSection::Filtering => Some("Filtering"),
             ConfigSection::GraphSettings => None, // First section, no header needed
-            ConfigSection::SendFile => None, // First section in Send tab
-            ConfigSection::SendInput => Some("Input Settings"),
         }
     }
 }
@@ -847,124 +841,6 @@ impl ConfigFieldKind for GraphConfigField {
     fn section(&self) -> ConfigSection { GraphConfigField::section(self) }
 }
 
-/// Which configuration field is selected in send view config panel
-#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr)]
-pub enum SendConfigField {
-    // File send settings (section: SendFile)
-    #[default]
-    #[strum(serialize = "File Path")]
-    FilePath,
-    #[strum(serialize = "Chunk Size")]
-    ChunkSize,
-    #[strum(serialize = "Chunk Delay (ms)")]
-    ChunkDelay,
-    #[strum(serialize = "Continuous")]
-    Continuous,
-    // Input settings (section: SendInput)
-    #[strum(serialize = "Line Ending")]
-    LineEnding,
-    #[strum(serialize = "Input Mode")]
-    InputEncoding,
-}
-
-impl EnumNavigation for SendConfigField {}
-
-impl SendConfigField {
-    /// Whether this field is a simple toggle (vs a dropdown)
-    pub fn is_toggle(&self) -> bool {
-        matches!(self, SendConfigField::Continuous)
-    }
-
-    /// Whether this field is a text input field
-    pub fn is_text_input(&self) -> bool {
-        matches!(
-            self, 
-            SendConfigField::FilePath 
-                | SendConfigField::ChunkSize 
-                | SendConfigField::ChunkDelay
-        )
-    }
-    
-    /// Whether this is a numeric-only text input
-    pub fn is_numeric_input(&self) -> bool {
-        matches!(
-            self,
-            SendConfigField::ChunkSize | SendConfigField::ChunkDelay
-        )
-    }
-
-    /// Get the section this field belongs to
-    pub fn section(&self) -> ConfigSection {
-        match self {
-            SendConfigField::FilePath
-            | SendConfigField::ChunkSize
-            | SendConfigField::ChunkDelay
-            | SendConfigField::Continuous => ConfigSection::SendFile,
-            SendConfigField::LineEnding
-            | SendConfigField::InputEncoding => ConfigSection::SendInput,
-        }
-    }
-}
-
-impl ConfigFieldKind for SendConfigField {
-    fn is_toggle(&self) -> bool { SendConfigField::is_toggle(self) }
-    fn is_text_input(&self) -> bool { SendConfigField::is_text_input(self) }
-    fn section(&self) -> ConfigSection { SendConfigField::section(self) }
-}
-
-/// Line ending options for sending data
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
-pub enum LineEndingOption {
-    /// No line ending appended
-    None,
-    /// Unix-style newline: \n
-    #[default]
-    #[strum(serialize = "LF (\\n)")]
-    Lf,
-    /// Windows-style: \r\n
-    #[strum(serialize = "CRLF (\\r\\n)")]
-    CrLf,
-    /// Carriage return only: \r
-    #[strum(serialize = "CR (\\r)")]
-    Cr,
-}
-
-impl LocalStrumEnum for LineEndingOption {}
-
-impl LineEndingOption {
-    /// Get the bytes to append for this line ending
-    pub fn as_bytes(&self) -> &'static [u8] {
-        match self {
-            LineEndingOption::None => &[],
-            LineEndingOption::Lf => b"\n",
-            LineEndingOption::CrLf => b"\r\n",
-            LineEndingOption::Cr => b"\r",
-        }
-    }
-}
-
-/// Input encoding mode for sending data
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
-pub enum InputEncodingMode {
-    /// Text mode - send as UTF-8
-    #[default]
-    Text,
-    /// Hex mode - parse hex bytes like "DE AD BE EF"
-    Hex,
-}
-
-impl LocalStrumEnum for InputEncodingMode {}
-
-/// Which panel is focused in send view
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum SendFocus {
-    /// Main send content panel (left)
-    #[default]
-    Content,
-    /// Configuration panel (right)
-    Config,
-}
-
 /// Which file saving configuration field is selected in port selection config panel
 #[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount)]
 pub enum FileSaveConfigField {
@@ -1036,8 +912,6 @@ pub enum InputMode {
     TrafficConfigDropdown,
     /// Graph config dropdown is open
     GraphConfigDropdown,
-    /// Send config dropdown is open
-    SendConfigDropdown,
     /// Settings dropdown is open (General tab)
     SettingsDropdown,
     /// Waiting for window command after Ctrl+W
@@ -1052,8 +926,6 @@ pub enum InputMode {
     TrafficConfigTextInput,
     /// Editing a graph config text field (e.g., regex pattern)
     GraphConfigTextInput,
-    /// Editing a send config text field (e.g., file path, chunk size)
-    SendConfigTextInput,
 }
 
 /// Visual properties for rendering an input mode in the status bar
@@ -1077,7 +949,6 @@ impl InputMode {
             InputMode::ConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::TrafficConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::GraphConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
-            InputMode::SendConfigDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::SettingsDropdown => "j/k: navigate, Enter: select, Esc: cancel",
             InputMode::WindowCommand => "Ctrl+W: v=vsplit, q=close, h/l=navigate",
             InputMode::CommandLine => "",
@@ -1085,7 +956,6 @@ impl InputMode {
             InputMode::ConfigTextInput => "Enter value (Enter: confirm, Esc: cancel)",
             InputMode::TrafficConfigTextInput => "Enter value (Enter: confirm, Esc: cancel)",
             InputMode::GraphConfigTextInput => "Enter regex pattern (Enter: confirm, Esc: cancel)",
-            InputMode::SendConfigTextInput => "Enter value (Enter: confirm, Esc: cancel)",
         }
     }
 
@@ -1113,7 +983,6 @@ impl InputMode {
             InputMode::ConfigDropdown => None,         // Uses special rendering
             InputMode::TrafficConfigDropdown => None,  // Uses special rendering
             InputMode::GraphConfigDropdown => None,    // Uses special rendering
-            InputMode::SendConfigDropdown => None,     // Uses special rendering
             InputMode::SettingsDropdown => None,       // Uses special rendering
             InputMode::WindowCommand => None,          // Uses status bar message
             InputMode::CommandLine => Some(InputModeStyle {
@@ -1130,10 +999,6 @@ impl InputMode {
                 color: Color::Cyan,
             }),
             InputMode::GraphConfigTextInput => Some(InputModeStyle {
-                prefix: "",
-                color: Color::Cyan,
-            }),
-            InputMode::SendConfigTextInput => Some(InputModeStyle {
                 prefix: "",
                 color: Color::Cyan,
             }),
