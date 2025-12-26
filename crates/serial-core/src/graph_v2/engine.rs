@@ -3,9 +3,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::{DataChunk, Direction, GraphParser};
+use crate::{DataChunk, Direction};
 
-use super::parser::GraphParserType;
+use super::parser::{GraphParser, GraphParserType};
 
 // ============================================================================
 // Graph Mode
@@ -41,8 +41,6 @@ pub struct GraphDataPoint {
 
 #[derive(Debug, Clone)]
 pub struct GraphSeries {
-    /// Name of the series (e.g., "temperature", "humidity")
-    pub name: String,
     /// Data points in chronological order
     pub points: VecDeque<GraphDataPoint>,
     /// Optional color hint (index into a color palette) - mostly for frontend
@@ -81,6 +79,13 @@ pub struct PacketRateData {
     pub max_samples: usize,
 }
 
+impl PacketRateData {
+    /// Record a packet
+    pub fn record(&mut self, _timestamp: SystemTime, _direction: Direction, _bytes: usize) {
+        todo!()
+    }
+}
+
 // ============================================================================
 // Graph Engine Config
 // ============================================================================
@@ -107,16 +112,39 @@ pub struct GraphEngine {
     /// All different graph series and their data
     pub series: HashMap<String, GraphSeries>,
 
+    /// Maximum points per series (oldest points are trimmed when exceeded)
+    pub max_points_per_series: usize,
+
     pub chunks_processed: usize,
 }
 
 impl GraphEngine {
-    pub fn from_parser(_parser: GraphParserType) -> Self {
-        todo!()
+    /// Default max points per series
+    pub const DEFAULT_MAX_POINTS: usize = 10000;
+
+    pub fn from_parser(parser: GraphParserType) -> Self {
+        Self {
+            config: GraphEngineConfig {
+                parser: Box::new(parser),
+                packet_rate: PacketRateData {
+                    samples: VecDeque::new(),
+                    window_size: Duration::from_secs(1),
+                    max_samples: 60,
+                },
+            },
+            series: HashMap::new(),
+            max_points_per_series: Self::DEFAULT_MAX_POINTS,
+            chunks_processed: 0,
+        }
     }
 
-    pub fn reparse_with_parser(&mut self, _parser: GraphParserType) {
-        todo!()
+    pub fn reparse_with_parser<'a>(
+        &mut self,
+        parser: GraphParserType,
+        chunks: impl Iterator<Item = &'a DataChunk>,
+    ) {
+        self.config.parser = Box::new(parser);
+        self.initialize(chunks);
     }
 
     /// Initialize the engine with historical data
@@ -129,8 +157,34 @@ impl GraphEngine {
         }
     }
 
-    pub fn process_chunk(&mut self, _chunk: &DataChunk) {
-        todo!()
+    pub fn process_chunk(&mut self, chunk: &DataChunk) {
+        self.chunks_processed += 1;
+
+        // Update packet rate tracking
+        self.config
+            .packet_rate
+            .record(chunk.timestamp, chunk.direction, chunk.data.len());
+
+        // Parse and store data points
+        let values = self.config.parser.parse(chunk);
+        for value in values {
+            let entry = self.series.entry(value.series).or_insert(GraphSeries {
+                points: VecDeque::new(),
+                color: 0, // TODO add actual color here
+                visible: true,
+            });
+
+            // Trim oldest points if at capacity
+            while entry.points.len() >= self.max_points_per_series {
+                entry.points.pop_front();
+            }
+
+            entry.points.push_back(GraphDataPoint {
+                timestamp: chunk.timestamp,
+                value: value.value,
+                direction: chunk.direction,
+            });
+        }
     }
 }
 

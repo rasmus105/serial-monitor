@@ -14,7 +14,7 @@ pub struct ParsedValue {
 
 /// Parses data chunks into named numeric values.
 #[enum_dispatch]
-pub trait GraphParser: Send + Sync {
+pub trait GraphParser: Send + Sync + std::fmt::Debug {
     /// Parse a chunk of data, returning zero or more named values.
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue>;
 }
