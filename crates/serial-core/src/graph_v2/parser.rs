@@ -278,8 +278,93 @@ impl Default for Csv {
 }
 
 impl GraphParser for Csv {
-    fn parse(&self, _chunk: &DataChunk) -> Vec<ParsedValue> {
-        todo!()
+    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
+        let data = &chunk.data;
+
+        // Only support ASCII delimiters for byte-level parsing
+        if !self.delimiter.is_ascii() {
+            return Vec::new();
+        }
+        let delim_byte = self.delimiter as u8;
+
+        let mut results = Vec::with_capacity(self.column_names.len().max(8));
+        let mut col_index = 0;
+        let mut start = 0;
+
+        // Process each field
+        for (pos, &byte) in data.iter().enumerate() {
+            if byte == delim_byte {
+                self.parse_field(data, start, pos, col_index, &mut results);
+                col_index += 1;
+                start = pos + 1;
+            }
+        }
+
+        // Parse the last field (after final delimiter or if no delimiters)
+        if start <= data.len() {
+            self.parse_field(data, start, data.len(), col_index, &mut results);
+        }
+
+        results
+    }
+}
+
+impl Csv {
+    /// Parse a single field and add to results if it's a valid number.
+    fn parse_field(
+        &self,
+        data: &[u8],
+        start: usize,
+        end: usize,
+        col_index: usize,
+        results: &mut Vec<ParsedValue>,
+    ) {
+        let field = &data[start..end];
+
+        // Trim whitespace
+        let trimmed = Self::trim_bytes(field);
+        if trimmed.is_empty() {
+            return;
+        }
+
+        // Parse as UTF-8 string, then as f64
+        let Ok(field_str) = std::str::from_utf8(trimmed) else {
+            return;
+        };
+
+        let Ok(value) = field_str.parse::<f64>() else {
+            return;
+        };
+
+        // Get series name
+        let series = if col_index < self.column_names.len() {
+            self.column_names[col_index].clone()
+        } else {
+            format!("col{}", col_index)
+        };
+
+        results.push(ParsedValue { series, value });
+    }
+
+    /// Trim leading and trailing ASCII whitespace from bytes.
+    #[inline]
+    fn trim_bytes(data: &[u8]) -> &[u8] {
+        let start = data
+            .iter()
+            .position(|&b| !b.is_ascii_whitespace())
+            .unwrap_or(data.len());
+
+        let end = data
+            .iter()
+            .rposition(|&b| !b.is_ascii_whitespace())
+            .map(|p| p + 1)
+            .unwrap_or(0);
+
+        if start >= end {
+            &[]
+        } else {
+            &data[start..end]
+        }
     }
 }
 
