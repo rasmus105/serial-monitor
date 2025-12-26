@@ -58,11 +58,19 @@ pub struct GraphSeries {
 /// A single time window sample for packet rate visualization.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PacketRateSample {
-    pub window_start: SystemTime,
+    /// Window start time as nanoseconds since UNIX epoch
+    pub window_start_nanos: u64,
     pub rx_count: u32,
     pub tx_count: u32,
     pub rx_bytes: usize,
     pub tx_bytes: usize,
+}
+
+impl PacketRateSample {
+    /// Get the window start time as a `SystemTime`
+    pub fn window_start(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_nanos(self.window_start_nanos)
+    }
 }
 
 /// Packet rate tracking data
@@ -80,9 +88,54 @@ pub struct PacketRateData {
 }
 
 impl PacketRateData {
-    /// Record a packet
-    pub fn record(&mut self, _timestamp: SystemTime, _direction: Direction, _bytes: usize) {
-        todo!()
+    /// Record a packet in the appropriate time window.
+    pub fn record(&mut self, timestamp: SystemTime, direction: Direction, bytes: usize) {
+        let window_nanos = self.window_bucket_nanos(timestamp);
+
+        // Check if we need a new sample
+        let needs_new_sample = self
+            .samples
+            .back()
+            .map(|s| s.window_start_nanos != window_nanos)
+            .unwrap_or(true);
+
+        if needs_new_sample {
+            // Trim old samples if at capacity
+            while self.samples.len() >= self.max_samples {
+                self.samples.pop_front();
+            }
+            self.samples.push_back(PacketRateSample {
+                window_start_nanos: window_nanos,
+                rx_count: 0,
+                tx_count: 0,
+                rx_bytes: 0,
+                tx_bytes: 0,
+            });
+        }
+
+        // Record in the current sample
+        if let Some(sample) = self.samples.back_mut() {
+            match direction {
+                Direction::Rx => {
+                    sample.rx_count += 1;
+                    sample.rx_bytes += bytes;
+                }
+                Direction::Tx => {
+                    sample.tx_count += 1;
+                    sample.tx_bytes += bytes;
+                }
+            }
+        }
+    }
+
+    /// Round timestamp down to window boundary, returning nanoseconds since epoch.
+    fn window_bucket_nanos(&self, timestamp: SystemTime) -> u64 {
+        let nanos = timestamp
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_nanos() as u64;
+        let window_nanos = self.window_size.as_nanos() as u64;
+        (nanos / window_nanos) * window_nanos
     }
 }
 
@@ -115,6 +168,9 @@ pub struct GraphEngine {
     /// Maximum points per series (oldest points are trimmed when exceeded)
     pub max_points_per_series: usize,
 
+    /// Counter for assigning colors to new series
+    next_color: u8,
+
     pub chunks_processed: usize,
 }
 
@@ -128,12 +184,13 @@ impl GraphEngine {
                 parser: Box::new(parser),
                 packet_rate: PacketRateData {
                     samples: VecDeque::new(),
-                    window_size: Duration::from_secs(1),
-                    max_samples: 60,
+                    window_size: Duration::from_millis(100),
+                    max_samples: 6000, // 10 minutes at 100ms windows
                 },
             },
             series: HashMap::new(),
             max_points_per_series: Self::DEFAULT_MAX_POINTS,
+            next_color: 0,
             chunks_processed: 0,
         }
     }
@@ -160,17 +217,18 @@ impl GraphEngine {
     pub fn process_chunk(&mut self, chunk: &DataChunk) {
         self.chunks_processed += 1;
 
-        // TODO: Update packet rate tracking
-        // self.config
-        //     .packet_rate
-        //     .record(chunk.timestamp, chunk.direction, chunk.data.len());
+        // Update packet rate tracking
+        self.config
+            .packet_rate
+            .record(chunk.timestamp, chunk.direction, chunk.data.len());
 
         // Parse and store data points
         let values = self.config.parser.parse(chunk);
         for value in values {
+            self.next_color = self.next_color.wrapping_add(1);
             let entry = self.series.entry(value.series).or_insert(GraphSeries {
                 points: VecDeque::new(),
-                color: 0, // TODO add actual color here
+                color: self.next_color,
                 visible: true,
             });
 
@@ -317,9 +375,9 @@ mod tests {
         let mut engine = engine(Json);
         engine.process_chunk(&chunk(r#"{"values": [1, 2, 3]}"#));
 
-        assert_eq!(engine.series["values[0]"].points[0].value, 1.0);
-        assert_eq!(engine.series["values[1]"].points[0].value, 2.0);
-        assert_eq!(engine.series["values[2]"].points[0].value, 3.0);
+        assert_eq!(engine.series["values.0"].points[0].value, 1.0);
+        assert_eq!(engine.series["values.1"].points[0].value, 2.0);
+        assert_eq!(engine.series["values.2"].points[0].value, 3.0);
     }
 
     // -------------------------------------------------------------------------
@@ -391,5 +449,30 @@ mod tests {
         assert_eq!(series.points[0].value, 20.0);
         assert_eq!(series.points[1].value, 21.0);
         assert_eq!(series.points[2].value, 22.0);
+    }
+
+    #[test]
+    fn engine_auto_color_assignment() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temp=25"));
+        engine.process_chunk(&chunk("humidity=60"));
+        engine.process_chunk(&chunk("pressure=1013"));
+
+        assert_eq!(engine.series["temp"].color, 1);
+        assert_eq!(engine.series["humidity"].color, 2);
+        assert_eq!(engine.series["pressure"].color, 3);
+    }
+
+    #[test]
+    fn packet_rate_recording() {
+        let mut engine = engine(KeyValue);
+        engine.process_chunk(&chunk("temp=25"));
+        engine.process_chunk(&chunk("temp=26"));
+        engine.process_chunk(&chunk("temp=27"));
+
+        let samples: Vec<_> = engine.config.packet_rate.samples.iter().collect();
+        assert!(!samples.is_empty());
+        // All chunks processed in same time window (test runs fast)
+        assert!(samples[0].rx_count >= 1);
     }
 }
