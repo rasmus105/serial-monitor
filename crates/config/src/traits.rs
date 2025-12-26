@@ -26,15 +26,6 @@ pub trait Configure: Sized + Default {
     /// The schema describes the structure of this type's configurable fields.
     fn schema() -> &'static ConfigSchema;
 
-    /// Get the field type representation for this type.
-    ///
-    /// For enums, this returns `FieldType::Enum { variants: ... }`.
-    /// For structs, this returns `FieldType::Struct { schema: ... }`.
-    ///
-    /// This is used by the derive macro when a struct has a field of a
-    /// Configure type - it needs the `FieldType` to include in the schema.
-    fn field_type() -> &'static FieldType;
-
     /// Extract current values.
     ///
     /// Returns a [`ConfigValues`] containing the current state of all configurable fields.
@@ -85,7 +76,7 @@ pub fn validate(schema: &ConfigSchema, values: &ConfigValues) -> Vec<ConfigError
 
 /// Validate a single field value against its schema.
 fn validate_field(field: &FieldSchema, value: &ConfigValue, errors: &mut Vec<ConfigError>) {
-    validate_value(&field.name, field.field_type, value, errors);
+    validate_value(&field.name, &field.field_type, value, errors);
 }
 
 /// Validate a value against a field type.
@@ -227,7 +218,7 @@ fn validate_value(
                         {
                             let nested_name =
                                 format!("{}.{}.{}", field_name, variant.name, inner_field.name);
-                            validate_value(&nested_name, inner_field.field_type, inner_value, errors);
+                            validate_value(&nested_name, &inner_field.field_type, inner_value, errors);
                         }
                     }
                 }
@@ -245,7 +236,7 @@ fn validate_value(
                     schema.fields.iter().zip(inner_values.values.iter())
                 {
                     let nested_name = format!("{}.{}", field_name, inner_field.name);
-                    validate_value(&nested_name, inner_field.field_type, inner_value, errors);
+                    validate_value(&nested_name, &inner_field.field_type, inner_value, errors);
                 }
             }
         }
