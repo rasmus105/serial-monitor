@@ -160,10 +160,10 @@ impl GraphEngine {
     pub fn process_chunk(&mut self, chunk: &DataChunk) {
         self.chunks_processed += 1;
 
-        // Update packet rate tracking
-        self.config
-            .packet_rate
-            .record(chunk.timestamp, chunk.direction, chunk.data.len());
+        // TODO: Update packet rate tracking
+        // self.config
+        //     .packet_rate
+        //     .record(chunk.timestamp, chunk.direction, chunk.data.len());
 
         // Parse and store data points
         let values = self.config.parser.parse(chunk);
@@ -358,9 +358,7 @@ mod tests {
 
     #[test]
     fn regex_named_capture() {
-        let parser = Regex {
-            pattern: r"T:(?P<temp>\d+\.?\d*)".into(),
-        };
+        let parser = Regex::new(r"T:(?P<temp>\d+\.?\d*)").unwrap();
         let mut engine = engine(parser);
         engine.process_chunk(&chunk("T:25.5"));
 
@@ -369,9 +367,7 @@ mod tests {
 
     #[test]
     fn regex_multiple_captures() {
-        let parser = Regex {
-            pattern: r"T:(?P<temp>\d+\.?\d*)\s+H:(?P<humidity>\d+\.?\d*)".into(),
-        };
+        let parser = Regex::new(r"T:(?P<temp>\d+\.?\d*)\s+H:(?P<humidity>\d+\.?\d*)").unwrap();
         let mut engine = engine(parser);
         engine.process_chunk(&chunk("T:25.5 H:60"));
 

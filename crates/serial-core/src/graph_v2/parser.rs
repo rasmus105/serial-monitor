@@ -169,14 +169,90 @@ impl GraphParser for KeyValue {
 // ============================================================================
 
 /// User-defined regex with named capture groups becoming series names.
+///
+/// Supports two modes:
+/// 1. **Key/Value mode**: Pattern contains `(?P<key>...)` and `(?P<value>...)` groups.
+///    Each match extracts a dynamic series name from `key` and its value from `value`.
+/// 2. **Named groups mode**: Each named capture group becomes a series, and the
+///    captured text is parsed as a number.
 #[derive(Debug, Clone)]
 pub struct Regex {
-    pub pattern: String,
+    /// Pre-compiled regex pattern
+    regex: regex::Regex,
+    /// True if pattern uses key/value capture groups
+    has_key_value_groups: bool,
+    /// Cached named capture group names (excludes "key" and "value")
+    group_names: Vec<String>,
+}
+
+impl Regex {
+    /// Create a new Regex parser with the given pattern.
+    ///
+    /// Returns an error if the pattern is invalid.
+    pub fn new(pattern: &str) -> Result<Self, regex::Error> {
+        let regex = regex::Regex::new(pattern)?;
+
+        let mut has_key_value_groups = false;
+        let mut group_names = Vec::new();
+
+        for name in regex.capture_names().flatten() {
+            if name == "key" || name == "value" {
+                has_key_value_groups = true;
+            } else {
+                group_names.push(name.to_string());
+            }
+        }
+
+        Ok(Self {
+            regex,
+            has_key_value_groups,
+            group_names,
+        })
+    }
+
+    /// Returns the original pattern string.
+    pub fn pattern(&self) -> &str {
+        self.regex.as_str()
+    }
 }
 
 impl GraphParser for Regex {
-    fn parse(&self, _chunk: &DataChunk) -> Vec<ParsedValue> {
-        todo!()
+    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
+        let text = match std::str::from_utf8(&chunk.data) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut results = Vec::with_capacity(8);
+
+        for caps in self.regex.captures_iter(text) {
+            if self.has_key_value_groups {
+                // Generic key/value pattern: (?P<key>...) and (?P<value>...)
+                if let (Some(key_match), Some(value_match)) =
+                    (caps.name("key"), caps.name("value"))
+                    && let Ok(value) = value_match.as_str().parse::<f64>()
+                {
+                    results.push(ParsedValue {
+                        series: key_match.as_str().to_string(),
+                        value,
+                    });
+                }
+            } else {
+                // Named groups are series names, captured values are parsed as numbers
+                for name in &self.group_names {
+                    if let Some(m) = caps.name(name)
+                        && let Ok(value) = m.as_str().parse::<f64>()
+                    {
+                        results.push(ParsedValue {
+                            series: name.clone(),
+                            value,
+                        });
+                    }
+                }
+            }
+        }
+
+        results
     }
 }
 
