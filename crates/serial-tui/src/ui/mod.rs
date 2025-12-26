@@ -11,7 +11,6 @@ use ratatui::{
 use crate::app::{App, ConfigSection, InputMode, View};
 
 // Submodules
-pub mod config_panel;
 mod dialogs;
 mod port_select;
 mod settings;
@@ -56,29 +55,6 @@ pub(crate) fn push_section_separator<'a>(
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::BOLD),
             )));
-        }
-    }
-    Some(new_section)
-}
-
-/// Push section separator as ListItem if the section has changed and has a header.
-/// Returns the new section for tracking.
-pub(crate) fn push_list_section_separator<'a>(
-    items: &mut Vec<ratatui::widgets::ListItem<'a>>,
-    prev_section: Option<ConfigSection>,
-    new_section: ConfigSection,
-    panel_width: usize,
-) -> Option<ConfigSection> {
-    use ratatui::widgets::ListItem;
-    if prev_section != Some(new_section) {
-        if let Some(header) = new_section.header() {
-            items.push(ListItem::new(Line::from(""))); // Spacer
-            items.push(ListItem::new(Line::from(Span::styled(
-                create_separator(header, panel_width),
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            ))));
         }
     }
     Some(new_section)
