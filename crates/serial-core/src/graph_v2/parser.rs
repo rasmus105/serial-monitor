@@ -444,11 +444,91 @@ impl GraphParser for Json {
 // ============================================================================
 
 /// Extracts all numbers found in text. Series names are "0", "1", "2", etc.
+///
+/// Supports integers and floating-point numbers, including:
+/// - Integers: `42`, `-17`
+/// - Floats: `3.14`, `-0.5`, `.25`
+/// - Scientific notation: `1e10`, `2.5E-3`
+///
+/// Numbers are extracted in order of appearance.
 #[derive(Debug, Clone, Default)]
 pub struct RawNumbers;
 
+impl RawNumbers {
+    /// Check if a byte can start a number (digit, minus, or decimal point).
+    #[inline]
+    fn can_start_number(b: u8) -> bool {
+        b.is_ascii_digit() || b == b'-' || b == b'.'
+    }
+
+    /// Check if a byte can be part of a number.
+    #[inline]
+    fn is_number_char(b: u8) -> bool {
+        b.is_ascii_digit() || b == b'.' || b == b'-' || b == b'+' || b == b'e' || b == b'E'
+    }
+
+    /// Check if the byte before a potential number start is a valid boundary.
+    /// Numbers shouldn't be extracted from the middle of identifiers.
+    #[inline]
+    fn is_valid_boundary(b: u8) -> bool {
+        !b.is_ascii_alphanumeric() && b != b'_'
+    }
+}
+
 impl GraphParser for RawNumbers {
-    fn parse(&self, _chunk: &DataChunk) -> Vec<ParsedValue> {
-        todo!()
+    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
+        let data = &chunk.data;
+        let mut results = Vec::with_capacity(8);
+        let mut i = 0;
+
+        while i < data.len() {
+            // Look for potential number start
+            if !Self::can_start_number(data[i]) {
+                i += 1;
+                continue;
+            }
+
+            // Check boundary before this position
+            if i > 0 && !Self::is_valid_boundary(data[i - 1]) {
+                i += 1;
+                continue;
+            }
+
+            // Handle lone minus or dot - need at least one digit
+            if (data[i] == b'-' || data[i] == b'.')
+                && (i + 1 >= data.len() || !data[i + 1].is_ascii_digit())
+            {
+                // Special case: "-.5" pattern
+                if data[i] == b'-'
+                    && i + 2 < data.len()
+                    && data[i + 1] == b'.'
+                    && data[i + 2].is_ascii_digit()
+                {
+                    // Continue to parse
+                } else {
+                    i += 1;
+                    continue;
+                }
+            }
+
+            // Find end of number
+            let start = i;
+            while i < data.len() && Self::is_number_char(data[i]) {
+                i += 1;
+            }
+
+            // Try to parse the candidate
+            let candidate = &data[start..i];
+            if let Ok(s) = std::str::from_utf8(candidate)
+                && let Ok(value) = s.parse::<f64>()
+            {
+                results.push(ParsedValue {
+                    series: results.len().to_string(),
+                    value,
+                });
+            }
+        }
+
+        results
     }
 }
