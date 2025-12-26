@@ -4,6 +4,7 @@
 //! Each parser implements the [`GraphParser`] trait.
 
 use regex::Regex;
+use strum::{AsRefStr, Display, EnumIter};
 
 use crate::buffer::DataChunk;
 
@@ -27,43 +28,24 @@ impl ParsedValue {
 }
 
 /// Available parser types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, AsRefStr, EnumIter)]
 pub enum ParserType {
     /// Key-value parser: extracts `key=value` or `key: value` patterns
     #[default]
+    #[strum(serialize = "Key=Value")]
     KeyValue,
     /// Regex parser: user-defined pattern with capture groups
+    #[strum(serialize = "Regex")]
     Regex,
     /// CSV parser: parse comma-separated values
+    #[strum(serialize = "CSV")]
     Csv,
     /// JSON parser: extract numeric fields from JSON
+    #[strum(serialize = "JSON")]
     Json,
     /// Raw number parser: extract any numbers found
+    #[strum(serialize = "Raw Numbers")]
     RawNumber,
-}
-
-impl ParserType {
-    /// Get a human-readable name for the parser type
-    pub fn name(&self) -> &'static str {
-        match self {
-            ParserType::KeyValue => "Key=Value",
-            ParserType::Regex => "Regex",
-            ParserType::Csv => "CSV",
-            ParserType::Json => "JSON",
-            ParserType::RawNumber => "Raw Numbers",
-        }
-    }
-
-    /// Get all parser types
-    pub fn all() -> &'static [ParserType] {
-        &[
-            ParserType::KeyValue,
-            ParserType::Regex,
-            ParserType::Csv,
-            ParserType::Json,
-            ParserType::RawNumber,
-        ]
-    }
 }
 
 /// Configuration for creating a parser
@@ -115,8 +97,8 @@ impl GraphParserConfig {
 ///
 /// Parsers take a [`DataChunk`] and extract zero or more named numeric values.
 pub trait GraphParser: Send + Sync {
-    /// Get the name of this parser
-    fn name(&self) -> &str;
+    /// Get the parser type
+    fn parser_type(&self) -> ParserType;
 
     /// Parse a chunk and return extracted values
     ///
@@ -170,8 +152,8 @@ impl Default for KeyValueParser {
 }
 
 impl GraphParser for KeyValueParser {
-    fn name(&self) -> &str {
-        "Key=Value"
+    fn parser_type(&self) -> ParserType {
+        ParserType::KeyValue
     }
 
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
@@ -275,8 +257,8 @@ impl RegexParser {
 }
 
 impl GraphParser for RegexParser {
-    fn name(&self) -> &str {
-        "Regex"
+    fn parser_type(&self) -> ParserType {
+        ParserType::Regex
     }
 
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
@@ -369,8 +351,8 @@ impl CsvParser {
 }
 
 impl GraphParser for CsvParser {
-    fn name(&self) -> &str {
-        "CSV"
+    fn parser_type(&self) -> ParserType {
+        ParserType::Csv
     }
 
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
@@ -432,8 +414,8 @@ impl Default for JsonParser {
 }
 
 impl GraphParser for JsonParser {
-    fn name(&self) -> &str {
-        "JSON"
+    fn parser_type(&self) -> ParserType {
+        ParserType::Json
     }
 
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
@@ -674,8 +656,8 @@ impl Default for RawNumberParser {
 }
 
 impl GraphParser for RawNumberParser {
-    fn name(&self) -> &str {
-        "Raw Numbers"
+    fn parser_type(&self) -> ParserType {
+        ParserType::RawNumber
     }
 
     fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {

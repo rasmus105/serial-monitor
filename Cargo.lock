@@ -752,6 +752,7 @@ name = "serial-core"
 version = "0.1.0"
 dependencies = [
  "regex",
+ "strum",
  "thiserror",
  "tokio",
  "tokio-serial",

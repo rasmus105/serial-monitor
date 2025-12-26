@@ -11,3 +11,4 @@ tokio-serial = { workspace = true }
 
 thiserror = { workspace = true }
 regex = { workspace = true }
+strum = { workspace = true }

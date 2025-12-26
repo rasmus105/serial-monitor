@@ -2,16 +2,16 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serial_core::{
-    ChunkingStrategy, DataBits, Encoding, FlowControl, GraphEngine, GraphMode, LineDelimiter,
-    Parity, ParserType, PatternMatcher, PortInfo, SaveFormat, SerialConfig,
-    SessionConfig, StopBits, FileSendHandle, FileSendProgress, list_ports,
+    list_ports, ChunkingStrategy, DataBits, Encoding, FileSendHandle, FileSendProgress,
+    FlowControl, GraphEngine, GraphMode, LineDelimiter, Parity, ParserType, PatternMatcher,
+    PortInfo, SaveFormat, SerialConfig, SessionConfig, StopBits,
 };
+use strum::IntoEnumIterator;
 
 use crate::app::types::{
-    ChunkingMode, ConfigField, ConfigOption, ConfigPanelState,
-    DelimiterOption, FileSaveSettings, HexGrouping, InputMode, PaneContent,
-    PaneFocus, PortSelectFocus, SizeUnit, TimestampFormat, TrafficConfigField,
-    TrafficFocus, WrapMode, GraphConfigField, GraphFocus,
+    ChunkingMode, ConfigField, ConfigOption, ConfigPanelState, DelimiterOption, FileSaveSettings,
+    GraphConfigField, GraphFocus, HexGrouping, InputMode, PaneContent, PaneFocus, PortSelectFocus,
+    SizeUnit, TimestampFormat, TrafficConfigField, TrafficFocus, WrapMode,
 };
 
 // =============================================================================
@@ -389,7 +389,9 @@ impl PortSelectState {
                 }
             }
             ConfigField::RxMaxLineLength => self.rx_max_line_length.clone(),
-            ConfigField::RxMaxLineLengthUnit => self.rx_max_line_length_unit.display_name().to_string(),
+            ConfigField::RxMaxLineLengthUnit => {
+                self.rx_max_line_length_unit.display_name().to_string()
+            }
             // TX Chunking fields
             ConfigField::TxChunkingMode => self.tx_chunking_mode.display_name().to_string(),
             ConfigField::TxDelimiter => self.tx_delimiter.display_name().to_string(),
@@ -401,7 +403,9 @@ impl PortSelectState {
                 }
             }
             ConfigField::TxMaxLineLength => self.tx_max_line_length.clone(),
-            ConfigField::TxMaxLineLengthUnit => self.tx_max_line_length_unit.display_name().to_string(),
+            ConfigField::TxMaxLineLengthUnit => {
+                self.tx_max_line_length_unit.display_name().to_string()
+            }
         }
     }
 
@@ -428,7 +432,8 @@ impl PortSelectState {
                 self.serial_config.stop_bits = StopBits::from_index(self.config.dropdown_index);
             }
             ConfigField::FlowControl => {
-                self.serial_config.flow_control = FlowControl::from_index(self.config.dropdown_index);
+                self.serial_config.flow_control =
+                    FlowControl::from_index(self.config.dropdown_index);
             }
             ConfigField::SaveFormat => {
                 self.file_save.format = SaveFormat::from_index(self.config.dropdown_index);
@@ -601,8 +606,7 @@ impl PortSelectState {
                     .map(|v| length_unit.to_bytes(v))
                     .unwrap_or(64 * 1024); // Default 64 KiB
 
-                ChunkingStrategy::with_delimiter(delimiter)
-                    .with_max_line_length(max_line_length)
+                ChunkingStrategy::with_delimiter(delimiter).with_max_line_length(max_line_length)
             }
         }
     }
@@ -613,18 +617,18 @@ impl PortSelectState {
         let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
         let mut bytes = Vec::new();
         let mut chars = clean.chars().peekable();
-        
+
         while chars.peek().is_some() {
             let high = chars.next();
             let low = chars.next();
-            
+
             if let (Some(h), Some(l)) = (high, low)
                 && let Ok(byte) = u8::from_str_radix(&format!("{}{}", h, l), 16)
             {
                 bytes.push(byte);
             }
         }
-        
+
         bytes
     }
 }
@@ -734,12 +738,8 @@ impl TrafficState {
             }
             TrafficConfigField::Encoding => self.encoding.display_name().to_string(),
             TrafficConfigField::WrapMode => self.wrap_mode.display_name().to_string(),
-            TrafficConfigField::ShowTx => {
-                if self.show_tx { "ON" } else { "OFF" }.to_string()
-            }
-            TrafficConfigField::ShowRx => {
-                if self.show_rx { "ON" } else { "OFF" }.to_string()
-            }
+            TrafficConfigField::ShowTx => if self.show_tx { "ON" } else { "OFF" }.to_string(),
+            TrafficConfigField::ShowRx => if self.show_rx { "ON" } else { "OFF" }.to_string(),
             TrafficConfigField::HexGrouping => self.hex_grouping.display_name().to_string(),
             TrafficConfigField::FilterEnabled => {
                 if self.filter_enabled { "ON" } else { "OFF" }.to_string()
@@ -964,12 +964,18 @@ impl GraphTimeWindow {
 
     /// Get all display names
     pub fn all_display_names() -> Vec<&'static str> {
-        Self::all_variants().iter().map(|v| v.display_name()).collect()
+        Self::all_variants()
+            .iter()
+            .map(|v| v.display_name())
+            .collect()
     }
 
     /// Get index
     pub fn index(&self) -> usize {
-        Self::all_variants().iter().position(|v| v == self).unwrap_or(0)
+        Self::all_variants()
+            .iter()
+            .position(|v| v == self)
+            .unwrap_or(0)
     }
 
     /// Create from index
@@ -1039,15 +1045,13 @@ impl GraphState {
             GraphConfigField::Mode => self
                 .engine
                 .as_ref()
-                .map(|e| e.mode().name())
-                .unwrap_or(GraphMode::default().name())
-                .to_string(),
+                .map(|e| e.mode().to_string())
+                .unwrap_or_else(|| GraphMode::default().to_string()),
             GraphConfigField::Parser => self
                 .engine
                 .as_ref()
-                .map(|e| e.parser_config().parser_type().name())
-                .unwrap_or(ParserType::default().name())
-                .to_string(),
+                .map(|e| e.parser_config().parser_type().to_string())
+                .unwrap_or_else(|| ParserType::default().to_string()),
             GraphConfigField::RegexPattern => self.get_regex_pattern(),
             GraphConfigField::TimeWindow => self.time_window.display_name().to_string(),
             GraphConfigField::ShowRx => if self.show_rx { "ON" } else { "OFF" }.to_string(),
@@ -1069,9 +1073,8 @@ impl GraphState {
     /// Set the regex pattern (only effective when parser is Regex type)
     pub fn set_regex_pattern(&mut self, pattern: String) {
         if self.engine.is_some() {
-            let config = serial_core::GraphParserConfig::Regex(
-                serial_core::RegexParserConfig { pattern }
-            );
+            let config =
+                serial_core::GraphParserConfig::Regex(serial_core::RegexParserConfig { pattern });
             self.engine_mut().set_parser_config(config);
         }
     }
@@ -1111,19 +1114,15 @@ impl GraphState {
     /// Get string options for dropdown
     pub fn get_config_option_strings(&self) -> Vec<String> {
         match self.config.field {
-            GraphConfigField::Mode => GraphMode::all()
-                .iter()
-                .map(|m| m.name().to_string())
-                .collect(),
-            GraphConfigField::Parser => ParserType::all()
-                .iter()
-                .map(|p| p.name().to_string())
-                .collect(),
+            GraphConfigField::Mode => GraphMode::iter().map(|m| m.to_string()).collect(),
+            GraphConfigField::Parser => ParserType::iter().map(|p| p.to_string()).collect(),
             GraphConfigField::TimeWindow => GraphTimeWindow::all_display_names()
                 .into_iter()
                 .map(String::from)
                 .collect(),
-            GraphConfigField::RegexPattern | GraphConfigField::ShowRx | GraphConfigField::ShowTx => vec![],
+            GraphConfigField::RegexPattern
+            | GraphConfigField::ShowRx
+            | GraphConfigField::ShowTx => vec![],
         }
     }
 
@@ -1132,7 +1131,7 @@ impl GraphState {
         match self.config.field {
             GraphConfigField::Mode => {
                 let mode = self.engine.as_ref().map(|e| e.mode()).unwrap_or_default();
-                GraphMode::all().iter().position(|m| *m == mode).unwrap_or(0)
+                GraphMode::iter().position(|m| m == mode).unwrap_or(0)
             }
             GraphConfigField::Parser => {
                 let parser_type = self
@@ -1140,23 +1139,26 @@ impl GraphState {
                     .as_ref()
                     .map(|e| e.parser_config().parser_type())
                     .unwrap_or_default();
-                ParserType::all()
-                    .iter()
-                    .position(|p| *p == parser_type)
+                ParserType::iter()
+                    .position(|p| p == parser_type)
                     .unwrap_or(0)
             }
             GraphConfigField::TimeWindow => self.time_window.index(),
-            GraphConfigField::RegexPattern | GraphConfigField::ShowRx | GraphConfigField::ShowTx => 0,
+            GraphConfigField::RegexPattern
+            | GraphConfigField::ShowRx
+            | GraphConfigField::ShowTx => 0,
         }
     }
 
     /// Get the number of options for the current config field
     pub fn get_options_count(&self) -> usize {
         match self.config.field {
-            GraphConfigField::Mode => GraphMode::all().len(),
-            GraphConfigField::Parser => ParserType::all().len(),
+            GraphConfigField::Mode => GraphMode::iter().count(),
+            GraphConfigField::Parser => ParserType::iter().count(),
             GraphConfigField::TimeWindow => GraphTimeWindow::all_variants().len(),
-            GraphConfigField::RegexPattern | GraphConfigField::ShowRx | GraphConfigField::ShowTx => 0,
+            GraphConfigField::RegexPattern
+            | GraphConfigField::ShowRx
+            | GraphConfigField::ShowTx => 0,
         }
     }
 
@@ -1169,12 +1171,12 @@ impl GraphState {
     pub fn apply_dropdown_selection(&mut self) {
         match self.config.field {
             GraphConfigField::Mode => {
-                if let Some(mode) = GraphMode::all().get(self.config.dropdown_index) {
-                    self.engine_mut().set_mode(*mode);
+                if let Some(mode) = GraphMode::iter().nth(self.config.dropdown_index) {
+                    self.engine_mut().set_mode(mode);
                 }
             }
             GraphConfigField::Parser => {
-                if let Some(parser_type) = ParserType::all().get(self.config.dropdown_index) {
+                if let Some(parser_type) = ParserType::iter().nth(self.config.dropdown_index) {
                     let config = match parser_type {
                         ParserType::KeyValue => {
                             serial_core::GraphParserConfig::KeyValue(Default::default())
@@ -1182,9 +1184,7 @@ impl GraphState {
                         ParserType::Regex => {
                             serial_core::GraphParserConfig::Regex(Default::default())
                         }
-                        ParserType::Csv => {
-                            serial_core::GraphParserConfig::Csv(Default::default())
-                        }
+                        ParserType::Csv => serial_core::GraphParserConfig::Csv(Default::default()),
                         ParserType::Json => serial_core::GraphParserConfig::Json,
                         ParserType::RawNumber => {
                             serial_core::GraphParserConfig::RawNumber(Default::default())
@@ -1196,7 +1196,9 @@ impl GraphState {
             GraphConfigField::TimeWindow => {
                 self.time_window = GraphTimeWindow::from_index(self.config.dropdown_index);
             }
-            GraphConfigField::RegexPattern | GraphConfigField::ShowRx | GraphConfigField::ShowTx => {}
+            GraphConfigField::RegexPattern
+            | GraphConfigField::ShowRx
+            | GraphConfigField::ShowTx => {}
         }
     }
 

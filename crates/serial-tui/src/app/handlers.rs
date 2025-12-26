@@ -10,8 +10,8 @@ use crate::settings::{key_event_to_binding, map_settings_key, GeneralSetting, Se
 
 use super::state::TextInputResult;
 use super::types::{
-    EnumNavigation, InputMode, PaneContent, PaneFocus, PortSelectFocus,
-    TrafficConfigField, TrafficFocus, View,
+    EnumNavigation, InputMode, PaneContent, PaneFocus, PortSelectFocus, TrafficConfigField,
+    TrafficFocus, View,
 };
 use super::App;
 
@@ -206,10 +206,12 @@ impl App {
                     self.input.mode = InputMode::SettingsDropdown;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    self.settings_panel.selected_general_setting = self.settings_panel.selected_general_setting.next();
+                    self.settings_panel.selected_general_setting =
+                        self.settings_panel.selected_general_setting.next();
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    self.settings_panel.selected_general_setting = self.settings_panel.selected_general_setting.prev();
+                    self.settings_panel.selected_general_setting =
+                        self.settings_panel.selected_general_setting.prev();
                 }
                 KeyCode::Char('l') | KeyCode::Tab => {
                     self.settings_panel.tab = self.settings_panel.tab.next();
@@ -382,9 +384,7 @@ impl App {
 
         // Handle context-sensitive commands
         let cmd = match cmd {
-            Some(PortSelectCommand::FocusPortList) if !self.port_select.config.visible => {
-                None
-            }
+            Some(PortSelectCommand::FocusPortList) if !self.port_select.config.visible => None,
             Some(PortSelectCommand::FocusConfig) if !self.port_select.config.visible => None,
             other => other,
         };
@@ -775,17 +775,15 @@ impl App {
                 }
             }
             // Close secondary pane
-            KeyCode::Char('q') => {
-                match self.layout.close_secondary() {
-                    Ok(()) => {
-                        self.needs_full_clear = true;
-                        self.status = "Closed secondary pane".to_string();
-                    }
-                    Err(msg) => {
-                        self.status = msg.to_string();
-                    }
+            KeyCode::Char('q') => match self.layout.close_secondary() {
+                Ok(()) => {
+                    self.needs_full_clear = true;
+                    self.status = "Closed secondary pane".to_string();
                 }
-            }
+                Err(msg) => {
+                    self.status = msg.to_string();
+                }
+            },
             // Navigation between panes
             KeyCode::Char('h') => {
                 self.layout.focus_left();
@@ -963,7 +961,9 @@ impl App {
                 };
             }
             // Config panel navigation when focused on config
-            KeyCode::Char('j') | KeyCode::Down if matches!(self.graph.focus, GraphFocus::Config) => {
+            KeyCode::Char('j') | KeyCode::Down
+                if matches!(self.graph.focus, GraphFocus::Config) =>
+            {
                 self.graph.config.next_field();
             }
             KeyCode::Char('k') | KeyCode::Up if matches!(self.graph.focus, GraphFocus::Config) => {
@@ -1068,7 +1068,8 @@ impl App {
                                 }
                             }
                         } else {
-                            self.status = "Invalid pane number (1=Traffic, 2=Graph, 3=Send)".to_string();
+                            self.status =
+                                "Invalid pane number (1=Traffic, 2=Graph, 3=Send)".to_string();
                         }
                     } else {
                         self.status = "Usage: :vsplit [1|2|3]".to_string();
@@ -1153,7 +1154,12 @@ impl App {
             ),
         };
 
-        match handle_dropdown_key(key, options_count, dropdown_index, &self.settings.keybindings.dropdown) {
+        match handle_dropdown_key(
+            key,
+            options_count,
+            dropdown_index,
+            &self.settings.keybindings.dropdown,
+        ) {
             DropdownResult::Confirmed => {
                 match dropdown_type {
                     DropdownType::PortConfig => {
@@ -1172,8 +1178,16 @@ impl App {
                         self.needs_full_clear = true;
                         self.status = format!(
                             "Graph: Mode={}, Parser={}",
-                            self.graph.engine.as_ref().map(|e| e.mode().name()).unwrap_or("N/A"),
-                            self.graph.engine.as_ref().map(|e| e.parser_config().parser_type().name()).unwrap_or("N/A")
+                            self.graph
+                                .engine
+                                .as_ref()
+                                .map(|e| e.mode().to_string())
+                                .unwrap_or("N/A".to_string()),
+                            self.graph
+                                .engine
+                                .as_ref()
+                                .map(|e| e.parser_config().parser_type().to_string())
+                                .unwrap_or("N/A".to_string())
                         );
                     }
                 }
@@ -1212,7 +1226,7 @@ impl App {
         {
             return; // Ignore non-numeric characters
         }
-        
+
         self.handle_simple_text_input(key, TextInputAction::ApplyPortConfig, "Input cancelled.");
     }
 
@@ -1226,37 +1240,40 @@ impl App {
 
     /// Generic handler for simple text input modes
     /// Handles the common pattern of submit->action, cancel->message
-    fn handle_simple_text_input(&mut self, key: KeyEvent, action: TextInputAction, cancel_msg: &str) {
+    fn handle_simple_text_input(
+        &mut self,
+        key: KeyEvent,
+        action: TextInputAction,
+        cancel_msg: &str,
+    ) {
         match self.input.handle_text_input(key) {
-            TextInputResult::Submit(value) => {
-                match action {
-                    TextInputAction::ConnectToPort => {
-                        self.connect_to_port(&value);
-                    }
-                    TextInputAction::ExecuteCommand => {
-                        self.execute_command(&value);
-                    }
-                    TextInputAction::SendFile => {
-                        self.start_file_send(&value);
-                    }
-                    TextInputAction::ApplyPortConfig => {
-                        self.port_select.apply_text_input(value);
-                        self.status = self.port_config_status();
-                    }
-                    TextInputAction::ApplyTrafficConfig => {
-                        self.traffic.apply_text_input(value);
-                        self.status = self.traffic_config_status();
-                    }
-                    TextInputAction::ApplyGraphConfig => {
-                        self.graph.apply_text_input(value);
-                        self.status = format!(
-                            "{}: {}",
-                            self.graph.config.field.label(),
-                            self.graph.get_config_display(self.graph.config.field)
-                        );
-                    }
+            TextInputResult::Submit(value) => match action {
+                TextInputAction::ConnectToPort => {
+                    self.connect_to_port(&value);
                 }
-            }
+                TextInputAction::ExecuteCommand => {
+                    self.execute_command(&value);
+                }
+                TextInputAction::SendFile => {
+                    self.start_file_send(&value);
+                }
+                TextInputAction::ApplyPortConfig => {
+                    self.port_select.apply_text_input(value);
+                    self.status = self.port_config_status();
+                }
+                TextInputAction::ApplyTrafficConfig => {
+                    self.traffic.apply_text_input(value);
+                    self.status = self.traffic_config_status();
+                }
+                TextInputAction::ApplyGraphConfig => {
+                    self.graph.apply_text_input(value);
+                    self.status = format!(
+                        "{}: {}",
+                        self.graph.config.field.label(),
+                        self.graph.get_config_display(self.graph.config.field)
+                    );
+                }
+            },
             TextInputResult::Cancel => {
                 self.status = cancel_msg.to_string();
             }
@@ -1269,7 +1286,8 @@ impl App {
         format!(
             "{}: {}",
             self.port_select.config.field.label(),
-            self.port_select.get_config_display(self.port_select.config.field)
+            self.port_select
+                .get_config_display(self.port_select.config.field)
         )
     }
 
@@ -1341,7 +1359,7 @@ impl App {
     /// Perform a full search across all chunks using the SearchEngine
     pub(super) fn update_search_matches(&mut self) {
         use crate::ui::format_hex_grouped;
-        
+
         if !self.search.has_pattern() {
             self.status = String::new();
             return;
@@ -1433,7 +1451,7 @@ impl App {
     /// This is separate from TrafficState::toggle_setting to handle side effects like file saving
     pub(super) fn handle_traffic_toggle(&mut self) {
         let field = self.traffic.config.field;
-        
+
         // Handle SaveEnabled specially - toggling during a session starts/stops file saving
         if field == TrafficConfigField::SaveEnabled {
             self.traffic.file_save.enabled = !self.traffic.file_save.enabled;
@@ -1448,7 +1466,7 @@ impl App {
             // For other toggles, use the TrafficState method
             self.traffic.toggle_setting();
         }
-        
+
         self.status = self.traffic_config_status();
         self.needs_full_clear = true;
     }

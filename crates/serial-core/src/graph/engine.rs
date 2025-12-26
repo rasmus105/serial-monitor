@@ -4,34 +4,23 @@
 //! It supports lazy initialization: historical data is parsed on first request,
 //! then new data is parsed incrementally.
 
+use strum::{AsRefStr, Display, EnumIter};
+
 use crate::buffer::DataChunk;
 
 use super::data::{GraphBuffer, GraphDataPoint, PacketRateData};
 use super::parser::{GraphParser, GraphParserConfig, ParsedValue};
 
 /// Graph visualization mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, AsRefStr, EnumIter)]
 pub enum GraphMode {
     /// Show packet rate over time (no parsing needed)
     #[default]
+    #[strum(serialize = "Packet Rate")]
     PacketRate,
     /// Show parsed data values
+    #[strum(serialize = "Parsed Data")]
     ParsedData,
-}
-
-impl GraphMode {
-    /// Get all modes
-    pub fn all() -> &'static [GraphMode] {
-        &[GraphMode::PacketRate, GraphMode::ParsedData]
-    }
-
-    /// Get human-readable name
-    pub fn name(&self) -> &'static str {
-        match self {
-            GraphMode::PacketRate => "Packet Rate",
-            GraphMode::ParsedData => "Parsed Data",
-        }
-    }
 }
 
 /// Configuration for the graph engine
@@ -87,7 +76,7 @@ pub struct GraphEngine {
 impl std::fmt::Debug for Box<dyn GraphParser> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GraphParser")
-            .field("name", &self.name())
+            .field("type", &self.parser_type().to_string())
             .finish()
     }
 }
