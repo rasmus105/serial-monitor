@@ -3,13 +3,29 @@ use strum::{AsRefStr, Display};
 
 use crate::DataChunk;
 
+/// A parsed value with series name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedValue {
+    /// Series name (e.g., "temperature", "col0"). Naming scheme is parser-specific.
+    pub series: String,
+    /// The numeric value.
+    pub value: f64,
+}
+
+/// Parses data chunks into named numeric values.
+#[enum_dispatch]
+pub trait GraphParser: Send + Sync {
+    /// Parse a chunk of data, returning zero or more named values.
+    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue>;
+}
+
 #[enum_dispatch(GraphParser)]
-#[derive(Display, AsRefStr)]
+#[derive(Debug, Clone, Display, AsRefStr)]
 pub enum GraphParserType {
     /// Extract key-value patterns (e.g. `key=value`, `key: value`, etc.)
     #[strum(serialize = "Key Value")]
     KeyValue,
-    /// User-defined patterns with capture groups
+    /// User-defined regex with named capture groups
     #[strum(serialize = "Regex")]
     Regex,
     /// Parse comma-separated values
@@ -18,41 +34,22 @@ pub enum GraphParserType {
     /// Parse JSON data
     #[strum(serialize = "JSON")]
     Json,
-    /// Parse raw numbers found.
+    /// Extract all numbers found in text
     #[strum(serialize = "Raw Numbers")]
     RawNumbers,
-}
-
-/// A parsed value with series name.
-pub struct ParsedValue {
-    /// Name of the series this value belongs to. Each parser
-    /// is free to use it's own naming scheme. E.g., the "raw numbers"
-    /// parser could use "1", "2", etc. for each value on a line,
-    /// while the key-value parser uses actual names of right before values.
-    pub series: String,
-
-    /// Unifying all parsed data to 1 data type, to easily
-    /// allow displaying different data on the same graph.
-    pub value: f64,
-}
-
-/// Should implement `Send` and `Sync` to allow front-ends to do
-/// async parsing.
-#[enum_dispatch]
-pub trait GraphParser: Send + Sync {
-    /// Parse a chunk of data.
-    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue>;
 }
 
 // ============================================================================
 // Key Value Parser
 // ============================================================================
 
-pub struct KeyValue {}
+/// Extracts `key=value` or `key: value` patterns.
+#[derive(Debug, Clone, Default)]
+pub struct KeyValue;
 
 impl GraphParser for KeyValue {
     fn parse(&self, _chunk: &DataChunk) -> Vec<ParsedValue> {
-        Vec::new()
+        todo!()
     }
 }
 
@@ -60,11 +57,15 @@ impl GraphParser for KeyValue {
 // Regex Parser
 // ============================================================================
 
-pub struct Regex {}
+/// User-defined regex with named capture groups becoming series names.
+#[derive(Debug, Clone)]
+pub struct Regex {
+    pub pattern: String,
+}
 
 impl GraphParser for Regex {
     fn parse(&self, _chunk: &DataChunk) -> Vec<ParsedValue> {
-        Vec::new()
+        todo!()
     }
 }
 
@@ -72,11 +73,26 @@ impl GraphParser for Regex {
 // CSV Parser
 // ============================================================================
 
-pub struct Csv {}
+/// Parses delimiter-separated numeric values.
+#[derive(Debug, Clone)]
+pub struct Csv {
+    pub delimiter: char,
+    /// Column names. If empty, uses "col0", "col1", etc.
+    pub column_names: Vec<String>,
+}
+
+impl Default for Csv {
+    fn default() -> Self {
+        Self {
+            delimiter: ',',
+            column_names: Vec::new(),
+        }
+    }
+}
 
 impl GraphParser for Csv {
     fn parse(&self, _chunk: &DataChunk) -> Vec<ParsedValue> {
-        Vec::new()
+        todo!()
     }
 }
 
@@ -84,11 +100,13 @@ impl GraphParser for Csv {
 // JSON Parser
 // ============================================================================
 
-pub struct Json {}
+/// Extracts numeric fields from JSON objects.
+#[derive(Debug, Clone, Default)]
+pub struct Json;
 
 impl GraphParser for Json {
     fn parse(&self, _chunk: &DataChunk) -> Vec<ParsedValue> {
-        Vec::new()
+        todo!()
     }
 }
 
@@ -96,10 +114,12 @@ impl GraphParser for Json {
 // Raw Numbers Parser
 // ============================================================================
 
-pub struct RawNumbers {}
+/// Extracts all numbers found in text. Series names are "0", "1", "2", etc.
+#[derive(Debug, Clone, Default)]
+pub struct RawNumbers;
 
 impl GraphParser for RawNumbers {
     fn parse(&self, _chunk: &DataChunk) -> Vec<ParsedValue> {
-        Vec::new()
+        todo!()
     }
 }
