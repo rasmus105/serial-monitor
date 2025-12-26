@@ -3,10 +3,7 @@
 //! Parsers extract numeric values from data chunks for graphing.
 //! Each parser implements the [`GraphParser`] trait.
 
-use std::default;
-
 use regex::Regex;
-use strum::{IntoStaticStr, VariantArray};
 
 use crate::buffer::DataChunk;
 
@@ -30,35 +27,42 @@ impl ParsedValue {
 }
 
 /// Available parser types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ParserType {
     /// Key-value parser: extracts `key=value` or `key: value` patterns
     #[default]
-    #[strum(serialize = "Key=Value")]
     KeyValue,
     /// Regex parser: user-defined pattern with capture groups
-    #[strum(serialize = "Regex")]
     Regex,
     /// CSV parser: parse comma-separated values
-    #[strum(serialize = "CSV")]
     Csv,
     /// JSON parser: extract numeric fields from JSON
-    #[strum(serialize = "JSON")]
     Json,
     /// Raw number parser: extract any numbers found
-    #[strum(serialize = "Raw Numbers")]
     RawNumber,
 }
 
 impl ParserType {
     /// Get a human-readable name for the parser type
     pub fn name(&self) -> &'static str {
-        self.into()
+        match self {
+            ParserType::KeyValue => "Key=Value",
+            ParserType::Regex => "Regex",
+            ParserType::Csv => "CSV",
+            ParserType::Json => "JSON",
+            ParserType::RawNumber => "Raw Numbers",
+        }
     }
 
     /// Get all parser types
     pub fn all() -> &'static [ParserType] {
-        Self::VARIANTS
+        &[
+            ParserType::KeyValue,
+            ParserType::Regex,
+            ParserType::Csv,
+            ParserType::Json,
+            ParserType::RawNumber,
+        ]
     }
 }
 
@@ -297,7 +301,8 @@ impl GraphParser for RegexParser {
         for caps in regex.captures_iter(text) {
             if has_key_value_groups {
                 // Generic key/value pattern
-                if let (Some(key_match), Some(value_match)) = (caps.name("key"), caps.name("value"))
+                if let (Some(key_match), Some(value_match)) =
+                    (caps.name("key"), caps.name("value"))
                 {
                     if let Ok(value) = value_match.as_str().parse::<f64>() {
                         results.push(ParsedValue::new(key_match.as_str(), value));
@@ -377,10 +382,7 @@ impl GraphParser for CsvParser {
         };
 
         // Split into fields
-        let fields: Vec<&str> = text
-            .split(self.config.delimiter)
-            .map(|s| s.trim())
-            .collect();
+        let fields: Vec<&str> = text.split(self.config.delimiter).map(|s| s.trim()).collect();
 
         // Get column names
         let column_names: Vec<String> = if !self.config.column_names.is_empty() {
@@ -741,23 +743,19 @@ mod tests {
         let values = parser.parse(&chunk);
 
         assert_eq!(values.len(), 2);
-        assert!(values
-            .iter()
-            .any(|v| v.series == "temp" && (v.value - 25.5).abs() < f64::EPSILON));
-        assert!(values
-            .iter()
-            .any(|v| v.series == "humidity" && (v.value - 60.0).abs() < f64::EPSILON));
+        assert!(values.iter().any(|v| v.series == "temp" && (v.value - 25.5).abs() < f64::EPSILON));
+        assert!(
+            values
+                .iter()
+                .any(|v| v.series == "humidity" && (v.value - 60.0).abs() < f64::EPSILON)
+        );
     }
 
     #[test]
     fn test_csv_parser() {
         let config = CsvParserConfig {
             delimiter: ',',
-            column_names: vec![
-                "time".to_string(),
-                "temp".to_string(),
-                "humidity".to_string(),
-            ],
+            column_names: vec!["time".to_string(), "temp".to_string(), "humidity".to_string()],
             has_header: false,
         };
         let parser = CsvParser::new(config);
@@ -779,12 +777,12 @@ mod tests {
         let values = parser.parse(&chunk);
 
         assert_eq!(values.len(), 2);
-        assert!(values
-            .iter()
-            .any(|v| v.series == "temp" && (v.value - 25.5).abs() < f64::EPSILON));
-        assert!(values
-            .iter()
-            .any(|v| v.series == "humidity" && (v.value - 60.0).abs() < f64::EPSILON));
+        assert!(values.iter().any(|v| v.series == "temp" && (v.value - 25.5).abs() < f64::EPSILON));
+        assert!(
+            values
+                .iter()
+                .any(|v| v.series == "humidity" && (v.value - 60.0).abs() < f64::EPSILON)
+        );
     }
 
     #[test]

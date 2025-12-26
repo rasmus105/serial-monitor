@@ -80,13 +80,23 @@ impl GraphSeries {
 
     /// Get the min and max values in the series
     pub fn value_range(&self) -> Option<(f64, f64)> {
-        self.points
-            .iter()
-            .map(|p| p.value)
-            .fold(None, |acc, val| match acc {
-                Some((min, max)) => Some((min.min(val), max.max(val))),
-                None => Some((val, val)),
-            })
+        if self.points.is_empty() {
+            return None;
+        }
+
+        let mut min = f64::MAX;
+        let mut max = f64::MIN;
+
+        for point in &self.points {
+            if point.value < min {
+                min = point.value;
+            }
+            if point.value > max {
+                max = point.value;
+            }
+        }
+
+        Some((min, max))
     }
 
     /// Get the time range of the series
@@ -302,14 +312,11 @@ impl GraphBuffer {
 
     /// Add a data point to a series (creating the series if it doesn't exist)
     pub fn push(&mut self, series_name: &str, point: GraphDataPoint) {
-        let series = self
-            .series
-            .entry(series_name.to_string())
-            .or_insert_with(|| {
-                let color = self.next_color;
-                self.next_color = self.next_color.wrapping_add(1);
-                GraphSeries::with_color(series_name, color)
-            });
+        let series = self.series.entry(series_name.to_string()).or_insert_with(|| {
+            let color = self.next_color;
+            self.next_color = self.next_color.wrapping_add(1);
+            GraphSeries::with_color(series_name, color)
+        });
 
         // Trim if at capacity
         while series.len() >= self.max_points_per_series {
