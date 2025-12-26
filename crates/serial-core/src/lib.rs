@@ -18,16 +18,21 @@ mod encoding;
 mod error;
 mod file_saver;
 mod file_sender;
-pub mod graph;
 mod port;
-pub mod search;
 mod session;
+
+// utility crates to be used by libraries to avoid duplication across front-ends.
+pub mod graph;
+pub mod graph_v2;
+pub mod search;
 
 pub use buffer::{DataBuffer, DataChunk, Direction};
 pub use chunking::{Chunker, ChunkingStrategy, LineDelimiter};
 pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8, Encoding};
 pub use error::{Error, Result};
-pub use file_saver::{start_file_saver, FileSaveConfig, FileSaverCommand, FileSaverHandle, SaveFormat};
+pub use file_saver::{
+    start_file_saver, FileSaveConfig, FileSaverCommand, FileSaverHandle, SaveFormat,
+};
 pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
 pub use graph::{
     GraphBuffer, GraphDataPoint, GraphEngine, GraphEngineConfig, GraphMode, GraphParser,

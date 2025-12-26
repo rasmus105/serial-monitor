@@ -28,6 +28,7 @@ unicode-width = "0.2"
 
 # Enum utilities
 strum = { version = "0.26", features = ["derive"] }
+enum_dispatch = "0.3.13"
 
 # Regex
 regex = "1"
