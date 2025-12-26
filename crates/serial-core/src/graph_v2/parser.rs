@@ -373,12 +373,69 @@ impl Csv {
 // ============================================================================
 
 /// Extracts numeric fields from JSON objects.
+///
+/// Supports:
+/// - Flat objects: `{"temperature": 25.5}` -> series "temperature"
+/// - Nested objects: `{"sensor": {"temp": 25.5}}` -> series "sensor.temp"
+/// - Arrays: `{"values": [1, 2, 3]}` -> series "values.0", "values.1", "values.2"
+///
+/// Non-numeric fields (strings, booleans, nulls) are silently skipped.
 #[derive(Debug, Clone, Default)]
 pub struct Json;
 
+impl Json {
+    /// Recursively extract numeric values from a JSON value.
+    fn extract_values(value: &serde_json::Value, prefix: &str, results: &mut Vec<ParsedValue>) {
+        match value {
+            serde_json::Value::Number(n) => {
+                if let Some(f) = n.as_f64() {
+                    results.push(ParsedValue {
+                        series: prefix.to_string(),
+                        value: f,
+                    });
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (key, val) in map {
+                    let new_prefix = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{}.{}", prefix, key)
+                    };
+                    Self::extract_values(val, &new_prefix, results);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for (idx, val) in arr.iter().enumerate() {
+                    let new_prefix = if prefix.is_empty() {
+                        idx.to_string()
+                    } else {
+                        format!("{}.{}", prefix, idx)
+                    };
+                    Self::extract_values(val, &new_prefix, results);
+                }
+            }
+            // Skip strings, booleans, and nulls
+            _ => {}
+        }
+    }
+}
+
 impl GraphParser for Json {
-    fn parse(&self, _chunk: &DataChunk) -> Vec<ParsedValue> {
-        todo!()
+    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
+        let text = match std::str::from_utf8(&chunk.data) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+
+        let value: serde_json::Value = match serde_json::from_str(text) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut results = Vec::with_capacity(8);
+        Self::extract_values(&value, "", &mut results);
+        results
     }
 }
 
