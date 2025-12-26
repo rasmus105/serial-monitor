@@ -197,16 +197,13 @@ fn derive_struct(input: &DeriveInput, data: &syn::DataStruct) -> TokenStream2 {
         }
     }
     
-    // Check if any field is a Configure type (needs runtime initialization)
-    let has_configure_fields = config_fields.iter().any(|f| {
-        matches!(analyze_type(&f.ty), TypeInfo::Configure | TypeInfo::Unknown)
-    });
-    
     // Generate static schema
     let schema_name = format_ident!("__{}_SCHEMA", name.to_string().to_uppercase());
-    let field_type_name = format_ident!("__{}_FIELD_TYPE", name.to_string().to_uppercase());
     let type_name = name.to_string();
     let type_desc = type_attrs.desc.as_ref().map(|d| quote!(Some(#d))).unwrap_or(quote!(None));
+    
+    // Generate FieldSchema for each configurable field
+    let field_schemas = generate_field_schemas(&config_fields);
     
     // Generate to_values() body
     let to_values_body = generate_to_values(&config_fields);
@@ -214,108 +211,37 @@ fn derive_struct(input: &DeriveInput, data: &syn::DataStruct) -> TokenStream2 {
     // Generate from_values() body
     let from_values_body = generate_from_values(&fields);
     
-    if has_configure_fields {
-        // Use LazyLock for structs with Configure-type fields
-        // We create the FieldSchemas at runtime and leak them to get 'static lifetime
-        let field_schemas = generate_field_schemas_lazy(&config_fields);
+    quote! {
+        #[doc(hidden)]
+        static #schema_name: ::config::ConfigSchema = ::config::ConfigSchema {
+            name: #type_name,
+            description: #type_desc,
+            fields: &[#field_schemas],
+        };
         
-        quote! {
-            #[doc(hidden)]
-            static #schema_name: ::std::sync::LazyLock<::config::ConfigSchema> = 
-                ::std::sync::LazyLock::new(|| {
-                    // Create the field schemas vector and leak it to get a static slice
-                    let fields_vec: ::std::vec::Vec<::config::FieldSchema> = vec![#field_schemas];
-                    let fields_slice: &'static [::config::FieldSchema] = ::std::boxed::Box::leak(fields_vec.into_boxed_slice());
-                    
-                    ::config::ConfigSchema {
-                        name: #type_name,
-                        description: #type_desc,
-                        fields: fields_slice,
-                    }
-                });
-            
-            #[doc(hidden)]
-            static #field_type_name: ::std::sync::LazyLock<::config::FieldType> = 
-                ::std::sync::LazyLock::new(|| {
-                    ::config::FieldType::Struct {
-                        schema: ::std::sync::LazyLock::force(&#schema_name),
-                    }
-                });
-            
-            impl ::config::Configure for #name {
-                fn schema() -> &'static ::config::ConfigSchema {
-                    ::std::sync::LazyLock::force(&#schema_name)
-                }
-                
-                fn field_type() -> &'static ::config::FieldType {
-                    ::std::sync::LazyLock::force(&#field_type_name)
-                }
-                
-                fn to_values(&self) -> ::config::ConfigValues {
-                    ::config::ConfigValues::new(vec![#to_values_body])
-                }
-                
-                fn from_values(values: &::config::ConfigValues) -> Result<Self, ::config::ConfigError> {
-                    // Validate first
-                    let errors = ::config::validate(Self::schema(), values);
-                    if !errors.is_empty() {
-                        return Err(errors.into_iter().next().unwrap());
-                    }
-                    
-                    #from_values_body
-                }
+        impl ::config::Configure for #name {
+            fn schema() -> &'static ::config::ConfigSchema {
+                &#schema_name
             }
-        }
-    } else {
-        // Simple case - all fields are primitive types, can use const statics
-        let fields_static_name = format_ident!("__{}_FIELDS", name.to_string().to_uppercase());
-        let field_schemas = generate_field_schemas(&config_fields);
-        
-        quote! {
-            #[doc(hidden)]
-            #[allow(dead_code)]
-            static #fields_static_name: &[::config::FieldSchema] = &[#field_schemas];
             
-            #[doc(hidden)]
-            static #schema_name: ::config::ConfigSchema = ::config::ConfigSchema {
-                name: #type_name,
-                description: #type_desc,
-                fields: #fields_static_name,
-            };
+            fn to_values(&self) -> ::config::ConfigValues {
+                ::config::ConfigValues::new(vec![#to_values_body])
+            }
             
-            #[doc(hidden)]
-            static #field_type_name: ::config::FieldType = ::config::FieldType::Struct {
-                schema: &#schema_name,
-            };
-            
-            impl ::config::Configure for #name {
-                fn schema() -> &'static ::config::ConfigSchema {
-                    &#schema_name
+            fn from_values(values: &::config::ConfigValues) -> Result<Self, ::config::ConfigError> {
+                // Validate first
+                let errors = ::config::validate(Self::schema(), values);
+                if !errors.is_empty() {
+                    return Err(errors.into_iter().next().unwrap());
                 }
                 
-                fn field_type() -> &'static ::config::FieldType {
-                    &#field_type_name
-                }
-                
-                fn to_values(&self) -> ::config::ConfigValues {
-                    ::config::ConfigValues::new(vec![#to_values_body])
-                }
-                
-                fn from_values(values: &::config::ConfigValues) -> Result<Self, ::config::ConfigError> {
-                    // Validate first
-                    let errors = ::config::validate(Self::schema(), values);
-                    if !errors.is_empty() {
-                        return Err(errors.into_iter().next().unwrap());
-                    }
-                    
-                    #from_values_body
-                }
+                #from_values_body
             }
         }
     }
 }
 
-/// Generate static FieldSchema items (for const static initialization)
+/// Generate static FieldSchema items
 fn generate_field_schemas(fields: &[&FieldInfo]) -> TokenStream2 {
     let schemas: Vec<_> = fields.iter().map(|field| {
         let name = field.name.to_string();
@@ -338,232 +264,9 @@ fn generate_field_schemas(fields: &[&FieldInfo]) -> TokenStream2 {
     quote! { #(#schemas),* }
 }
 
-/// Generate FieldSchema items for lazy initialization (can call field_type())
-fn generate_field_schemas_lazy(fields: &[&FieldInfo]) -> TokenStream2 {
-    let schemas: Vec<_> = fields.iter().map(|field| {
-        let name = field.name.to_string();
-        let label = field.attrs.label.as_ref().unwrap(); // Validated earlier
-        let desc = field.attrs.desc.as_ref()
-            .map(|d| quote!(Some(#d)))
-            .unwrap_or(quote!(None));
-        let field_type = generate_field_type_lazy(&field.ty, &field.attrs);
-        
-        quote! {
-            ::config::FieldSchema {
-                name: #name,
-                label: #label,
-                description: #desc,
-                field_type: #field_type,
-            }
-        }
-    }).collect();
-    
-    quote! { #(#schemas),* }
-}
-
-/// Generate a reference to a FieldType for lazy initialization (can call functions)
-fn generate_field_type_lazy(ty: &Type, attrs: &ConfigAttrs) -> TokenStream2 {
-    let type_info = analyze_type(ty);
-    
-    match type_info {
-        TypeInfo::String => quote!(&::config::FieldType::String),
-        TypeInfo::Char => quote!(&::config::FieldType::Char),
-        TypeInfo::Bool => quote!(&::config::FieldType::Bool),
-        TypeInfo::SignedInt => {
-            let min = attrs.min.as_ref().map(|v| {
-                let v: i64 = v.parse().expect("invalid min");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            let max = attrs.max.as_ref().map(|v| {
-                let v: i64 = v.parse().expect("invalid max");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            // For lazy init, we need to leak to get 'static lifetime
-            quote! {{
-                static FT: ::config::FieldType = ::config::FieldType::Int { min: #min, max: #max };
-                &FT
-            }}
-        }
-        TypeInfo::UnsignedInt => {
-            let min = attrs.min.as_ref().map(|v| {
-                let v: u64 = v.parse().expect("invalid min");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            let max = attrs.max.as_ref().map(|v| {
-                let v: u64 = v.parse().expect("invalid max");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            quote! {{
-                static FT: ::config::FieldType = ::config::FieldType::UInt { min: #min, max: #max };
-                &FT
-            }}
-        }
-        TypeInfo::Float => {
-            let min = attrs.min.as_ref().map(|v| {
-                let v: f64 = v.parse().expect("invalid min");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            let max = attrs.max.as_ref().map(|v| {
-                let v: f64 = v.parse().expect("invalid max");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            quote! {{
-                static FT: ::config::FieldType = ::config::FieldType::Float { min: #min, max: #max };
-                &FT
-            }}
-        }
-        TypeInfo::PathBuf => quote!(&::config::FieldType::String),
-        TypeInfo::Option(inner) => {
-            let inner_attrs = ConfigAttrs {
-                min: attrs.min.clone(),
-                max: attrs.max.clone(),
-                min_len: attrs.min_len,
-                max_len: attrs.max_len,
-                ..Default::default()
-            };
-            let inner_type = generate_field_type_value(inner, &inner_attrs);
-            quote! {{
-                static INNER: ::config::FieldType = #inner_type;
-                static FT: ::config::FieldType = ::config::FieldType::Optional { inner: &INNER };
-                &FT
-            }}
-        }
-        TypeInfo::Vec(inner) => {
-            let inner_attrs = ConfigAttrs::default();
-            let inner_type = generate_field_type_value(inner, &inner_attrs);
-            let min_len = attrs.min_len.map(|v| quote!(Some(#v))).unwrap_or(quote!(None));
-            let max_len = attrs.max_len.map(|v| quote!(Some(#v))).unwrap_or(quote!(None));
-            quote! {{
-                static ELEMENT: ::config::FieldType = #inner_type;
-                static FT: ::config::FieldType = ::config::FieldType::List {
-                    element: &ELEMENT,
-                    min_len: #min_len,
-                    max_len: #max_len,
-                };
-                &FT
-            }}
-        }
-        TypeInfo::Configure | TypeInfo::Unknown => {
-            // In lazy context, we CAN call field_type()
-            quote! {
-                <#ty as ::config::Configure>::field_type()
-            }
-        }
-    }
-}
-
-/// Generate a reference to a FieldType for a Rust type.
-/// 
-/// This generates `&'static FieldType` expressions suitable for use in static FieldSchema.
-/// For primitive types, we wrap them in inline static blocks.
-/// For Configure types, we directly use their `field_type()` method which returns `&'static FieldType`.
+/// Generate FieldType for a Rust type
 fn generate_field_type(ty: &Type, attrs: &ConfigAttrs) -> TokenStream2 {
     // Extract the type path
-    let type_info = analyze_type(ty);
-    
-    match type_info {
-        TypeInfo::String => quote! {{
-            static FT: ::config::FieldType = ::config::FieldType::String;
-            &FT
-        }},
-        TypeInfo::Char => quote! {{
-            static FT: ::config::FieldType = ::config::FieldType::Char;
-            &FT
-        }},
-        TypeInfo::Bool => quote! {{
-            static FT: ::config::FieldType = ::config::FieldType::Bool;
-            &FT
-        }},
-        TypeInfo::SignedInt => {
-            let min = attrs.min.as_ref().map(|v| {
-                let v: i64 = v.parse().expect("invalid min");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            let max = attrs.max.as_ref().map(|v| {
-                let v: i64 = v.parse().expect("invalid max");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            quote! {{
-                static FT: ::config::FieldType = ::config::FieldType::Int { min: #min, max: #max };
-                &FT
-            }}
-        }
-        TypeInfo::UnsignedInt => {
-            let min = attrs.min.as_ref().map(|v| {
-                let v: u64 = v.parse().expect("invalid min");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            let max = attrs.max.as_ref().map(|v| {
-                let v: u64 = v.parse().expect("invalid max");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            quote! {{
-                static FT: ::config::FieldType = ::config::FieldType::UInt { min: #min, max: #max };
-                &FT
-            }}
-        }
-        TypeInfo::Float => {
-            let min = attrs.min.as_ref().map(|v| {
-                let v: f64 = v.parse().expect("invalid min");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            let max = attrs.max.as_ref().map(|v| {
-                let v: f64 = v.parse().expect("invalid max");
-                quote!(Some(#v))
-            }).unwrap_or(quote!(None));
-            quote! {{
-                static FT: ::config::FieldType = ::config::FieldType::Float { min: #min, max: #max };
-                &FT
-            }}
-        }
-        TypeInfo::Option(inner) => {
-            let inner_attrs = ConfigAttrs {
-                min: attrs.min.clone(),
-                max: attrs.max.clone(),
-                min_len: attrs.min_len,
-                max_len: attrs.max_len,
-                ..Default::default()
-            };
-            let inner_type = generate_field_type_value(inner, &inner_attrs);
-            quote! {{
-                static INNER: ::config::FieldType = #inner_type;
-                static FT: ::config::FieldType = ::config::FieldType::Optional { inner: &INNER };
-                &FT
-            }}
-        }
-        TypeInfo::Vec(inner) => {
-            let inner_attrs = ConfigAttrs::default();
-            let inner_type = generate_field_type_value(inner, &inner_attrs);
-            let min_len = attrs.min_len.map(|v| quote!(Some(#v))).unwrap_or(quote!(None));
-            let max_len = attrs.max_len.map(|v| quote!(Some(#v))).unwrap_or(quote!(None));
-            quote! {{
-                static ELEMENT: ::config::FieldType = #inner_type;
-                static FT: ::config::FieldType = ::config::FieldType::List {
-                    element: &ELEMENT,
-                    min_len: #min_len,
-                    max_len: #max_len,
-                };
-                &FT
-            }}
-        }
-        TypeInfo::PathBuf => quote! {{
-            static FT: ::config::FieldType = ::config::FieldType::String;
-            &FT
-        }},
-        TypeInfo::Configure | TypeInfo::Unknown => {
-            // Type implements Configure, use its field_type() to get the appropriate FieldType
-            // This works for both enums (returns FieldType::Enum) and structs (returns FieldType::Struct)
-            // field_type() returns &'static FieldType, so we can use it directly
-            quote! {
-                <#ty as ::config::Configure>::field_type()
-            }
-        }
-    }
-}
-
-/// Generate a FieldType value (not a reference) for use in static declarations.
-/// This is used for inner types in Option/Vec where we need to declare the static ourselves.
-fn generate_field_type_value(ty: &Type, attrs: &ConfigAttrs) -> TokenStream2 {
     let type_info = analyze_type(ty);
     
     match type_info {
@@ -603,17 +306,58 @@ fn generate_field_type_value(ty: &Type, attrs: &ConfigAttrs) -> TokenStream2 {
             }).unwrap_or(quote!(None));
             quote!(::config::FieldType::Float { min: #min, max: #max })
         }
-        TypeInfo::PathBuf => quote!(::config::FieldType::String),
-        // For nested Option/Vec or Configure types in Option/Vec, we need special handling
-        // For now, only support simple types in Option/Vec
-        TypeInfo::Option(_) | TypeInfo::Vec(_) => {
-            quote!(compile_error!("Nested Option/Vec not supported in field types"))
+        TypeInfo::Option(inner) => {
+            let inner_attrs = ConfigAttrs {
+                min: attrs.min.clone(),
+                max: attrs.max.clone(),
+                min_len: attrs.min_len,
+                max_len: attrs.max_len,
+                ..Default::default()
+            };
+            let inner_type = generate_field_type(inner, &inner_attrs);
+            // We need to leak a static reference for the inner type
+            // Use a const block to create the static
+            quote! {
+                ::config::FieldType::Optional {
+                    inner: {
+                        static INNER: ::config::FieldType = #inner_type;
+                        &INNER
+                    }
+                }
+            }
         }
-        TypeInfo::Configure | TypeInfo::Unknown => {
-            // For Configure types inside Option/Vec, we can't easily get a static FieldType value
-            // because field_type() returns a reference. We'd need the type to expose the static directly.
-            // For now, generate a compile error with a helpful message.
-            quote!(compile_error!("Configure types inside Option/Vec not yet supported - consider using a wrapper struct"))
+        TypeInfo::Vec(inner) => {
+            let inner_attrs = ConfigAttrs::default();
+            let inner_type = generate_field_type(inner, &inner_attrs);
+            let min_len = attrs.min_len.map(|v| quote!(Some(#v))).unwrap_or(quote!(None));
+            let max_len = attrs.max_len.map(|v| quote!(Some(#v))).unwrap_or(quote!(None));
+            quote! {
+                ::config::FieldType::List {
+                    element: {
+                        static ELEMENT: ::config::FieldType = #inner_type;
+                        &ELEMENT
+                    },
+                    min_len: #min_len,
+                    max_len: #max_len,
+                }
+            }
+        }
+        TypeInfo::PathBuf => quote!(::config::FieldType::String),
+        TypeInfo::Configure => {
+            // Type implements Configure, use its schema
+            quote! {
+                ::config::FieldType::Struct {
+                    schema: <#ty as ::config::Configure>::schema()
+                }
+            }
+        }
+        TypeInfo::Unknown => {
+            // Assume it's a Configure type (enum or struct)
+            quote! {
+                ::config::FieldType::Struct {
+                    schema: <#ty as ::config::Configure>::schema()
+                }
+            }
         }
     }
 }
@@ -966,7 +710,6 @@ fn derive_enum(input: &DeriveInput, data: &syn::DataEnum) -> TokenStream2 {
     
     // Generate schema
     let schema_name = format_ident!("__{}_SCHEMA", name.to_string().to_uppercase());
-    let field_type_name = format_ident!("__{}_FIELD_TYPE", name.to_string().to_uppercase());
     let type_name = name.to_string();
     let type_desc = type_attrs.desc.as_ref().map(|d| quote!(Some(#d))).unwrap_or(quote!(None));
     
@@ -988,11 +731,6 @@ fn derive_enum(input: &DeriveInput, data: &syn::DataEnum) -> TokenStream2 {
         static #variants_name: &[::config::VariantSchema] = &[#variant_schemas];
         
         #[doc(hidden)]
-        static #field_type_name: ::config::FieldType = ::config::FieldType::Enum {
-            variants: #variants_name,
-        };
-        
-        #[doc(hidden)]
         static #schema_name: ::config::ConfigSchema = ::config::ConfigSchema {
             name: #type_name,
             description: #type_desc,
@@ -1002,10 +740,6 @@ fn derive_enum(input: &DeriveInput, data: &syn::DataEnum) -> TokenStream2 {
         impl ::config::Configure for #name {
             fn schema() -> &'static ::config::ConfigSchema {
                 &#schema_name
-            }
-            
-            fn field_type() -> &'static ::config::FieldType {
-                &#field_type_name
             }
             
             fn to_values(&self) -> ::config::ConfigValues {
@@ -1048,11 +782,12 @@ fn generate_variant_schemas(variants: &[(&syn::Variant, ConfigAttrs)]) -> TokenS
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let field = fields.unnamed.first().unwrap();
                 let field_attrs = ConfigAttrs::from_attrs(&field.attrs);
-                // For VariantData::Single, we need &'static FieldType
-                // generate_field_type() returns exactly that
-                let field_type_ref = generate_field_type(&field.ty, &field_attrs);
+                let field_type = generate_field_type(&field.ty, &field_attrs);
                 quote! {
-                    ::config::VariantData::Single(#field_type_ref)
+                    ::config::VariantData::Single({
+                        static FIELD_TYPE: ::config::FieldType = #field_type;
+                        &FIELD_TYPE
+                    })
                 }
             }
             Fields::Unnamed(_) => {
