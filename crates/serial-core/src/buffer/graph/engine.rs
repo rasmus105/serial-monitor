@@ -235,17 +235,6 @@ impl GraphEngine {
         }
     }
 
-    /// Process raw bytes directly (convenience for DataBuffer)
-    pub(crate) fn process_chunk(&mut self, data: &[u8]) {
-        // Create a temporary RawChunk for processing
-        let chunk = RawChunk {
-            data: data.to_vec(),
-            direction: Direction::Rx, // Default, will be overridden by caller if needed
-            timestamp: SystemTime::now(),
-        };
-        self.process_raw_chunk(&chunk);
-    }
-
     /// Clear all parsed data
     pub fn clear(&mut self) {
         self.series.clear();

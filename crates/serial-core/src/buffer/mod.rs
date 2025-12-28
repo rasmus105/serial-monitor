@@ -209,9 +209,7 @@ impl DataBuffer {
 
         // Feed to graph if enabled
         if let Some(ref mut graph) = self.graph {
-            // Graph reads raw bytes as UTF-8
-            let raw_ref = &self.raw_chunks.back().unwrap().data;
-            graph.process_chunk(raw_ref);
+            graph.process_raw_chunk(self.raw_chunks.back().unwrap());
         }
 
         // Truncate if over size limit
@@ -533,9 +531,9 @@ impl DataBuffer {
     pub fn enable_graph(&mut self) {
         if self.graph.is_none() {
             let mut engine = GraphEngine::default();
-            // Process all existing chunks
+            // Process all existing chunks (preserving direction and timestamp)
             for raw in &self.raw_chunks {
-                engine.process_chunk(&raw.data);
+                engine.process_raw_chunk(raw);
             }
             self.graph = Some(engine);
         }
