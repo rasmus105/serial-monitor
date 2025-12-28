@@ -18,77 +18,40 @@ pub struct SearchMatch {
     pub byte_end: usize,
 }
 
-/// Result of a search operation
-#[derive(Debug, Clone)]
-pub struct SearchResult {
-    /// All matches found
-    pub matches: Vec<SearchMatch>,
-    /// Error message if search failed (e.g., invalid regex)
-    pub error: Option<String>,
-}
-
-impl SearchResult {
-    /// Create a successful result with matches
-    pub fn ok(matches: Vec<SearchMatch>) -> Self {
-        Self {
-            matches,
-            error: None,
-        }
-    }
-
-    /// Create an error result
-    pub fn err(error: String) -> Self {
-        Self {
-            matches: Vec::new(),
-            error: Some(error),
-        }
-    }
-
-    /// Check if the search was successful
-    pub fn is_ok(&self) -> bool {
-        self.error.is_none()
-    }
-
-    /// Get the number of matches
-    pub fn match_count(&self) -> usize {
-        self.matches.len()
-    }
-}
-
 /// Search engine for finding patterns in encoded chunk data
 ///
 /// The `SearchEngine` provides efficient search with:
 /// - Pattern caching (regex compiled once)
-/// - Incremental search (track which chunks have been searched)
+/// - Incremental search (automatically tracks which chunks have been searched)
 /// - Match navigation (current match, next/prev)
 ///
 /// # Design
 ///
 /// The search engine operates on **encoded strings**, not raw bytes.
-/// The frontend is responsible for encoding chunks before passing them
-/// to the search engine. This keeps encoding logic in the frontend
-/// while search/matching logic is shared.
+/// The frontend is responsible for encoding chunks and storing them.
+/// This keeps encoding logic in the frontend while search/matching logic is shared.
 ///
 /// # Example
 ///
 /// ```
-/// use serial_core::{SearchEngine, PatternMode};
+/// use serial_core::search::{SearchEngine, PatternMode};
 ///
 /// let mut engine = SearchEngine::new();
 ///
-/// // Set search pattern
-/// engine.set_pattern("error", PatternMode::Normal).unwrap();
+/// // Set search pattern (case-sensitive in Normal mode)
+/// engine.set_pattern("ERROR", PatternMode::Normal).unwrap();
 ///
 /// // Search chunks (frontend provides pre-encoded strings)
 /// let chunks = vec![
-///     "INFO: Starting up",
-///     "ERROR: Connection failed",
-///     "INFO: Retrying",
-///     "ERROR: Timeout",
+///     "INFO: Starting up".to_string(),
+///     "ERROR: Connection failed".to_string(),
+///     "INFO: Retrying".to_string(),
+///     "ERROR: Timeout".to_string(),
 /// ];
 ///
-/// let result = engine.search_all(chunks.iter().map(|s| s.to_string()));
-/// assert_eq!(result.match_count(), 2);
+/// // Search using accessor closure - only new chunks are searched
+/// let matches = engine.search(chunks.len(), |i| &chunks[i]);
+/// assert_eq!(matches.len(), 2);
 ///
 /// // Navigate matches
 /// assert_eq!(engine.current_match_index(), None);
@@ -117,7 +80,8 @@ impl SearchEngine {
 
     /// Set the search pattern
     ///
-    /// This clears all existing matches and resets the searched chunk count.
+    /// This clears all existing matches and resets the searched chunk count,
+    /// so the next `search()` call will search all chunks.
     pub fn set_pattern(&mut self, pattern: &str, mode: PatternMode) -> Result<(), String> {
         self.matcher.set_pattern(pattern, mode)?;
         self.matches.clear();
@@ -127,9 +91,10 @@ impl SearchEngine {
     }
 
     /// Update the pattern mode, keeping the same pattern string
+    ///
+    /// This triggers a full re-search on the next `search()` call.
     pub fn set_mode(&mut self, mode: PatternMode) -> Result<(), String> {
         self.matcher.set_mode(mode)?;
-        // Re-search is needed after mode change
         self.matches.clear();
         self.current_match = None;
         self.searched_chunk_count = 0;
@@ -164,6 +129,63 @@ impl SearchEngine {
         self.matcher.error()
     }
 
+    /// Search chunks for the current pattern
+    ///
+    /// This automatically handles incremental search - only chunks that haven't
+    /// been searched yet will be processed. Call `invalidate()` to force a
+    /// full re-search.
+    ///
+    /// # Arguments
+    ///
+    /// * `total_chunks` - Total number of chunks available
+    /// * `get_chunk` - Accessor closure to get the encoded string for a chunk index
+    ///
+    /// # Returns
+    ///
+    /// Slice of all matches found (including previously found matches)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use serial_core::search::{SearchEngine, PatternMode};
+    /// use std::collections::VecDeque;
+    ///
+    /// let mut engine = SearchEngine::new();
+    /// engine.set_pattern("test", PatternMode::Normal).unwrap();
+    ///
+    /// let chunks: VecDeque<String> = ["test 1", "no match", "test 2"]
+    ///     .iter()
+    ///     .map(|s| s.to_string())
+    ///     .collect();
+    ///
+    /// let matches = engine.search(chunks.len(), |i| &chunks[i]);
+    /// assert_eq!(matches.len(), 2);
+    /// ```
+    pub fn search<'a, F>(&mut self, total_chunks: usize, get_chunk: F) -> &[SearchMatch]
+    where
+        F: Fn(usize) -> &'a str,
+    {
+        if !self.matcher.has_pattern() {
+            return &self.matches;
+        }
+
+        // Only search chunks we haven't seen yet
+        for chunk_idx in self.searched_chunk_count..total_chunks {
+            let encoded = get_chunk(chunk_idx);
+            let chunk_matches = self.matcher.find_matches(encoded);
+            for (byte_start, byte_end) in chunk_matches {
+                self.matches.push(SearchMatch {
+                    chunk_index: chunk_idx,
+                    byte_start,
+                    byte_end,
+                });
+            }
+        }
+
+        self.searched_chunk_count = total_chunks;
+        &self.matches
+    }
+
     /// Get all matches
     pub fn matches(&self) -> &[SearchMatch] {
         &self.matches
@@ -182,72 +204,6 @@ impl SearchEngine {
     /// Get the current match (if any)
     pub fn current_match(&self) -> Option<&SearchMatch> {
         self.current_match.and_then(|idx| self.matches.get(idx))
-    }
-
-    /// Search all chunks from scratch
-    ///
-    /// The iterator should yield encoded strings for each chunk.
-    /// Returns a SearchResult with all matches found.
-    pub fn search_all<I>(&mut self, chunks: I) -> SearchResult
-    where
-        I: Iterator<Item = String>,
-    {
-        self.matches.clear();
-        self.current_match = None;
-        self.searched_chunk_count = 0;
-
-        if !self.matcher.has_pattern() {
-            return SearchResult::ok(vec![]);
-        }
-
-        for (chunk_idx, encoded) in chunks.enumerate() {
-            let chunk_matches = self.matcher.find_matches(&encoded);
-            for (byte_start, byte_end) in chunk_matches {
-                self.matches.push(SearchMatch {
-                    chunk_index: chunk_idx,
-                    byte_start,
-                    byte_end,
-                });
-            }
-            self.searched_chunk_count = chunk_idx + 1;
-        }
-
-        SearchResult::ok(self.matches.clone())
-    }
-
-    /// Incrementally search new chunks
-    ///
-    /// Only searches chunks that haven't been searched yet.
-    /// The `total_chunks` parameter is the total number of chunks available.
-    /// The `get_encoded` closure is called for each new chunk index to get
-    /// the encoded string.
-    ///
-    /// Returns the number of new matches found.
-    pub fn search_incremental<F>(&mut self, total_chunks: usize, get_encoded: F) -> usize
-    where
-        F: Fn(usize) -> String,
-    {
-        if !self.matcher.has_pattern() {
-            return 0;
-        }
-
-        let mut new_match_count = 0;
-
-        for chunk_idx in self.searched_chunk_count..total_chunks {
-            let encoded = get_encoded(chunk_idx);
-            let chunk_matches = self.matcher.find_matches(&encoded);
-            for (byte_start, byte_end) in chunk_matches {
-                self.matches.push(SearchMatch {
-                    chunk_index: chunk_idx,
-                    byte_start,
-                    byte_end,
-                });
-                new_match_count += 1;
-            }
-        }
-
-        self.searched_chunk_count = total_chunks;
-        new_match_count
     }
 
     /// Handle buffer truncation when old chunks are dropped
@@ -271,7 +227,6 @@ impl SearchEngine {
 
         // Adjust current match index
         if let Some(current) = self.current_match {
-            // Find if current match was dropped
             if self.matches.is_empty() {
                 self.current_match = None;
             } else if current >= self.matches.len() {
@@ -286,7 +241,8 @@ impl SearchEngine {
 
     /// Invalidate search results (e.g., when encoding changes)
     ///
-    /// Keeps the pattern but clears matches, requiring a re-search.
+    /// Keeps the pattern but clears matches, requiring a full re-search
+    /// on the next `search()` call.
     pub fn invalidate(&mut self) {
         self.matches.clear();
         self.current_match = None;
@@ -365,12 +321,7 @@ impl SearchEngine {
         }
 
         match self.current_match {
-            Some(idx) => format!(
-                "Match {}/{}: {}",
-                idx + 1,
-                self.matches.len(),
-                pattern
-            ),
+            Some(idx) => format!("Match {}/{}: {}", idx + 1, self.matches.len(), pattern),
             None => format!(
                 "Found {} match{}",
                 self.matches.len(),
@@ -383,6 +334,7 @@ impl SearchEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
 
     fn sample_chunks() -> Vec<String> {
         vec![
@@ -394,33 +346,93 @@ mod tests {
     }
 
     #[test]
-    fn test_search_all_literal() {
+    fn test_search_literal() {
         let mut engine = SearchEngine::new();
-        engine.set_pattern("error", PatternMode::Normal).unwrap();
+        engine.set_pattern("Error", PatternMode::Normal).unwrap();
 
-        let result = engine.search_all(sample_chunks().into_iter());
-        assert!(result.is_ok());
-        assert_eq!(result.match_count(), 2);
+        let chunks = sample_chunks();
+        let matches = engine.search(chunks.len(), |i| &chunks[i]);
 
-        // Verify match positions
+        assert_eq!(matches.len(), 2);
         assert_eq!(engine.matches()[0].chunk_index, 1);
         assert_eq!(engine.matches()[1].chunk_index, 3);
     }
 
     #[test]
-    fn test_search_all_regex() {
+    fn test_search_regex() {
         let mut engine = SearchEngine::new();
-        engine.set_pattern(r"Error:\s+\w+", PatternMode::Regex).unwrap();
+        engine
+            .set_pattern(r"Error:\s+\w+", PatternMode::Regex)
+            .unwrap();
 
-        let result = engine.search_all(sample_chunks().into_iter());
-        assert_eq!(result.match_count(), 2);
+        let chunks = sample_chunks();
+        let matches = engine.search(chunks.len(), |i| &chunks[i]);
+
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn test_search_with_vecdeque() {
+        let mut engine = SearchEngine::new();
+        engine.set_pattern("test", PatternMode::Normal).unwrap();
+
+        let chunks: VecDeque<String> = ["test one", "no match", "test two"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let matches = engine.search(chunks.len(), |i| &chunks[i]);
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn test_incremental_search() {
+        let mut engine = SearchEngine::new();
+        engine.set_pattern("test", PatternMode::Normal).unwrap();
+
+        // Initial search with 2 chunks
+        let chunks = vec!["test one".to_string(), "no match".to_string()];
+        engine.search(chunks.len(), |i| &chunks[i]);
+        assert_eq!(engine.match_count(), 1);
+
+        // Add more chunks and search again - only new chunks are searched
+        let all_chunks = vec![
+            "test one".to_string(),
+            "no match".to_string(),
+            "test two".to_string(),
+            "test three".to_string(),
+        ];
+
+        let matches = engine.search(all_chunks.len(), |i| &all_chunks[i]);
+        assert_eq!(matches.len(), 3); // 1 original + 2 new
+    }
+
+    #[test]
+    fn test_invalidate_forces_full_research() {
+        let mut engine = SearchEngine::new();
+        engine.set_pattern("test", PatternMode::Normal).unwrap();
+
+        let chunks = vec!["test".to_string()];
+        engine.search(chunks.len(), |i| &chunks[i]);
+        assert_eq!(engine.match_count(), 1);
+
+        // Invalidate and search again
+        engine.invalidate();
+        assert_eq!(engine.match_count(), 0);
+        assert!(engine.has_pattern()); // Pattern preserved
+
+        // Search again - should find the match
+        engine.search(chunks.len(), |i| &chunks[i]);
+        assert_eq!(engine.match_count(), 1);
     }
 
     #[test]
     fn test_navigation() {
         let mut engine = SearchEngine::new();
         engine.set_pattern("Error", PatternMode::Normal).unwrap();
-        engine.search_all(sample_chunks().into_iter());
+
+        let chunks = sample_chunks();
+        engine.search(chunks.len(), |i| &chunks[i]);
 
         assert_eq!(engine.current_match_index(), None);
 
@@ -446,29 +458,6 @@ mod tests {
     }
 
     #[test]
-    fn test_incremental_search() {
-        let mut engine = SearchEngine::new();
-        engine.set_pattern("test", PatternMode::Normal).unwrap();
-
-        // Initial search with 2 chunks
-        let chunks1 = vec!["test one".to_string(), "no match".to_string()];
-        engine.search_all(chunks1.into_iter());
-        assert_eq!(engine.match_count(), 1);
-
-        // Add more chunks incrementally
-        let all_chunks = vec![
-            "test one".to_string(),
-            "no match".to_string(),
-            "test two".to_string(),
-            "test three".to_string(),
-        ];
-
-        let new_matches = engine.search_incremental(4, |idx| all_chunks[idx].clone());
-        assert_eq!(new_matches, 2); // Found 2 more
-        assert_eq!(engine.match_count(), 3); // Total 3
-    }
-
-    #[test]
     fn test_buffer_truncation() {
         let mut engine = SearchEngine::new();
         engine.set_pattern("match", PatternMode::Normal).unwrap();
@@ -479,7 +468,7 @@ mod tests {
             "match 2".to_string(),
             "match 3".to_string(),
         ];
-        engine.search_all(chunks.into_iter());
+        engine.search(chunks.len(), |i| &chunks[i]);
         assert_eq!(engine.match_count(), 4);
 
         // Drop first 2 chunks
@@ -497,7 +486,7 @@ mod tests {
         engine.set_pattern("a", PatternMode::Normal).unwrap();
 
         let chunks = vec!["aaa".to_string(), "bbb".to_string(), "aba".to_string()];
-        engine.search_all(chunks.into_iter());
+        engine.search(chunks.len(), |i| &chunks[i]);
 
         // Chunk 0 has 3 matches
         let chunk0_matches: Vec<_> = engine.matches_for_chunk(0).collect();
@@ -513,21 +502,6 @@ mod tests {
     }
 
     #[test]
-    fn test_invalidate() {
-        let mut engine = SearchEngine::new();
-        engine.set_pattern("test", PatternMode::Normal).unwrap();
-        engine.search_all(vec!["test".to_string()].into_iter());
-
-        assert_eq!(engine.match_count(), 1);
-        assert!(engine.has_pattern());
-
-        engine.invalidate();
-
-        assert_eq!(engine.match_count(), 0);
-        assert!(engine.has_pattern()); // Pattern preserved
-    }
-
-    #[test]
     fn test_status_message() {
         let mut engine = SearchEngine::new();
 
@@ -536,16 +510,46 @@ mod tests {
 
         // Pattern with no matches
         engine.set_pattern("xyz", PatternMode::Normal).unwrap();
-        engine.search_all(vec!["abc".to_string()].into_iter());
+        let chunks = vec!["abc".to_string()];
+        engine.search(chunks.len(), |i| &chunks[i]);
         assert!(engine.status_message().contains("not found"));
 
         // Pattern with matches
         engine.set_pattern("abc", PatternMode::Normal).unwrap();
-        engine.search_all(vec!["abc def abc".to_string()].into_iter());
+        let chunks = vec!["abc def abc".to_string()];
+        engine.search(chunks.len(), |i| &chunks[i]);
         assert!(engine.status_message().contains("2 matches"));
 
         // Navigate to match
         engine.goto_next_match();
         assert!(engine.status_message().contains("Match 1/2"));
+    }
+
+    #[test]
+    fn test_no_pattern_returns_empty() {
+        let mut engine = SearchEngine::new();
+
+        let chunks = vec!["test".to_string()];
+        let matches = engine.search(chunks.len(), |i| &chunks[i]);
+
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn test_set_pattern_resets_search() {
+        let mut engine = SearchEngine::new();
+        engine.set_pattern("test", PatternMode::Normal).unwrap();
+
+        let chunks = vec!["test".to_string(), "test".to_string()];
+        engine.search(chunks.len(), |i| &chunks[i]);
+        assert_eq!(engine.match_count(), 2);
+
+        // Set new pattern - should reset
+        engine.set_pattern("other", PatternMode::Normal).unwrap();
+        assert_eq!(engine.match_count(), 0);
+
+        // Search with new pattern
+        engine.search(chunks.len(), |i| &chunks[i]);
+        assert_eq!(engine.match_count(), 0); // "other" not found
     }
 }

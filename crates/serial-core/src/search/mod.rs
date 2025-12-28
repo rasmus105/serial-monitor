@@ -13,5 +13,5 @@
 mod engine;
 mod pattern;
 
-pub use engine::{SearchEngine, SearchMatch, SearchResult};
+pub use engine::{SearchEngine, SearchMatch};
 pub use pattern::{PatternMatcher, PatternMode};

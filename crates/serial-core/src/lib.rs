@@ -34,5 +34,5 @@ pub use file_saver::{
 };
 pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
 pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
-pub use search::{PatternMatcher, PatternMode, SearchEngine, SearchMatch, SearchResult};
+pub use search::{PatternMatcher, PatternMode, SearchEngine, SearchMatch};
 pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};
