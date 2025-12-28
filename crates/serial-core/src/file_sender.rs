@@ -8,7 +8,7 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::session::SessionHandle;
 
 /// Configuration for file sending
@@ -118,13 +118,8 @@ pub async fn send_file(
     let path = path.as_ref().to_path_buf();
 
     // Open file and get size
-    let file = File::open(&path)
-        .await
-        .map_err(|e| Error::Io(e.to_string()))?;
-    let metadata = file
-        .metadata()
-        .await
-        .map_err(|e| Error::Io(e.to_string()))?;
+    let file = File::open(&path).await?;
+    let metadata = file.metadata().await?;
     let total_bytes = metadata.len();
     let total_chunks = (total_bytes as usize).div_ceil(config.chunk_size);
 
