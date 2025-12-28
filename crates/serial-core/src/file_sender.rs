@@ -19,7 +19,7 @@ pub struct FileSendConfig {
     /// Delay between chunks
     pub chunk_delay: Duration,
     /// Whether to loop the file continuously
-    pub continuous: bool,
+    pub repeat: bool,
 }
 
 impl Default for FileSendConfig {
@@ -27,33 +27,13 @@ impl Default for FileSendConfig {
         Self {
             chunk_size: 64,
             chunk_delay: Duration::from_millis(10),
-            continuous: false,
+            repeat: false,
         }
     }
 }
 
-impl FileSendConfig {
-    /// Create a new config with the specified chunk size
-    pub fn with_chunk_size(mut self, size: usize) -> Self {
-        self.chunk_size = size;
-        self
-    }
-
-    /// Create a new config with the specified delay
-    pub fn with_delay(mut self, delay: Duration) -> Self {
-        self.chunk_delay = delay;
-        self
-    }
-
-    /// Create a new config with continuous mode
-    pub fn with_continuous(mut self, continuous: bool) -> Self {
-        self.continuous = continuous;
-        self
-    }
-}
-
 /// Progress update during file sending
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct FileSendProgress {
     /// Total bytes in the file
     pub total_bytes: u64,
@@ -67,7 +47,7 @@ pub struct FileSendProgress {
     pub complete: bool,
     /// Error message if failed
     pub error: Option<String>,
-    /// Number of loops completed (for continuous mode)
+    /// Number of loops completed (for repeat mode)
     pub loops_completed: usize,
 }
 
@@ -160,46 +140,35 @@ async fn send_file_task(
     progress_tx: mpsc::Sender<FileSendProgress>,
     mut cancel_rx: mpsc::Receiver<()>,
 ) {
-    let mut loops_completed = 0;
+    let mut progress = FileSendProgress {
+        total_bytes,
+        total_chunks,
+        ..Default::default()
+    };
 
     loop {
+        // ensure reset
+        progress.bytes_sent = 0;
+        progress.chunks_sent = 0;
+
         // Open file for each loop iteration
         let mut file = match File::open(&path).await {
             Ok(f) => f,
             Err(e) => {
-                let _ = progress_tx
-                    .send(FileSendProgress {
-                        total_bytes,
-                        bytes_sent: 0,
-                        chunks_sent: 0,
-                        total_chunks,
-                        complete: true,
-                        error: Some(e.to_string()),
-                        loops_completed,
-                    })
-                    .await;
+                progress.error = Some(e.to_string());
+                progress.complete = true;
+                let _ = progress_tx.send(progress).await;
                 return;
             }
         };
-
-        let mut bytes_sent = 0u64;
-        let mut chunks_sent = 0usize;
         let mut buffer = vec![0u8; config.chunk_size];
 
         loop {
             // Check for cancellation
             if cancel_rx.try_recv().is_ok() {
-                let _ = progress_tx
-                    .send(FileSendProgress {
-                        total_bytes,
-                        bytes_sent,
-                        chunks_sent,
-                        total_chunks,
-                        complete: true,
-                        error: Some("Cancelled".to_string()),
-                        loops_completed,
-                    })
-                    .await;
+                progress.complete = true;
+                progress.error = Some("Cancelled".to_string());
+                let _ = progress_tx.send(progress).await;
                 return;
             }
 
@@ -208,17 +177,9 @@ async fn send_file_task(
                 Ok(0) => break, // EOF
                 Ok(n) => n,
                 Err(e) => {
-                    let _ = progress_tx
-                        .send(FileSendProgress {
-                            total_bytes,
-                            bytes_sent,
-                            chunks_sent,
-                            total_chunks,
-                            complete: true,
-                            error: Some(e.to_string()),
-                            loops_completed,
-                        })
-                        .await;
+                    progress.complete = true;
+                    progress.error = Some(e.to_string());
+                    let _ = progress_tx.send(progress).await;
                     return;
                 }
             };
@@ -230,35 +191,17 @@ async fn send_file_task(
                 .await
                 .is_err()
             {
-                let _ = progress_tx
-                    .send(FileSendProgress {
-                        total_bytes,
-                        bytes_sent,
-                        chunks_sent,
-                        total_chunks,
-                        complete: true,
-                        error: Some("Session closed".to_string()),
-                        loops_completed,
-                    })
-                    .await;
+                progress.complete = true;
+                progress.error = Some("Session closed".to_string());
+                let _ = progress_tx.send(progress).await;
                 return;
             }
 
-            bytes_sent += n as u64;
-            chunks_sent += 1;
+            progress.bytes_sent += n as u64;
+            progress.chunks_sent += 1;
 
             // Send progress update
-            let _ = progress_tx
-                .send(FileSendProgress {
-                    total_bytes,
-                    bytes_sent,
-                    chunks_sent,
-                    total_chunks,
-                    complete: false,
-                    error: None,
-                    loops_completed,
-                })
-                .await;
+            let _ = progress_tx.send(progress.clone()).await;
 
             // Delay between chunks
             if config.chunk_delay > Duration::ZERO {
@@ -266,35 +209,16 @@ async fn send_file_task(
             }
         }
 
-        loops_completed += 1;
+        progress.loops_completed += 1;
 
         // Send completion or loop progress
-        if !config.continuous {
-            let _ = progress_tx
-                .send(FileSendProgress {
-                    total_bytes,
-                    bytes_sent,
-                    chunks_sent,
-                    total_chunks,
-                    complete: true,
-                    error: None,
-                    loops_completed,
-                })
-                .await;
+        if !config.repeat {
+            progress.complete = true;
+            let _ = progress_tx.send(progress).await;
             return;
         }
 
-        // In continuous mode, send progress and continue
-        let _ = progress_tx
-            .send(FileSendProgress {
-                total_bytes,
-                bytes_sent,
-                chunks_sent,
-                total_chunks,
-                complete: false,
-                error: None,
-                loops_completed,
-            })
-            .await;
+        // In repeat mode, send progress and continue
+        let _ = progress_tx.send(progress.clone()).await;
     }
 }
