@@ -233,16 +233,26 @@ impl DataBuffer {
 
             // Adjust filtered indices
             // Remove index 0 if present, then subtract 1 from all remaining
-            if let Some(first) = self.filtered_indices.first() {
-                if *first == 0 {
-                    self.filtered_indices.remove(0);
-                }
+            if let Some(first) = self.filtered_indices.first()
+                && *first == 0
+            {
+                self.filtered_indices.remove(0);
             }
             for idx in &mut self.filtered_indices {
                 *idx -= 1;
             }
 
             self.search.invalidate();
+
+            // Trim graph data to keep it in sync with buffer's time window
+            if let Some(ref mut graph) = self.graph {
+                if let Some(oldest) = self.raw_chunks.front() {
+                    graph.trim_before(oldest.timestamp);
+                } else {
+                    // Buffer is now empty, clear the graph
+                    graph.clear();
+                }
+            }
         }
     }
 

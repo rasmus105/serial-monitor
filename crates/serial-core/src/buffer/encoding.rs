@@ -3,6 +3,8 @@
 //! Provides multiple encoding modes with configurable formatting options
 //! for hexadecimal and binary representations.
 
+use std::fmt::Write;
+
 use strum::{AsRefStr, Display, EnumMessage};
 
 /// Formatting options for hexadecimal display
@@ -83,25 +85,36 @@ pub fn encode_utf8(data: &[u8]) -> String {
     String::from_utf8_lossy(data).into_owned()
 }
 
-/// Encode bytes as ASCII, replacing non-printable characters with dots
+/// Encode bytes as ASCII, replacing non-printable characters with escape sequences
 ///
 /// Printable ASCII range: 32-126 (space through tilde)
-/// Everything else (0-31, 127, 128-255) becomes '.'
+/// Common control characters (\n, \r, \t, \0) use their escape sequences.
+/// Everything else (0-31, 127, 128-255) becomes hex escapes like `\xFF`.
 pub fn encode_ascii(data: &[u8]) -> String {
-    let mut result = String::new();
-    for b in data {
+    if data.is_empty() {
+        return String::new();
+    }
+
+    // Estimate capacity - most bytes are likely printable (1 char each)
+    // Escapes are 2-4 chars, so this is a reasonable starting point
+    let mut result = String::with_capacity(data.len());
+
+    for &b in data {
         match b {
             // Printable ASCII
-            0x20..=0x7E => result.push(*b as char),
+            0x20..=0x7E => result.push(b as char),
             // Common control characters
             b'\n' => result.push_str("\\n"),
             b'\r' => result.push_str("\\r"),
             b'\t' => result.push_str("\\t"),
             b'\0' => result.push_str("\\0"),
             // Everything else as hex escape
-            _ => result.push_str(&format!("\\x{:02X}", b)),
+            _ => {
+                let _ = write!(result, "\\x{:02X}", b);
+            }
         }
     }
+
     result
 }
 
@@ -120,28 +133,46 @@ pub fn encode_hex(data: &[u8], format: HexFormat) -> String {
         return String::new();
     }
 
-    let hex_chars: Vec<String> = data
-        .iter()
-        .map(|&b| {
-            if format.uppercase {
-                format!("{:02X}", b)
-            } else {
-                format!("{:02x}", b)
-            }
-        })
-        .collect();
+    // Calculate exact capacity needed
+    let capacity = if format.group_size == 0 {
+        // 2 hex chars per byte, no separators
+        data.len() * 2
+    } else {
+        // 2 hex chars per byte + separators between groups
+        let group_size = format.group_size as usize;
+        let num_groups = data.len().div_ceil(group_size);
+        let num_separators = num_groups.saturating_sub(1);
+        data.len() * 2 + num_separators
+    };
+
+    let mut result = String::with_capacity(capacity);
 
     if format.group_size == 0 {
-        // No grouping - concatenate all hex pairs
-        hex_chars.join("")
+        // No grouping - just write all hex pairs
+        for &b in data {
+            if format.uppercase {
+                let _ = write!(result, "{:02X}", b);
+            } else {
+                let _ = write!(result, "{:02x}", b);
+            }
+        }
     } else {
-        // Group bytes and join with separator
-        hex_chars
-            .chunks(format.group_size as usize)
-            .map(|chunk| chunk.join(""))
-            .collect::<Vec<_>>()
-            .join(&format.separator.to_string())
+        // Group bytes with separators
+        let group_size = format.group_size as usize;
+        for (i, &b) in data.iter().enumerate() {
+            // Add separator before starting a new group (except the first)
+            if i > 0 && i % group_size == 0 {
+                result.push(format.separator);
+            }
+            if format.uppercase {
+                let _ = write!(result, "{:02X}", b);
+            } else {
+                let _ = write!(result, "{:02x}", b);
+            }
+        }
     }
+
+    result
 }
 
 /// Encode bytes as binary with the specified format
@@ -159,21 +190,43 @@ pub fn encode_binary(data: &[u8], format: BinaryFormat) -> String {
         return String::new();
     }
 
-    // Convert all bytes to binary string (8 bits each)
-    let all_bits: String = data.iter().map(|&b| format!("{:08b}", b)).collect();
+    let total_bits = data.len() * 8;
+
+    // Calculate exact capacity needed
+    let capacity = if format.group_size == 0 {
+        total_bits
+    } else {
+        let group_size = format.group_size as usize;
+        let num_groups = total_bits.div_ceil(group_size);
+        let num_separators = num_groups.saturating_sub(1);
+        total_bits + num_separators
+    };
+
+    let mut result = String::with_capacity(capacity);
 
     if format.group_size == 0 {
-        // No grouping
-        all_bits
+        // No grouping - write all bits directly
+        for &b in data {
+            let _ = write!(result, "{:08b}", b);
+        }
     } else {
-        // Group bits and join with separator
-        all_bits
-            .as_bytes()
-            .chunks(format.group_size as usize)
-            .map(|chunk| std::str::from_utf8(chunk).unwrap())
-            .collect::<Vec<_>>()
-            .join(&format.separator.to_string())
+        // Write bits with separators at group boundaries
+        let group_size = format.group_size as usize;
+        let mut bit_count = 0;
+
+        for &b in data {
+            for bit_pos in (0..8).rev() {
+                // Add separator before starting a new group (except the first)
+                if bit_count > 0 && bit_count % group_size == 0 {
+                    result.push(format.separator);
+                }
+                result.push(if (b >> bit_pos) & 1 == 1 { '1' } else { '0' });
+                bit_count += 1;
+            }
+        }
     }
+
+    result
 }
 
 #[cfg(test)]

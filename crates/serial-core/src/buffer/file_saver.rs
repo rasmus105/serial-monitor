@@ -266,10 +266,10 @@ async fn file_saver_task(
 /// Write a single data chunk to the file
 fn write_chunk(writer: &mut BufWriter<File>, chunk: &RawChunk, encoding: Encoding) -> std::io::Result<()> {
     // For binary encoding with default format, write raw bytes without metadata
-    if let Encoding::Binary(format) = encoding {
-        if format == super::encoding::BinaryFormat::default() {
-            return writer.write_all(&chunk.data);
-        }
+    if let Encoding::Binary(format) = encoding
+        && format == super::encoding::BinaryFormat::default()
+    {
+        return writer.write_all(&chunk.data);
     }
 
     // Text formats: include timestamp and direction

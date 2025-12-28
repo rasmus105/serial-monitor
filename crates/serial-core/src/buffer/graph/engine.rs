@@ -253,6 +253,45 @@ impl GraphEngine {
         self.chunks_processed = 0;
         self.next_color = 0;
     }
+
+    /// Trim data points older than the given timestamp
+    ///
+    /// Called by DataBuffer when old chunks are truncated to keep graph
+    /// data in sync with the buffer's time window.
+    pub(crate) fn trim_before(&mut self, cutoff: SystemTime) {
+        // Trim series data points
+        for series in self.series.values_mut() {
+            // Remove points from the front while they're older than cutoff
+            while let Some(front) = series.points.front() {
+                if front.timestamp < cutoff {
+                    series.points.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Remove empty series
+        self.series.retain(|_, series| !series.points.is_empty());
+
+        // Trim packet rate samples
+        let cutoff_nanos = cutoff
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_nanos() as u64;
+
+        while let Some(front) = self.config.packet_rate.samples.front() {
+            // Keep samples whose window ends after the cutoff
+            // Window end = window_start + window_size
+            let window_end_nanos =
+                front.window_start_nanos + self.config.packet_rate.window_size.as_nanos() as u64;
+            if window_end_nanos < cutoff_nanos {
+                self.config.packet_rate.samples.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 // ============================================================================
