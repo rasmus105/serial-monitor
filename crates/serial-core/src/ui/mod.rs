@@ -6,6 +6,7 @@
 //! These are presentation helpers that build on top of core types - they
 //! don't affect core functionality, only how data is displayed to users.
 
+pub mod encoding;
 pub mod serial_config;
 mod size;
 mod timestamp;
