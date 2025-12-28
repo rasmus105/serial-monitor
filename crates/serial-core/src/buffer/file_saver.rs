@@ -379,6 +379,7 @@ impl FileSaverHandle {
 ///
 /// This is separate from FileSaverHandle to avoid the I/O task needing
 /// the full handle (which has Drop behavior that would stop saving).
+#[derive(Clone)]
 pub(crate) struct AutoSaveSender {
     tx: mpsc::Sender<FileSaverCommand>,
     directions: DirectionFilter,
@@ -552,30 +553,46 @@ pub(super) fn start_streaming_saver(
 }
 
 /// Async task that handles streaming writes.
+/// Flushes every 1 second to ensure the max file saving delay is 1 second (instead
+/// of just using the internal flushing logic of `BufWriter`, which only flushes
+/// after x bytes)
 async fn streaming_saver_task(
     mut writer: BufWriter<File>,
     mut command_rx: mpsc::Receiver<FileSaverCommand>,
     format: SaveFormat,
     file_path: PathBuf,
 ) {
-    while let Some(cmd) = command_rx.recv().await {
-        match cmd {
-            FileSaverCommand::Write(chunk) => {
-                if let Err(e) = write_chunk(&mut writer, &chunk, &format) {
-                    eprintln!("Error writing to file {:?}: {}", file_path, e);
-                    break;
+    use tokio::time::{interval, Duration};
+
+    let mut flush_interval = interval(Duration::from_secs(1));
+
+    loop {
+        tokio::select! {
+            biased;
+
+            cmd = command_rx.recv() => {
+                match cmd {
+                    Some(FileSaverCommand::Write(chunk)) => {
+                        if let Err(e) = write_chunk(&mut writer, &chunk, &format) {
+                            eprintln!("Error writing to file {:?}: {}", file_path, e);
+                            break;
+                        }
+                    }
+                    Some(FileSaverCommand::Stop) | None => {
+                        break;
+                    }
                 }
-                // Flush after each write for reliability
+            }
+
+            _ = flush_interval.tick() => {
                 if let Err(e) = writer.flush() {
                     eprintln!("Error flushing file {:?}: {}", file_path, e);
                     break;
                 }
             }
-            FileSaverCommand::Stop => {
-                break;
-            }
         }
     }
+
     let _ = writer.flush();
 }
 
@@ -631,7 +648,8 @@ pub(crate) fn start_auto_save(
     })
 }
 
-/// Rotate session files, keeping only the most recent `max_sessions`.
+/// Rotate session files, keeping only the most recent `max_sessions` (otherwise
+/// we could end up cluttering up the user's system with these files)
 fn rotate_session_files(directory: &Path, max_sessions: usize) -> std::io::Result<()> {
     if max_sessions == 0 {
         return Ok(());
@@ -701,7 +719,7 @@ pub fn format_iso8601_timestamp(time: SystemTime) -> String {
     )
 }
 
-/// Convert days since Unix epoch to year, month, day.
+/// Convert days since Unix epoch to year, month, day (Howard Hinnant's algorithm).
 fn days_to_ymd(days: i64) -> (i32, u32, u32) {
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
