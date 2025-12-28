@@ -203,12 +203,14 @@ mod tests {
 
     #[test]
     fn ascii_non_printable_replaced() {
-        // Control characters
-        assert_eq!(encode_ascii(&[0, 31, 127]), "...");
-        // High bytes
-        assert_eq!(encode_ascii(&[128, 255]), "..");
+        // Control characters - shown as escape sequences
+        assert_eq!(encode_ascii(&[0, 31, 127]), "\\0\\x1F\\x7F");
+        // High bytes - shown as hex escapes
+        assert_eq!(encode_ascii(&[128, 255]), "\\x80\\xFF");
         // Mixed
-        assert_eq!(encode_ascii(&[b'H', 0x00, b'i', 0xFF]), "H.i.");
+        assert_eq!(encode_ascii(&[b'H', 0x00, b'i', 0xFF]), "H\\0i\\xFF");
+        // Common escapes
+        assert_eq!(encode_ascii(&[b'\n', b'\r', b'\t']), "\\n\\r\\t");
     }
 
     #[test]

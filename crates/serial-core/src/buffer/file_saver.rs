@@ -2,6 +2,8 @@
 //!
 //! Provides the ability to save serial traffic to files in various formats.
 //! The file saver runs as a background task and receives data chunks to write.
+//!
+//! This module is internal to the buffer - `DataBuffer` exposes the public API.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -10,94 +12,50 @@ use std::time::SystemTime;
 
 use tokio::sync::mpsc;
 
-use strum::{AsRefStr, Display, VariantArray};
-
-use crate::buffer::Direction;
-use crate::encoding::{encode, Encoding};
-
-/// Format for saving serial data to files
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, AsRefStr, VariantArray)]
-pub enum SaveFormat {
-    /// UTF-8 text with timestamps and direction markers
-    #[default]
-    #[strum(serialize = "UTF-8")]
-    Utf8,
-    /// ASCII text with escape sequences for non-printable characters
-    #[strum(serialize = "ASCII")]
-    Ascii,
-    /// Hexadecimal representation
-    #[strum(serialize = "HEX")]
-    Hex,
-    /// Raw binary data (no encoding, no metadata)
-    #[strum(serialize = "Raw")]
-    Raw,
-}
-
-impl SaveFormat {
-    /// Get all available formats
-    pub fn all() -> &'static [SaveFormat] {
-        Self::VARIANTS
-    }
-
-    /// Get the file extension for this format
-    pub fn extension(&self) -> &'static str {
-        match self {
-            SaveFormat::Utf8 => "txt",
-            SaveFormat::Ascii => "txt",
-            SaveFormat::Hex => "hex",
-            SaveFormat::Raw => "bin",
-        }
-    }
-
-    /// Convert to the corresponding Encoding (for non-raw formats)
-    fn as_encoding(&self) -> Option<Encoding> {
-        match self {
-            SaveFormat::Utf8 => Some(Encoding::Utf8),
-            SaveFormat::Ascii => Some(Encoding::Ascii),
-            SaveFormat::Hex => Some(Encoding::Hex),
-            SaveFormat::Raw => None,
-        }
-    }
-}
-
-/// Data chunk for file saving (contains raw bytes + metadata)
-#[derive(Debug, Clone)]
-pub struct SaveChunk {
-    pub data: Vec<u8>,
-    pub direction: Direction,
-    pub timestamp: SystemTime,
-}
+use super::chunk::{Direction, RawChunk};
+use super::encoding::{encode, Encoding};
 
 /// Commands sent to the file saver task
 #[derive(Debug)]
-pub enum FileSaverCommand {
+pub(super) enum FileSaverCommand {
     /// Write a data chunk to the file
-    Write(SaveChunk),
-    /// Change the save format (starts appending with new format)
-    ChangeFormat(SaveFormat),
+    Write(RawChunk),
     /// Stop saving and close the file
     Stop,
 }
 
-/// Handle for interacting with an active file saver
-pub struct FileSaverHandle {
+/// Internal handle for interacting with an active file saver
+pub(super) struct FileSaverHandle {
     command_tx: mpsc::Sender<FileSaverCommand>,
     file_path: PathBuf,
+    encoding: Encoding,
+}
+
+impl std::fmt::Debug for FileSaverHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileSaverHandle")
+            .field("file_path", &self.file_path)
+            .field("encoding", &self.encoding)
+            .finish_non_exhaustive()
+    }
 }
 
 impl FileSaverHandle {
-    /// Write a data chunk to the file
-    pub fn write(&self, data: Vec<u8>, direction: Direction, timestamp: SystemTime) -> Result<(), crate::Error> {
+    /// Write a raw chunk to the file
+    pub fn write(&self, chunk: &RawChunk) -> Result<(), crate::Error> {
         self.command_tx
-            .try_send(FileSaverCommand::Write(SaveChunk { data, direction, timestamp }))
+            .try_send(FileSaverCommand::Write(chunk.clone()))
             .map_err(|_| crate::Error::ChannelSend)
     }
 
-    /// Change the save format
-    pub fn change_format(&self, format: SaveFormat) -> Result<(), crate::Error> {
-        self.command_tx
-            .try_send(FileSaverCommand::ChangeFormat(format))
-            .map_err(|_| crate::Error::ChannelSend)
+    /// Get the file path being written to
+    pub fn file_path(&self) -> &Path {
+        &self.file_path
+    }
+
+    /// Get the encoding being used
+    pub fn encoding(&self) -> Encoding {
+        self.encoding
     }
 
     /// Stop saving and close the file
@@ -105,11 +63,6 @@ impl FileSaverHandle {
         self.command_tx
             .try_send(FileSaverCommand::Stop)
             .map_err(|_| crate::Error::ChannelSend)
-    }
-
-    /// Get the file path being written to
-    pub fn file_path(&self) -> &Path {
-        &self.file_path
     }
 }
 
@@ -127,8 +80,8 @@ pub struct FileSaveConfig {
     pub directory: PathBuf,
     /// Custom filename (None = auto-generated)
     pub filename: Option<String>,
-    /// Format for saving data
-    pub format: SaveFormat,
+    /// Encoding for saving data (determines file format)
+    pub encoding: Encoding,
     /// Port name (used for auto-generated filenames)
     pub port_name: String,
 }
@@ -139,7 +92,7 @@ impl FileSaveConfig {
         Self {
             directory: directory.into(),
             filename: None,
-            format: SaveFormat::default(),
+            encoding: Encoding::Utf8,
             port_name: port_name.into(),
         }
     }
@@ -150,9 +103,9 @@ impl FileSaveConfig {
         self
     }
 
-    /// Set the save format
-    pub fn with_format(mut self, format: SaveFormat) -> Self {
-        self.format = format;
+    /// Set the encoding
+    pub fn with_encoding(mut self, encoding: Encoding) -> Self {
+        self.encoding = encoding;
         self
     }
 
@@ -161,15 +114,24 @@ impl FileSaveConfig {
         let filename = self
             .filename
             .clone()
-            .unwrap_or_else(|| generate_auto_filename(&self.port_name, self.format));
+            .unwrap_or_else(|| generate_auto_filename(&self.port_name, self.encoding));
         self.directory.join(filename)
+    }
+}
+
+/// Get file extension for an encoding
+fn encoding_extension(encoding: Encoding) -> &'static str {
+    match encoding {
+        Encoding::Utf8 | Encoding::Ascii => "txt",
+        Encoding::Hex(_) => "hex",
+        Encoding::Binary(_) => "bin",
     }
 }
 
 /// Generate an auto filename with ISO 8601 timestamp
 /// Format: {port_name}-{timestamp}.{extension}
 /// Example: ttyUSB0-2025-12-20T14:30:52.123Z.txt
-fn generate_auto_filename(port_name: &str, format: SaveFormat) -> String {
+fn generate_auto_filename(port_name: &str, encoding: Encoding) -> String {
     // Clean up port name for use in filename
     let clean_port_name = port_name
         .replace(['/', '\\'], "_")
@@ -179,7 +141,12 @@ fn generate_auto_filename(port_name: &str, format: SaveFormat) -> String {
     // Generate ISO 8601 timestamp
     let timestamp = format_iso8601_timestamp(SystemTime::now());
 
-    format!("{}-{}.{}", clean_port_name, timestamp, format.extension())
+    format!(
+        "{}-{}.{}",
+        clean_port_name,
+        timestamp,
+        encoding_extension(encoding)
+    )
 }
 
 /// Format a SystemTime as ISO 8601 timestamp (like Node.js toISOString)
@@ -224,21 +191,17 @@ fn days_to_ymd(days: i64) -> (i32, u32, u32) {
     (y as i32, m, d)
 }
 
-/// Format a timestamp for inclusion in the saved file
-fn format_file_timestamp(time: SystemTime) -> String {
-    format_iso8601_timestamp(time)
-}
-
 /// Start a file saver task
 ///
 /// Returns a handle for sending data to be saved.
 ///
 /// This function must be called with a Tokio runtime handle to spawn the background task.
-pub fn start_file_saver(
+pub(super) fn start_file_saver(
     config: FileSaveConfig,
     runtime: &tokio::runtime::Handle,
 ) -> crate::Result<FileSaverHandle> {
     let file_path = config.generate_path();
+    let encoding = config.encoding;
 
     // Create directory if it doesn't exist
     if let Some(parent) = file_path.parent() {
@@ -257,12 +220,13 @@ pub fn start_file_saver(
     // Spawn the file saver task on the provided runtime
     let path_clone = file_path.clone();
     runtime.spawn(async move {
-        file_saver_task(file, command_rx, config.format, path_clone).await;
+        file_saver_task(file, command_rx, encoding, path_clone).await;
     });
 
     Ok(FileSaverHandle {
         command_tx,
         file_path,
+        encoding,
     })
 }
 
@@ -270,7 +234,7 @@ pub fn start_file_saver(
 async fn file_saver_task(
     file: File,
     mut command_rx: mpsc::Receiver<FileSaverCommand>,
-    mut format: SaveFormat,
+    encoding: Encoding,
     file_path: PathBuf,
 ) {
     let mut writer = BufWriter::new(file);
@@ -278,7 +242,7 @@ async fn file_saver_task(
     while let Some(cmd) = command_rx.recv().await {
         match cmd {
             FileSaverCommand::Write(chunk) => {
-                if let Err(e) = write_chunk(&mut writer, &chunk, format) {
+                if let Err(e) = write_chunk(&mut writer, &chunk, encoding) {
                     eprintln!("Error writing to file {:?}: {}", file_path, e);
                     break;
                 }
@@ -287,18 +251,6 @@ async fn file_saver_task(
                 if let Err(e) = writer.flush() {
                     eprintln!("Error flushing file {:?}: {}", file_path, e);
                     break;
-                }
-            }
-            FileSaverCommand::ChangeFormat(new_format) => {
-                if new_format != format {
-                    format = new_format;
-                    // Write a format change marker (for non-raw formats)
-                    if format != SaveFormat::Raw {
-                        let marker = format!("\n--- Format changed to {} ---\n", format);
-                        if let Err(e) = writer.write_all(marker.as_bytes()) {
-                            eprintln!("Error writing format marker to file {:?}: {}", file_path, e);
-                        }
-                    }
                 }
             }
             FileSaverCommand::Stop => {
@@ -312,41 +264,36 @@ async fn file_saver_task(
 }
 
 /// Write a single data chunk to the file
-fn write_chunk(
-    writer: &mut BufWriter<File>,
-    chunk: &SaveChunk,
-    format: SaveFormat,
-) -> std::io::Result<()> {
-    match format {
-        SaveFormat::Raw => {
-            // Raw format: just write the bytes directly, no metadata
-            writer.write_all(&chunk.data)
-        }
-        _ => {
-            // Text formats: include timestamp and direction
-            let timestamp = format_file_timestamp(chunk.timestamp);
-            let direction = match chunk.direction {
-                Direction::Tx => "TX",
-                Direction::Rx => "RX",
-            };
-
-            // Encode the data
-            let encoding = format.as_encoding().unwrap_or(Encoding::Utf8);
-            let encoded = encode(&chunk.data, encoding);
-
-            // Write formatted line: [timestamp] [direction] data
-            writeln!(writer, "[{}] [{}] {}", timestamp, direction, encoded)
+fn write_chunk(writer: &mut BufWriter<File>, chunk: &RawChunk, encoding: Encoding) -> std::io::Result<()> {
+    // For binary encoding with default format, write raw bytes without metadata
+    if let Encoding::Binary(format) = encoding {
+        if format == super::encoding::BinaryFormat::default() {
+            return writer.write_all(&chunk.data);
         }
     }
+
+    // Text formats: include timestamp and direction
+    let timestamp = format_iso8601_timestamp(chunk.timestamp);
+    let direction = match chunk.direction {
+        Direction::Tx => "TX",
+        Direction::Rx => "RX",
+    };
+
+    // Encode the data
+    let encoded = encode(&chunk.data, encoding);
+
+    // Write formatted line: [timestamp] [direction] data
+    writeln!(writer, "[{}] [{}] {}", timestamp, direction, encoded)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::encoding::HexFormat;
 
     #[test]
-    fn test_auto_filename_generation() {
-        let filename = generate_auto_filename("/dev/ttyUSB0", SaveFormat::Utf8);
+    fn auto_filename_generation() {
+        let filename = generate_auto_filename("/dev/ttyUSB0", Encoding::Utf8);
         assert!(filename.starts_with("ttyUSB0-"));
         assert!(filename.ends_with(".txt"));
         // Check ISO 8601 format is present
@@ -355,7 +302,14 @@ mod tests {
     }
 
     #[test]
-    fn test_iso8601_timestamp() {
+    fn auto_filename_hex() {
+        let filename = generate_auto_filename("COM3", Encoding::Hex(HexFormat::default()));
+        assert!(filename.starts_with("COM3-"));
+        assert!(filename.ends_with(".hex"));
+    }
+
+    #[test]
+    fn iso8601_timestamp() {
         use std::time::UNIX_EPOCH;
         // Test with a known timestamp
         let time = UNIX_EPOCH + std::time::Duration::from_millis(1703071852123);

@@ -202,25 +202,6 @@ impl Default for GraphEngine {
 }
 
 impl GraphEngine {
-    pub(crate) fn reparse_with_parser<'a>(
-        &mut self,
-        parser: GraphParserType,
-        chunks: impl Iterator<Item = &'a RawChunk>,
-    ) {
-        self.config.parser = Box::new(parser);
-        self.initialize(chunks);
-    }
-
-    /// Initialize the engine with historical data
-    ///
-    /// Call this once when first enabling graph view to process all
-    /// existing buffered data.
-    pub(crate) fn initialize<'a>(&mut self, chunks: impl Iterator<Item = &'a RawChunk>) {
-        for chunk in chunks {
-            self.process_raw_chunk(chunk);
-        }
-    }
-
     /// Process a raw chunk (internal, called by DataBuffer)
     pub(crate) fn process_raw_chunk(&mut self, chunk: &RawChunk) {
         self.chunks_processed += 1;

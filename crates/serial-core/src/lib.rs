@@ -13,9 +13,7 @@
 //! - **Non-blocking**: All operations are async or return immediately
 
 mod chunking;
-mod encoding;
 mod error;
-mod file_saver;
 mod file_sender;
 mod port;
 mod session;
@@ -25,15 +23,12 @@ pub mod buffer;
 
 // Re-export commonly used types from buffer
 pub use buffer::{
-    graph, BinaryFormat, ChunkView, DataBuffer, Direction, Encoding, HexFormat, PatternMatcher,
-    PatternMode, SearchMatch,
+    encode, encode_ascii, encode_binary, encode_hex, encode_utf8, graph, BinaryFormat, ChunkView,
+    DataBuffer, Direction, Encoding, FileSaveConfig, HexFormat, PatternMatcher, PatternMode,
+    SearchMatch,
 };
 pub use chunking::{Chunker, ChunkingStrategy, LineDelimiter};
-pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8};
 pub use error::{Error, Result};
-pub use file_saver::{
-    start_file_saver, FileSaveConfig, FileSaverCommand, FileSaverHandle, SaveFormat,
-};
 pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
 pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
 pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};
