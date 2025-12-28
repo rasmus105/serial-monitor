@@ -1,9 +1,10 @@
 use std::collections::HashSet;
+use std::time::SystemTime;
 
 use enum_dispatch::enum_dispatch;
 use strum::{AsRefStr, Display};
 
-use crate::DataChunk;
+use super::super::chunk::Direction;
 
 /// A parsed value with series name.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,11 +15,14 @@ pub struct ParsedValue {
     pub value: f64,
 }
 
-/// Parses data chunks into named numeric values.
+/// Parses data into named numeric values.
 #[enum_dispatch]
 pub trait GraphParser: Send + Sync + std::fmt::Debug {
-    /// Parse a chunk of data, returning zero or more named values.
-    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue>;
+    /// Parse a string, returning zero or more named values.
+    ///
+    /// The timestamp and direction are provided for context but most parsers
+    /// only need the text content.
+    fn parse_str(&self, text: &str, timestamp: SystemTime, direction: Direction) -> Vec<ParsedValue>;
 }
 
 #[enum_dispatch(GraphParser)]
@@ -121,8 +125,8 @@ impl KeyValue {
 }
 
 impl GraphParser for KeyValue {
-    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let data = &chunk.data;
+    fn parse_str(&self, text: &str, _timestamp: SystemTime, _direction: Direction) -> Vec<ParsedValue> {
+        let data = text.as_bytes();
         let mut results = Vec::with_capacity(8);
         let mut seen_keys: HashSet<&[u8]> = HashSet::new();
 
@@ -217,12 +221,7 @@ impl Regex {
 }
 
 impl GraphParser for Regex {
-    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let text = match std::str::from_utf8(&chunk.data) {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-
+    fn parse_str(&self, text: &str, _timestamp: SystemTime, _direction: Direction) -> Vec<ParsedValue> {
         let mut results = Vec::with_capacity(8);
 
         for caps in self.regex.captures_iter(text) {
@@ -277,8 +276,8 @@ impl Default for Csv {
 }
 
 impl GraphParser for Csv {
-    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let data = &chunk.data;
+    fn parse_str(&self, text: &str, _timestamp: SystemTime, _direction: Direction) -> Vec<ParsedValue> {
+        let data = text.as_bytes();
 
         // Only support ASCII delimiters for byte-level parsing
         if !self.delimiter.is_ascii() {
@@ -417,12 +416,7 @@ impl Json {
 }
 
 impl GraphParser for Json {
-    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let text = match std::str::from_utf8(&chunk.data) {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-
+    fn parse_str(&self, text: &str, _timestamp: SystemTime, _direction: Direction) -> Vec<ParsedValue> {
         let value: serde_json::Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(_) => return Vec::new(),
@@ -471,8 +465,8 @@ impl RawNumbers {
 }
 
 impl GraphParser for RawNumbers {
-    fn parse(&self, chunk: &DataChunk) -> Vec<ParsedValue> {
-        let data = &chunk.data;
+    fn parse_str(&self, text: &str, _timestamp: SystemTime, _direction: Direction) -> Vec<ParsedValue> {
+        let data = text.as_bytes();
         let mut results = Vec::with_capacity(8);
         let mut i = 0;
 

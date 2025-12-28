@@ -61,7 +61,7 @@ enum CompiledPattern {
 /// # Example
 ///
 /// ```
-/// use serial_core::display::{PatternMatcher, PatternMode};
+/// use serial_core::buffer::{PatternMatcher, PatternMode};
 ///
 /// let mut matcher = PatternMatcher::default();
 ///

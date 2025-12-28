@@ -12,8 +12,8 @@ use tokio::sync::mpsc;
 
 use strum::{AsRefStr, Display, VariantArray};
 
-use crate::buffer::{DataChunk, Direction};
-use crate::encoding::{Encoding, encode};
+use crate::buffer::Direction;
+use crate::encoding::{encode, Encoding};
 
 /// Format for saving serial data to files
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, AsRefStr, VariantArray)]
@@ -60,11 +60,19 @@ impl SaveFormat {
     }
 }
 
+/// Data chunk for file saving (contains raw bytes + metadata)
+#[derive(Debug, Clone)]
+pub struct SaveChunk {
+    pub data: Vec<u8>,
+    pub direction: Direction,
+    pub timestamp: SystemTime,
+}
+
 /// Commands sent to the file saver task
 #[derive(Debug)]
 pub enum FileSaverCommand {
     /// Write a data chunk to the file
-    Write(DataChunk),
+    Write(SaveChunk),
     /// Change the save format (starts appending with new format)
     ChangeFormat(SaveFormat),
     /// Stop saving and close the file
@@ -79,9 +87,9 @@ pub struct FileSaverHandle {
 
 impl FileSaverHandle {
     /// Write a data chunk to the file
-    pub fn write(&self, chunk: DataChunk) -> Result<(), crate::Error> {
+    pub fn write(&self, data: Vec<u8>, direction: Direction, timestamp: SystemTime) -> Result<(), crate::Error> {
         self.command_tx
-            .try_send(FileSaverCommand::Write(chunk))
+            .try_send(FileSaverCommand::Write(SaveChunk { data, direction, timestamp }))
             .map_err(|_| crate::Error::ChannelSend)
     }
 
@@ -306,7 +314,7 @@ async fn file_saver_task(
 /// Write a single data chunk to the file
 fn write_chunk(
     writer: &mut BufWriter<File>,
-    chunk: &DataChunk,
+    chunk: &SaveChunk,
     format: SaveFormat,
 ) -> std::io::Result<()> {
     match format {

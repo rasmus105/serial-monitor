@@ -12,7 +12,6 @@
 //! - **Raw bytes as source of truth**: All data stored as raw bytes, encoding is UI's job
 //! - **Non-blocking**: All operations are async or return immediately
 
-mod buffer;
 mod chunking;
 mod encoding;
 mod error;
@@ -21,18 +20,20 @@ mod file_sender;
 mod port;
 mod session;
 
-// utility crates to be used by libraries to avoid duplication across front-ends.
-pub mod display;
-pub mod graph;
+// Utility modules for frontends to avoid duplication
+pub mod buffer;
 
-pub use buffer::{DataBuffer, DataChunk, Direction};
+// Re-export commonly used types from buffer
+pub use buffer::{
+    graph, BinaryFormat, ChunkView, DataBuffer, Direction, Encoding, HexFormat, PatternMatcher,
+    PatternMode, SearchMatch,
+};
 pub use chunking::{Chunker, ChunkingStrategy, LineDelimiter};
-pub use display::{PatternMatcher, PatternMode, SearchMatch};
-pub use encoding::{Encoding, encode, encode_ascii, encode_binary, encode_hex, encode_utf8};
+pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8};
 pub use error::{Error, Result};
 pub use file_saver::{
-    FileSaveConfig, FileSaverCommand, FileSaverHandle, SaveFormat, start_file_saver,
+    start_file_saver, FileSaveConfig, FileSaverCommand, FileSaverHandle, SaveFormat,
 };
-pub use file_sender::{FileSendConfig, FileSendHandle, FileSendProgress, send_file};
-pub use port::{DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits, list_ports};
+pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
+pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
 pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};

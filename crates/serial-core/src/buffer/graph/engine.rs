@@ -3,8 +3,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::{DataChunk, Direction};
-
+use super::super::chunk::{Direction, RawChunk};
 use super::parser::{GraphParser, GraphParserType};
 
 // ============================================================================
@@ -194,11 +193,19 @@ impl GraphEngine {
             chunks_processed: 0,
         }
     }
+}
 
-    pub fn reparse_with_parser<'a>(
+impl Default for GraphEngine {
+    fn default() -> Self {
+        Self::from_parser(GraphParserType::KeyValue(super::parser::KeyValue))
+    }
+}
+
+impl GraphEngine {
+    pub(crate) fn reparse_with_parser<'a>(
         &mut self,
         parser: GraphParserType,
-        chunks: impl Iterator<Item = &'a DataChunk>,
+        chunks: impl Iterator<Item = &'a RawChunk>,
     ) {
         self.config.parser = Box::new(parser);
         self.initialize(chunks);
@@ -208,13 +215,14 @@ impl GraphEngine {
     ///
     /// Call this once when first enabling graph view to process all
     /// existing buffered data.
-    pub fn initialize<'a>(&mut self, chunks: impl Iterator<Item = &'a DataChunk>) {
+    pub(crate) fn initialize<'a>(&mut self, chunks: impl Iterator<Item = &'a RawChunk>) {
         for chunk in chunks {
-            self.process_chunk(chunk);
+            self.process_raw_chunk(chunk);
         }
     }
 
-    pub fn process_chunk(&mut self, chunk: &DataChunk) {
+    /// Process a raw chunk (internal, called by DataBuffer)
+    pub(crate) fn process_raw_chunk(&mut self, chunk: &RawChunk) {
         self.chunks_processed += 1;
 
         // Update packet rate tracking
@@ -222,8 +230,9 @@ impl GraphEngine {
             .packet_rate
             .record(chunk.timestamp, chunk.direction, chunk.data.len());
 
-        // Parse and store data points
-        let values = self.config.parser.parse(chunk);
+        // Parse data as UTF-8 and store data points
+        let text = String::from_utf8_lossy(&chunk.data);
+        let values = self.config.parser.parse_str(&text, chunk.timestamp, chunk.direction);
         for value in values {
             self.next_color = self.next_color.wrapping_add(1);
             let entry = self.series.entry(value.series).or_insert(GraphSeries {
@@ -244,6 +253,25 @@ impl GraphEngine {
             });
         }
     }
+
+    /// Process raw bytes directly (convenience for DataBuffer)
+    pub(crate) fn process_chunk(&mut self, data: &[u8]) {
+        // Create a temporary RawChunk for processing
+        let chunk = RawChunk {
+            data: data.to_vec(),
+            direction: Direction::Rx, // Default, will be overridden by caller if needed
+            timestamp: SystemTime::now(),
+        };
+        self.process_raw_chunk(&chunk);
+    }
+
+    /// Clear all parsed data
+    pub fn clear(&mut self) {
+        self.series.clear();
+        self.config.packet_rate.samples.clear();
+        self.chunks_processed = 0;
+        self.next_color = 0;
+    }
 }
 
 // ============================================================================
@@ -253,10 +281,14 @@ impl GraphEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::parser::{Csv, Json, KeyValue, RawNumbers, Regex};
+    use super::super::parser::{Csv, Json, KeyValue, RawNumbers, Regex};
 
-    fn chunk(data: &str) -> DataChunk {
-        DataChunk::new(Direction::Rx, data.as_bytes().to_vec())
+    fn raw_chunk(data: &str) -> RawChunk {
+        RawChunk {
+            data: data.as_bytes().to_vec(),
+            direction: Direction::Rx,
+            timestamp: SystemTime::now(),
+        }
     }
 
     fn engine(parser: impl Into<GraphParserType>) -> GraphEngine {
@@ -270,7 +302,7 @@ mod tests {
     #[test]
     fn key_value_simple() {
         let mut engine = engine(KeyValue);
-        engine.process_chunk(&chunk("temp=25.5"));
+        engine.process_raw_chunk(&raw_chunk("temp=25.5"));
 
         assert_eq!(engine.series["temp"].points[0].value, 25.5);
     }
@@ -278,7 +310,7 @@ mod tests {
     #[test]
     fn key_value_multiple_pairs() {
         let mut engine = engine(KeyValue);
-        engine.process_chunk(&chunk("temp=25.5, humidity=60"));
+        engine.process_raw_chunk(&raw_chunk("temp=25.5, humidity=60"));
 
         assert_eq!(engine.series["temp"].points[0].value, 25.5);
         assert_eq!(engine.series["humidity"].points[0].value, 60.0);
@@ -287,7 +319,7 @@ mod tests {
     #[test]
     fn key_value_colon_separator() {
         let mut engine = engine(KeyValue);
-        engine.process_chunk(&chunk("temperature: 41.3"));
+        engine.process_raw_chunk(&raw_chunk("temperature: 41.3"));
 
         assert_eq!(engine.series["temperature"].points[0].value, 41.3);
     }
@@ -295,7 +327,7 @@ mod tests {
     #[test]
     fn key_value_colon_separator_multiple() {
         let mut engine = engine(KeyValue);
-        engine.process_chunk(&chunk("temperature: 41.3, hum: 13.3, pre:9"));
+        engine.process_raw_chunk(&raw_chunk("temperature: 41.3, hum: 13.3, pre:9"));
 
         assert_eq!(engine.series["temperature"].points[0].value, 41.3);
     }
@@ -303,7 +335,7 @@ mod tests {
     #[test]
     fn key_value_negative_number() {
         let mut engine = engine(KeyValue);
-        engine.process_chunk(&chunk("offset=-12.5"));
+        engine.process_raw_chunk(&raw_chunk("offset=-12.5"));
 
         assert_eq!(engine.series["offset"].points[0].value, -12.5);
     }
@@ -315,7 +347,7 @@ mod tests {
     #[test]
     fn csv_simple() {
         let mut engine = engine(Csv::default());
-        engine.process_chunk(&chunk("1.0,2.0,3.0"));
+        engine.process_raw_chunk(&raw_chunk("1.0,2.0,3.0"));
 
         assert_eq!(engine.series["col0"].points[0].value, 1.0);
         assert_eq!(engine.series["col1"].points[0].value, 2.0);
@@ -329,7 +361,7 @@ mod tests {
             column_names: vec!["time".into(), "temp".into(), "humidity".into()],
         };
         let mut engine = engine(parser);
-        engine.process_chunk(&chunk("1000,25.5,60"));
+        engine.process_raw_chunk(&raw_chunk("1000,25.5,60"));
 
         assert_eq!(engine.series["time"].points[0].value, 1000.0);
         assert_eq!(engine.series["temp"].points[0].value, 25.5);
@@ -343,7 +375,7 @@ mod tests {
             column_names: Vec::new(),
         };
         let mut engine = engine(parser);
-        engine.process_chunk(&chunk("1.0;2.0;3.0"));
+        engine.process_raw_chunk(&raw_chunk("1.0;2.0;3.0"));
 
         assert_eq!(engine.series["col0"].points[0].value, 1.0);
         assert_eq!(engine.series["col1"].points[0].value, 2.0);
@@ -356,7 +388,7 @@ mod tests {
     #[test]
     fn json_simple_object() {
         let mut engine = engine(Json);
-        engine.process_chunk(&chunk(r#"{"temp": 25.5, "humidity": 60}"#));
+        engine.process_raw_chunk(&raw_chunk(r#"{"temp": 25.5, "humidity": 60}"#));
 
         assert_eq!(engine.series["temp"].points[0].value, 25.5);
         assert_eq!(engine.series["humidity"].points[0].value, 60.0);
@@ -365,7 +397,7 @@ mod tests {
     #[test]
     fn json_nested_object() {
         let mut engine = engine(Json);
-        engine.process_chunk(&chunk(r#"{"sensor": {"temp": 25.5}}"#));
+        engine.process_raw_chunk(&raw_chunk(r#"{"sensor": {"temp": 25.5}}"#));
 
         assert_eq!(engine.series["sensor.temp"].points[0].value, 25.5);
     }
@@ -373,7 +405,7 @@ mod tests {
     #[test]
     fn json_array_of_numbers() {
         let mut engine = engine(Json);
-        engine.process_chunk(&chunk(r#"{"values": [1, 2, 3]}"#));
+        engine.process_raw_chunk(&raw_chunk(r#"{"values": [1, 2, 3]}"#));
 
         assert_eq!(engine.series["values.0"].points[0].value, 1.0);
         assert_eq!(engine.series["values.1"].points[0].value, 2.0);
@@ -387,7 +419,7 @@ mod tests {
     #[test]
     fn raw_numbers_simple() {
         let mut engine = engine(RawNumbers);
-        engine.process_chunk(&chunk("Reading: 25.5 degrees"));
+        engine.process_raw_chunk(&raw_chunk("Reading: 25.5 degrees"));
 
         assert_eq!(engine.series["0"].points[0].value, 25.5);
     }
@@ -395,7 +427,7 @@ mod tests {
     #[test]
     fn raw_numbers_multiple() {
         let mut engine = engine(RawNumbers);
-        engine.process_chunk(&chunk("Values: 10, 20.5, 30"));
+        engine.process_raw_chunk(&raw_chunk("Values: 10, 20.5, 30"));
 
         assert_eq!(engine.series["0"].points[0].value, 10.0);
         assert_eq!(engine.series["1"].points[0].value, 20.5);
@@ -405,7 +437,7 @@ mod tests {
     #[test]
     fn raw_numbers_negative() {
         let mut engine = engine(RawNumbers);
-        engine.process_chunk(&chunk("Temp: -15.3"));
+        engine.process_raw_chunk(&raw_chunk("Temp: -15.3"));
 
         assert_eq!(engine.series["0"].points[0].value, -15.3);
     }
@@ -418,7 +450,7 @@ mod tests {
     fn regex_named_capture() {
         let parser = Regex::new(r"T:(?P<temp>\d+\.?\d*)").unwrap();
         let mut engine = engine(parser);
-        engine.process_chunk(&chunk("T:25.5"));
+        engine.process_raw_chunk(&raw_chunk("T:25.5"));
 
         assert_eq!(engine.series["temp"].points[0].value, 25.5);
     }
@@ -427,7 +459,7 @@ mod tests {
     fn regex_multiple_captures() {
         let parser = Regex::new(r"T:(?P<temp>\d+\.?\d*)\s+H:(?P<humidity>\d+\.?\d*)").unwrap();
         let mut engine = engine(parser);
-        engine.process_chunk(&chunk("T:25.5 H:60"));
+        engine.process_raw_chunk(&raw_chunk("T:25.5 H:60"));
 
         assert_eq!(engine.series["temp"].points[0].value, 25.5);
         assert_eq!(engine.series["humidity"].points[0].value, 60.0);
@@ -440,9 +472,9 @@ mod tests {
     #[test]
     fn engine_multiple_chunks_same_series() {
         let mut engine = engine(KeyValue);
-        engine.process_chunk(&chunk("temp=20"));
-        engine.process_chunk(&chunk("temp=21"));
-        engine.process_chunk(&chunk("temp=22"));
+        engine.process_raw_chunk(&raw_chunk("temp=20"));
+        engine.process_raw_chunk(&raw_chunk("temp=21"));
+        engine.process_raw_chunk(&raw_chunk("temp=22"));
 
         let series = &engine.series["temp"];
         assert_eq!(series.points.len(), 3);
@@ -454,9 +486,9 @@ mod tests {
     #[test]
     fn engine_auto_color_assignment() {
         let mut engine = engine(KeyValue);
-        engine.process_chunk(&chunk("temp=25"));
-        engine.process_chunk(&chunk("humidity=60"));
-        engine.process_chunk(&chunk("pressure=1013"));
+        engine.process_raw_chunk(&raw_chunk("temp=25"));
+        engine.process_raw_chunk(&raw_chunk("humidity=60"));
+        engine.process_raw_chunk(&raw_chunk("pressure=1013"));
 
         assert_eq!(engine.series["temp"].color, 1);
         assert_eq!(engine.series["humidity"].color, 2);
@@ -466,9 +498,9 @@ mod tests {
     #[test]
     fn packet_rate_recording() {
         let mut engine = engine(KeyValue);
-        engine.process_chunk(&chunk("temp=25"));
-        engine.process_chunk(&chunk("temp=26"));
-        engine.process_chunk(&chunk("temp=27"));
+        engine.process_raw_chunk(&raw_chunk("temp=25"));
+        engine.process_raw_chunk(&raw_chunk("temp=26"));
+        engine.process_raw_chunk(&raw_chunk("temp=27"));
 
         let samples: Vec<_> = engine.config.packet_rate.samples.iter().collect();
         assert!(!samples.is_empty());

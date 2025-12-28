@@ -1,9 +1,9 @@
 //! Chunking strategies for serial data
 //!
-//! Determines how incoming bytes are grouped into DataChunks.
+//! Determines how incoming bytes are grouped into chunks.
 //! This affects how data is displayed, searched, and filtered in the UI.
 
-use crate::buffer::{DataChunk, Direction};
+use crate::buffer::Direction;
 
 /// Strategy for chunking incoming serial data
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -131,15 +131,20 @@ impl Chunker {
         Self::new(strategy, Direction::Tx)
     }
 
+    /// Get the direction for this chunker
+    pub fn direction(&self) -> Direction {
+        self.direction
+    }
+
     /// Process incoming bytes and return any complete chunks
     ///
     /// In Raw mode, always returns exactly one chunk containing all input bytes.
     /// In LineDelimited mode, may return 0, 1, or many chunks depending on delimiters.
-    pub fn process(&mut self, data: &[u8]) -> Vec<DataChunk> {
+    pub fn process(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
         match &self.strategy {
             ChunkingStrategy::Raw => {
                 // Raw mode: one chunk per process() call
-                vec![DataChunk::new(self.direction, data.to_vec())]
+                vec![data.to_vec()]
             }
             ChunkingStrategy::LineDelimited {
                 delimiter,
@@ -156,7 +161,7 @@ impl Chunker {
                     if self.pending.len() >= *max_line_length {
                         // Force emit what we have
                         let data = std::mem::take(&mut self.pending);
-                        chunks.push(DataChunk::new(self.direction, data));
+                        chunks.push(data);
                         break;
                     }
 
@@ -164,7 +169,7 @@ impl Chunker {
                     if let Some(end) = delimiter.find_end(&self.pending) {
                         // Found delimiter - emit chunk including delimiter
                         let line: Vec<u8> = self.pending.drain(..end).collect();
-                        chunks.push(DataChunk::new(self.direction, line));
+                        chunks.push(line);
                     } else {
                         // No delimiter found, wait for more data
                         break;
@@ -179,12 +184,11 @@ impl Chunker {
     /// Flush any pending data as a final chunk
     ///
     /// Call this when the connection closes to emit any incomplete line.
-    pub fn flush(&mut self) -> Option<DataChunk> {
+    pub fn flush(&mut self) -> Option<Vec<u8>> {
         if self.pending.is_empty() {
             None
         } else {
-            let data = std::mem::take(&mut self.pending);
-            Some(DataChunk::new(self.direction, data))
+            Some(std::mem::take(&mut self.pending))
         }
     }
 
@@ -210,8 +214,8 @@ mod tests {
         // Two complete lines in one read
         let chunks = chunker.process(b"line1\nline2\n");
         assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].data, b"line1\n");
-        assert_eq!(chunks[1].data, b"line2\n");
+        assert_eq!(chunks[0], b"line1\n");
+        assert_eq!(chunks[1], b"line2\n");
         assert!(!chunker.has_pending());
     }
 
@@ -228,7 +232,7 @@ mod tests {
         // Complete the line
         let chunks = chunker.process(b" World\n");
         assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].data, b"Hello World\n");
+        assert_eq!(chunks[0], b"Hello World\n");
         assert!(!chunker.has_pending());
     }
 
@@ -247,8 +251,8 @@ mod tests {
         // Final part with delimiter
         let chunks = chunker.process(b"1\nHello World 2\n");
         assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].data, b"Hello World 1\n");
-        assert_eq!(chunks[1].data, b"Hello World 2\n");
+        assert_eq!(chunks[0], b"Hello World 1\n");
+        assert_eq!(chunks[1], b"Hello World 2\n");
     }
 
     #[test]
@@ -262,7 +266,7 @@ mod tests {
         // Flush should emit it
         let chunk = chunker.flush();
         assert!(chunk.is_some());
-        assert_eq!(chunk.unwrap().data, b"no newline");
+        assert_eq!(chunk.unwrap(), b"no newline");
     }
 
     #[test]
@@ -271,8 +275,8 @@ mod tests {
 
         let chunks = chunker.process(b"line1\r\nline2\r\n");
         assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].data, b"line1\r\n");
-        assert_eq!(chunks[1].data, b"line2\r\n");
+        assert_eq!(chunks[0], b"line1\r\n");
+        assert_eq!(chunks[1], b"line2\r\n");
     }
 
     #[test]
