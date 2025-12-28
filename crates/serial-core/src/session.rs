@@ -9,7 +9,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio_serial::{ClearBuffer, SerialPort, SerialPortBuilderExt};
 
-use crate::buffer::{DataBuffer, Direction};
+use crate::buffer::file_saver::{self, AutoSaveSender, FileSaverHandle};
+use crate::buffer::{AutoSaveConfig, DataBuffer, Direction};
 use crate::chunking::{Chunker, ChunkingStrategy};
 use crate::error::{Error, Result};
 use crate::port::SerialConfig;
@@ -53,6 +54,8 @@ pub struct SessionConfig {
     pub tx_chunking: ChunkingStrategy,
     /// Maximum buffer size in bytes
     pub buffer_size: Option<usize>,
+    /// Auto-save configuration for crash recovery
+    pub auto_save: AutoSaveConfig,
 }
 
 impl SessionConfig {
@@ -79,6 +82,18 @@ impl SessionConfig {
         self.rx_chunking = ChunkingStrategy::line_delimited();
         self
     }
+
+    /// Set auto-save configuration
+    pub fn with_auto_save(mut self, config: AutoSaveConfig) -> Self {
+        self.auto_save = config;
+        self
+    }
+
+    /// Disable auto-save
+    pub fn without_auto_save(mut self) -> Self {
+        self.auto_save.enabled = false;
+        self
+    }
 }
 
 /// Handle for interacting with an active session
@@ -94,6 +109,8 @@ pub struct SessionHandle {
     command_tx: mpsc::Sender<SessionCommand>,
     /// Port name for this session
     port_name: String,
+    /// Auto-save handle (if enabled)
+    auto_save: Option<FileSaverHandle>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -143,6 +160,16 @@ impl SessionHandle {
     /// Get the port name
     pub fn port_name(&self) -> &str {
         &self.port_name
+    }
+
+    /// Check if auto-save is active
+    pub fn is_auto_saving(&self) -> bool {
+        self.auto_save.is_some()
+    }
+
+    /// Get the auto-save file path (if active)
+    pub fn auto_save_path(&self) -> Option<&std::path::Path> {
+        self.auto_save.as_ref().map(|h| h.file_path())
     }
 
     /// Clone the command sender (for use by file sender)
@@ -213,6 +240,24 @@ impl Session {
         let rx_chunker = Chunker::rx(session_config.rx_chunking);
         let tx_chunker = Chunker::tx(session_config.tx_chunking);
 
+        // Start auto-save if enabled
+        let runtime = tokio::runtime::Handle::current();
+        let auto_save = if session_config.auto_save.enabled {
+            match file_saver::start_auto_save(&session_config.auto_save, port_name, &runtime) {
+                Ok(handle) => Some(handle),
+                Err(e) => {
+                    // Log but don't fail the connection if auto-save fails
+                    eprintln!("Warning: Failed to start auto-save: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Clone auto-save sender for the I/O task
+        let auto_save_tx = auto_save.as_ref().map(|h| h.clone_sender());
+
         // Spawn the I/O task
         tokio::spawn(async move {
             io_task(
@@ -222,6 +267,7 @@ impl Session {
                 command_rx,
                 rx_chunker,
                 tx_chunker,
+                auto_save_tx,
             )
             .await;
         });
@@ -231,6 +277,7 @@ impl Session {
             event_rx,
             command_tx,
             port_name: port_name_owned,
+            auto_save,
         })
     }
 }
@@ -243,6 +290,7 @@ async fn io_task(
     mut command_rx: mpsc::Receiver<SessionCommand>,
     mut rx_chunker: Chunker,
     mut tx_chunker: Chunker,
+    auto_save: Option<AutoSaveSender>,
 ) {
     let (mut reader, mut writer) = tokio::io::split(port);
     let mut read_buf = [0u8; 1024];
@@ -264,6 +312,9 @@ async fn io_task(
                                 let mut buf = buffer.write().unwrap();
                                 buf.push(data.clone(), direction);
                             }
+                            if let Some(ref saver) = auto_save {
+                                saver.write_new(data.clone(), direction);
+                            }
                             let _ = event_tx.send(SessionEvent::DataReceived { data, direction }).await;
                         }
                         let _ = event_tx.send(SessionEvent::Disconnected { error: None }).await;
@@ -280,6 +331,9 @@ async fn io_task(
                                 let mut buf = buffer.write().unwrap();
                                 buf.push(data.clone(), direction);
                             }
+                            if let Some(ref saver) = auto_save {
+                                saver.write_new(data.clone(), direction);
+                            }
                             // Notify UI
                             let _ = event_tx.send(SessionEvent::DataReceived { data, direction }).await;
                         }
@@ -291,6 +345,9 @@ async fn io_task(
                             {
                                 let mut buf = buffer.write().unwrap();
                                 buf.push(data.clone(), direction);
+                            }
+                            if let Some(ref saver) = auto_save {
+                                saver.write_new(data.clone(), direction);
                             }
                             let _ = event_tx.send(SessionEvent::DataReceived { data, direction }).await;
                         }
@@ -318,6 +375,9 @@ async fn io_task(
                                         let mut buf = buffer.write().unwrap();
                                         buf.push(chunk_data.clone(), direction);
                                     }
+                                    if let Some(ref saver) = auto_save {
+                                        saver.write_new(chunk_data.clone(), direction);
+                                    }
                                     // Notify UI
                                     let _ = event_tx.send(SessionEvent::DataSent { data: chunk_data, direction }).await;
                                 }
@@ -329,6 +389,9 @@ async fn io_task(
                                     {
                                         let mut buf = buffer.write().unwrap();
                                         buf.push(chunk_data.clone(), direction);
+                                    }
+                                    if let Some(ref saver) = auto_save {
+                                        saver.write_new(chunk_data.clone(), direction);
                                     }
                                     let _ = event_tx.send(SessionEvent::DataSent { data: chunk_data, direction }).await;
                                 }
@@ -345,6 +408,9 @@ async fn io_task(
                             {
                                 let mut buf = buffer.write().unwrap();
                                 buf.push(data.clone(), direction);
+                            }
+                            if let Some(ref saver) = auto_save {
+                                saver.write_new(data.clone(), direction);
                             }
                             let _ = event_tx.send(SessionEvent::DataReceived { data, direction }).await;
                         }

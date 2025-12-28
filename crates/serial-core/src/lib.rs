@@ -5,6 +5,8 @@
 //! - Data buffering with timestamps and direction tracking
 //! - Async I/O with channel-based communication
 //! - Search and filter utilities for encoded data
+//! - File saving with configurable formats and scopes
+//! - Auto-save for crash recovery
 //!
 //! # Design Principles
 //!
@@ -23,9 +25,9 @@ pub mod buffer;
 
 // Re-export commonly used types from buffer
 pub use buffer::{
-    encode, encode_ascii, encode_binary, encode_hex, encode_utf8, graph, BinaryFormat, ChunkView,
-    DataBuffer, Direction, Encoding, FileSaveConfig, HexFormat, PatternMatcher, PatternMode,
-    SearchMatch,
+    default_cache_directory, encode, encode_ascii, encode_binary, encode_hex, encode_utf8, graph,
+    AutoSaveConfig, BinaryFormat, ChunkView, DataBuffer, Direction, DirectionFilter, Encoding,
+    HexFormat, PatternMatcher, PatternMode, SaveFormat, SaveScope, SearchMatch, UserSaveConfig,
 };
 pub use chunking::{Chunker, ChunkingStrategy, LineDelimiter};
 pub use error::{Error, Result};

@@ -54,9 +54,9 @@
 //! }
 //! ```
 
-mod chunk;
+pub(crate) mod chunk;
 mod encoding;
-mod file_saver;
+pub(crate) mod file_saver;
 mod filter;
 pub mod graph;
 mod pattern;
@@ -66,7 +66,10 @@ mod search;
 pub use chunk::{ChunkView, Direction};
 pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8};
 pub use encoding::{BinaryFormat, Encoding, HexFormat};
-pub use file_saver::FileSaveConfig;
+pub use file_saver::{
+    default_cache_directory, AutoSaveConfig, DirectionFilter, SaveFormat, SaveScope,
+    UserSaveConfig,
+};
 pub use pattern::{PatternMatcher, PatternMode};
 pub use search::SearchMatch;
 
@@ -563,47 +566,90 @@ impl DataBuffer {
     // File saving
     // =========================================================================
 
-    /// Start saving incoming data to a file
+    /// Save data to a file with configurable scope and format.
     ///
-    /// Once started, all new data pushed to the buffer will also be written
-    /// to the file. This does NOT save existing data in the buffer.
+    /// # Scope behaviors:
     ///
-    /// # Arguments
+    /// - [`SaveScope::ExistingOnly`]: Writes current buffer contents and returns immediately.
+    ///   No streaming - this is a one-off snapshot.
     ///
-    /// * `config` - Configuration for file saving (directory, encoding, etc.)
-    /// * `runtime` - Tokio runtime handle to spawn the file saver task
-    pub fn start_saving(
+    /// - [`SaveScope::NewOnly`]: Starts streaming new data to the file. Call [`stop_saving()`]
+    ///   to stop. Does NOT include existing buffer contents.
+    ///
+    /// - [`SaveScope::ExistingAndContinue`]: Writes current buffer contents, then continues
+    ///   streaming new data. Call [`stop_saving()`] to stop.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use serial_core::buffer::{UserSaveConfig, SaveScope, SaveFormat};
+    ///
+    /// // Snapshot existing buffer
+    /// buffer.save(
+    ///     UserSaveConfig::new("/tmp/capture.txt")
+    ///         .with_scope(SaveScope::ExistingOnly),
+    ///     &runtime,
+    /// )?;
+    ///
+    /// // Stream new data
+    /// buffer.save(
+    ///     UserSaveConfig::new("/tmp/stream.txt")
+    ///         .with_scope(SaveScope::NewOnly),
+    ///     &runtime,
+    /// )?;
+    /// // ... later ...
+    /// buffer.stop_saving();
+    /// ```
+    pub fn save(
         &mut self,
-        config: FileSaveConfig,
+        config: UserSaveConfig,
         runtime: &tokio::runtime::Handle,
     ) -> crate::Result<()> {
-        // Stop any existing saver first
+        // Stop any existing user save first
         self.stop_saving();
 
-        let handle = file_saver::start_file_saver(config, runtime)?;
-        self.file_saver = Some(handle);
+        match config.scope {
+            SaveScope::ExistingOnly => {
+                // One-off save, no streaming handle needed
+                file_saver::save_existing_to_file(&self.raw_chunks, &config)?;
+            }
+            SaveScope::NewOnly => {
+                // Start streaming without existing data
+                let handle = file_saver::start_streaming_saver(&config, None, runtime)?;
+                self.file_saver = Some(handle);
+            }
+            SaveScope::ExistingAndContinue => {
+                // Write existing, then stream
+                let handle =
+                    file_saver::start_streaming_saver(&config, Some(&self.raw_chunks), runtime)?;
+                self.file_saver = Some(handle);
+            }
+        }
+
         Ok(())
     }
 
-    /// Stop saving and close the file
+    /// Stop an active streaming save (NewOnly or ExistingAndContinue).
+    ///
+    /// Does nothing if no streaming save is active.
     pub fn stop_saving(&mut self) {
         if let Some(saver) = self.file_saver.take() {
             let _ = saver.stop();
         }
     }
 
-    /// Check if currently saving to a file
+    /// Check if currently streaming to a user-specified file.
     pub fn is_saving(&self) -> bool {
         self.file_saver.is_some()
     }
 
-    /// Get the file path being saved to (if saving)
+    /// Get the file path being saved to (if streaming).
     pub fn save_path(&self) -> Option<&Path> {
         self.file_saver.as_ref().map(|s| s.file_path())
     }
 
-    /// Get the encoding being used for saving (if saving)
-    pub fn save_encoding(&self) -> Option<Encoding> {
-        self.file_saver.as_ref().map(|s| s.encoding())
+    /// Get the save format being used (if streaming).
+    pub fn save_format(&self) -> Option<&SaveFormat> {
+        self.file_saver.as_ref().map(|s| s.format())
     }
 }

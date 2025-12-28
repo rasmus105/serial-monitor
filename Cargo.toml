@@ -37,6 +37,9 @@ memchr = "2.7.6"
 # JSON
 serde_json = "1"
 
+# Directories
+dirs = "6"
+
 # Internal crates
 serial-core = { path = "crates/serial-core" }
 serial-tui = { path = "crates/serial-tui" }
