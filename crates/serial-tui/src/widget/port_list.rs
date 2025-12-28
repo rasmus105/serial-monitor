@@ -12,10 +12,16 @@ use serial_core::PortInfo;
 use crate::theme::Theme;
 
 /// State for the port list.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PortListState {
     pub ports: Vec<PortInfo>,
     pub list_state: ListState,
+    /// Search/filter pattern (highlights matching ports).
+    pub search_pattern: String,
+    /// Indices of ports matching the search pattern.
+    pub matching_indices: Vec<usize>,
+    /// Current match index for n/N navigation.
+    pub current_match: usize,
 }
 
 impl PortListState {
@@ -36,6 +42,10 @@ impl PortListState {
             }
         } else if !self.ports.is_empty() {
             self.list_state.select(Some(0));
+        }
+        // Re-apply search if active
+        if !self.search_pattern.is_empty() {
+            self.update_matches();
         }
     }
 
@@ -74,6 +84,104 @@ impl PortListState {
         };
         self.list_state.select(Some(i));
     }
+
+    /// Set search pattern and update matches.
+    pub fn set_search(&mut self, pattern: &str) {
+        self.search_pattern = pattern.to_lowercase();
+        self.update_matches();
+    }
+
+    /// Clear search pattern.
+    pub fn clear_search(&mut self) {
+        self.search_pattern.clear();
+        self.matching_indices.clear();
+        self.current_match = 0;
+    }
+
+    /// Update matching indices based on current search pattern.
+    fn update_matches(&mut self) {
+        self.matching_indices.clear();
+        if self.search_pattern.is_empty() {
+            return;
+        }
+
+        let pattern = &self.search_pattern;
+        for (i, port) in self.ports.iter().enumerate() {
+            // Match against port name, product, manufacturer
+            let name_match = port.name.to_lowercase().contains(pattern);
+            let product_match = port
+                .product
+                .as_ref()
+                .is_some_and(|p| p.to_lowercase().contains(pattern));
+            let manufacturer_match = port
+                .manufacturer
+                .as_ref()
+                .is_some_and(|m| m.to_lowercase().contains(pattern));
+
+            if name_match || product_match || manufacturer_match {
+                self.matching_indices.push(i);
+            }
+        }
+
+        // Reset current match index
+        self.current_match = 0;
+
+        // Jump to first match if there is one
+        if let Some(&first_match) = self.matching_indices.first() {
+            self.list_state.select(Some(first_match));
+        }
+    }
+
+    /// Go to next matching port.
+    pub fn goto_next_match(&mut self) {
+        if self.matching_indices.is_empty() {
+            return;
+        }
+        self.current_match = (self.current_match + 1) % self.matching_indices.len();
+        if let Some(&idx) = self.matching_indices.get(self.current_match) {
+            self.list_state.select(Some(idx));
+        }
+    }
+
+    /// Go to previous matching port.
+    pub fn goto_prev_match(&mut self) {
+        if self.matching_indices.is_empty() {
+            return;
+        }
+        self.current_match = if self.current_match == 0 {
+            self.matching_indices.len() - 1
+        } else {
+            self.current_match - 1
+        };
+        if let Some(&idx) = self.matching_indices.get(self.current_match) {
+            self.list_state.select(Some(idx));
+        }
+    }
+
+    /// Check if a port index is a search match.
+    pub fn is_match(&self, index: usize) -> bool {
+        self.matching_indices.contains(&index)
+    }
+
+    /// Check if search is active.
+    pub fn has_search(&self) -> bool {
+        !self.search_pattern.is_empty()
+    }
+
+    /// Get search status message.
+    pub fn search_status(&self) -> String {
+        if self.search_pattern.is_empty() {
+            String::new()
+        } else if self.matching_indices.is_empty() {
+            "No matches".to_string()
+        } else {
+            format!(
+                "{}/{} matches",
+                self.current_match + 1,
+                self.matching_indices.len()
+            )
+        }
+    }
 }
 
 /// Port list widget.
@@ -111,12 +219,24 @@ impl StatefulWidget for PortList<'_> {
     type State = PortListState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let has_search = state.has_search();
+
         let items: Vec<ListItem> = state
             .ports
             .iter()
-            .map(|port| {
+            .enumerate()
+            .map(|(i, port)| {
+                let is_match = has_search && state.is_match(i);
+
+                // Style port name based on match status
+                let name_style = if is_match {
+                    Theme::search_match()
+                } else {
+                    Theme::highlight()
+                };
+
                 let mut lines = vec![Line::from(vec![
-                    Span::styled(&port.name, Theme::highlight()),
+                    Span::styled(&port.name, name_style),
                 ])];
 
                 // Add details on second line if available

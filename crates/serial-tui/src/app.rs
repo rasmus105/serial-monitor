@@ -2,7 +2,7 @@
 
 use std::{io, time::{Duration, SystemTime}};
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     Terminal,
     backend::Backend,
@@ -275,17 +275,16 @@ impl App {
                         self.show_config = !self.show_config;
                         return;
                     }
-                    KeyCode::Tab if !self.is_input_mode() => {
-                        self.focus = match self.focus {
-                            Focus::Main => {
-                                if self.show_config {
-                                    Focus::Config
-                                } else {
-                                    Focus::Main
-                                }
-                            }
-                            Focus::Config => Focus::Main,
-                        };
+                    // Ctrl+h moves focus left (to Main panel)
+                    KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.is_input_mode() => {
+                        self.focus = Focus::Main;
+                        return;
+                    }
+                    // Ctrl+l moves focus right (to Config panel)
+                    KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.is_input_mode() => {
+                        if self.show_config {
+                            self.focus = Focus::Config;
+                        }
                         return;
                     }
                     _ => {}

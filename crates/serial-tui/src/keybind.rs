@@ -114,17 +114,27 @@ pub fn all_keybinds() -> Vec<Keybind> {
             KeyContext::Global,
         ),
         Keybind::new(key(KeyCode::Esc), "Close overlay/Cancel", KeyContext::Global),
+        Keybind::new(
+            ctrl(KeyCode::Char('h')),
+            "Focus main panel",
+            KeyContext::Global,
+        ),
+        Keybind::new(
+            ctrl(KeyCode::Char('l')),
+            "Focus config panel",
+            KeyContext::Global,
+        ),
         // Navigation
         Keybind::new(key(KeyCode::Char('j')), "Down", KeyContext::Navigation),
         Keybind::new(key(KeyCode::Char('k')), "Up", KeyContext::Navigation),
-        Keybind::new(key(KeyCode::Char('h')), "Left", KeyContext::Navigation),
-        Keybind::new(key(KeyCode::Char('l')), "Right", KeyContext::Navigation),
+        Keybind::new(key(KeyCode::Char('h')), "Left / prev option", KeyContext::Navigation),
+        Keybind::new(key(KeyCode::Char('l')), "Right / next option", KeyContext::Navigation),
         Keybind::new(key(KeyCode::Char('g')), "Go to top", KeyContext::Navigation),
         Keybind::new(key(KeyCode::Char('G')), "Go to bottom", KeyContext::Navigation),
         Keybind::new(ctrl(KeyCode::Char('d')), "Page down", KeyContext::Navigation),
         Keybind::new(ctrl(KeyCode::Char('u')), "Page up", KeyContext::Navigation),
-        Keybind::new(key(KeyCode::Tab), "Next field/section", KeyContext::Navigation),
-        Keybind::new(key(KeyCode::BackTab), "Previous field/section", KeyContext::Navigation),
+        Keybind::new(key(KeyCode::Enter), "Select / toggle", KeyContext::Navigation),
+        Keybind::new(key(KeyCode::Char(' ')), "Select / toggle", KeyContext::Navigation),
         // Pre-connect
         Keybind::new(
             key(KeyCode::Enter),
@@ -138,7 +148,17 @@ pub fn all_keybinds() -> Vec<Keybind> {
         ),
         Keybind::new(
             key(KeyCode::Char('/')),
-            "Enter custom path",
+            "Search ports",
+            KeyContext::PreConnect,
+        ),
+        Keybind::new(
+            key(KeyCode::Char('n')),
+            "Next search match",
+            KeyContext::PreConnect,
+        ),
+        Keybind::new(
+            key(KeyCode::Char('N')),
+            "Previous search match",
             KeyContext::PreConnect,
         ),
         // Connected
@@ -166,8 +186,8 @@ pub fn all_keybinds() -> Vec<Keybind> {
         Keybind::new(key(KeyCode::Char('f')), "Filter", KeyContext::Traffic),
         // Graph view
         Keybind::new(
-            key(KeyCode::Char('p')),
-            "Toggle parser type",
+            key(KeyCode::Char('g')),
+            "Toggle graph parsing",
             KeyContext::Graph,
         ),
         Keybind::new(

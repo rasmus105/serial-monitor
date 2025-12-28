@@ -102,4 +102,8 @@ impl Theme {
     pub fn tab_inactive() -> Style {
         Style::default().fg(Self::MUTED)
     }
+
+    pub fn search_match() -> Style {
+        Style::default().fg(Self::WARNING).add_modifier(Modifier::BOLD)
+    }
 }

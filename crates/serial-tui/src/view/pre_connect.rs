@@ -36,10 +36,10 @@ pub struct PreConnectView {
     pub config: PreConnectConfig,
     /// Config panel navigation.
     pub config_nav: ConfigPanelNav,
-    /// Custom path input.
-    pub custom_path: TextInputState,
-    /// Whether custom path input is focused.
-    pub custom_path_focused: bool,
+    /// Search input state.
+    pub search_input: TextInputState,
+    /// Whether search input is focused.
+    pub search_focused: bool,
 }
 
 /// Configuration state for pre-connection.
@@ -184,8 +184,8 @@ impl PreConnectView {
             port_list: PortListState::new(),
             config: PreConnectConfig::default(),
             config_nav: ConfigPanelNav::new(),
-            custom_path: TextInputState::new().with_placeholder("/dev/ttyUSB0 or /dev/pts/X"),
-            custom_path_focused: false,
+            search_input: TextInputState::new().with_placeholder("Search ports..."),
+            search_focused: false,
         }
     }
 
@@ -201,7 +201,7 @@ impl PreConnectView {
     }
 
     pub fn is_input_mode(&self) -> bool {
-        self.custom_path_focused
+        self.search_focused
     }
 
     pub fn draw(
@@ -211,17 +211,31 @@ impl PreConnectView {
         buf: &mut Buffer,
         focus: Focus,
     ) {
-        // Main area: port list + custom path input
-        let main_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(5), Constraint::Length(3)])
-            .split(main_area);
+        // Main area: port list + optional search bar
+        let main_chunks = if self.search_focused || self.port_list.has_search() {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(5), Constraint::Length(3)])
+                .split(main_area)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(5)])
+                .split(main_area)
+        };
 
         // Port list
+        let port_title = if self.port_list.has_search() {
+            let status = self.port_list.search_status();
+            format!(" Available Ports [{}] ", status)
+        } else {
+            " Available Ports ".to_string()
+        };
+
         let port_block = Block::default()
-            .title(" Available Ports ")
+            .title(port_title)
             .borders(Borders::ALL)
-            .border_style(if focus == Focus::Main && !self.custom_path_focused {
+            .border_style(if focus == Focus::Main && !self.search_focused {
                 Theme::border_focused()
             } else {
                 Theme::border()
@@ -230,28 +244,33 @@ impl PreConnectView {
         let mut port_list_state = PortListState {
             ports: self.port_list.ports.clone(),
             list_state: self.port_list.list_state.clone(),
+            search_pattern: self.port_list.search_pattern.clone(),
+            matching_indices: self.port_list.matching_indices.clone(),
+            current_match: self.port_list.current_match,
         };
 
         PortList::new()
             .block(port_block)
-            .focused(focus == Focus::Main && !self.custom_path_focused)
+            .focused(focus == Focus::Main && !self.search_focused)
             .render(main_chunks[0], buf, &mut port_list_state);
 
-        // Custom path input
-        let custom_block = Block::default()
-            .title(" Custom Path ")
-            .borders(Borders::ALL)
-            .border_style(if self.custom_path_focused {
-                Theme::border_focused()
-            } else {
-                Theme::border()
-            });
+        // Search bar if active
+        if self.search_focused || self.port_list.has_search() {
+            let search_block = Block::default()
+                .title(" Search ")
+                .borders(Borders::ALL)
+                .border_style(if self.search_focused {
+                    Theme::border_focused()
+                } else {
+                    Theme::border()
+                });
 
-        let mut custom_path_state = self.custom_path.clone();
-        TextInput::new(&mut custom_path_state)
-            .block(custom_block)
-            .focused(self.custom_path_focused)
-            .render(main_chunks[1], buf);
+            let mut search_state = self.search_input.clone();
+            TextInput::new(&mut search_state)
+                .block(search_block)
+                .focused(self.search_focused)
+                .render(main_chunks[1], buf);
+        }
 
         // Help text at bottom of port list
         if main_chunks[0].height > 2 {
@@ -262,7 +281,9 @@ impl PreConnectView {
                 Span::styled("r", Theme::keybind()),
                 Span::raw(" refresh  "),
                 Span::styled("/", Theme::keybind()),
-                Span::raw(" custom path  "),
+                Span::raw(" search  "),
+                Span::styled("Ctrl+h/l", Theme::keybind()),
+                Span::raw(" panels  "),
                 Span::styled("?", Theme::keybind()),
                 Span::raw(" help"),
             ]);
@@ -290,25 +311,25 @@ impl PreConnectView {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent, focus: Focus) -> Option<PreConnectAction> {
-        // Handle custom path input mode
-        if self.custom_path_focused {
+        // Handle search input mode
+        if self.search_focused {
             match key.code {
                 KeyCode::Enter => {
-                    let path = self.custom_path.take();
-                    if !path.is_empty() {
-                        self.custom_path_focused = false;
-                        return Some(PreConnectAction::Connect {
-                            port: path,
-                            config: self.config.to_serial_config(),
-                        });
-                    }
+                    // Apply search and exit search mode
+                    let pattern = self.search_input.content.clone();
+                    self.port_list.set_search(&pattern);
+                    self.search_focused = false;
                 }
                 KeyCode::Esc => {
-                    self.custom_path_focused = false;
-                    self.custom_path.clear();
+                    // Clear search and exit
+                    self.search_focused = false;
+                    self.search_input.clear();
+                    self.port_list.clear_search();
                 }
                 _ => {
-                    self.custom_path.handle_key(key);
+                    self.search_input.handle_key(key);
+                    // Live search as user types
+                    self.port_list.set_search(&self.search_input.content);
                 }
             }
             return None;
@@ -333,7 +354,15 @@ impl PreConnectView {
                 return Some(PreConnectAction::Toast(Toast::info("Ports refreshed")));
             }
             KeyCode::Char('/') => {
-                self.custom_path_focused = true;
+                self.search_focused = true;
+            }
+            KeyCode::Char('n') => {
+                // Next search match
+                self.port_list.goto_next_match();
+            }
+            KeyCode::Char('N') => {
+                // Previous search match
+                self.port_list.goto_prev_match();
             }
             KeyCode::Enter => {
                 if let Some(port) = self.port_list.selected_name() {
