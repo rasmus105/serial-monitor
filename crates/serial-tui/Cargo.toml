@@ -1,0 +1,15 @@
+[package]
+name = "serial-tui"
+description = "Terminal UI for serial monitor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serial-core = { workspace = true }
+
+tokio = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true, features = ["event-stream"] }
+unicode-width = { workspace = true }
+strum = { workspace = true }

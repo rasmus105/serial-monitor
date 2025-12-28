@@ -129,6 +129,16 @@ impl SessionHandle {
         self.buffer.read().unwrap()
     }
 
+    /// Get a write lock on the data buffer
+    ///
+    /// Use this for operations that modify buffer state, such as:
+    /// - Setting encoding
+    /// - Enabling/disabling graph mode
+    /// - Setting search/filter patterns
+    pub fn buffer_mut(&self) -> std::sync::RwLockWriteGuard<'_, DataBuffer> {
+        self.buffer.write().unwrap()
+    }
+
     /// Send data to the serial port
     ///
     /// This is non-blocking - the data is queued for sending.
