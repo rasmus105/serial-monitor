@@ -1,17 +1,18 @@
 # AGENTS.md - Serial Monitor Architecture Guide
 
-This document outlines the architecture, design decisions, and implementation guidelines for the serial monitor project. It serves as the primary reference for AI agents and developers working on this codebase.
+This document outlines the architecture, design decisions, and implementation guidelines for this serial monitor project. It serves as the primary reference for AI agents and developers working on this codebase.
 
 ## Project Overview
 
-A serial monitor application with:
-- **TUI frontend** (primary, using ratatui) with vim-like keybindings
-- **Future GUI frontend** (planned, likely egui or iced)
+A serial monitor application, that should contain these crates before v1.0.0:
+- **TUI frontend** (using ratatui) with vim-like keybindings
+- **GUI frontend** (using iced) with more friendly UI
 - **Core library** that is frontend-agnostic
 
 ### Key Design Principle
 
 **The previous attempt failed due to coupling.** A high priority is maintaining strict separation between the core library and UI frontends. The core must have ZERO knowledge of any UI framework.
+However, it should still offer utilities to make development of frontends easier (such as search, file-saving, etc.)
 
 ---
 
@@ -24,6 +25,7 @@ serial-monitor/
 ├── crates/
 │   ├── serial-core/          # Frontend-agnostic library
 │   └── serial-tui/           # TUI frontend
+│   └── serial-gui/           # GUI frontend (not yet created)
 ├── Cargo.toml                # Workspace root
 └── AGENTS.md
 ```
@@ -65,7 +67,7 @@ Each session represents one serial port connection. Multi-port support = multipl
 
 ### Raw Bytes as Source of Truth
 
-**CRITICAL:** Store raw bytes, convert on-demand. The user selects an encoding (UTF-8, ASCII, Hex, Binary) and the display is converted accordingly.
+**CRITICAL:** Store raw bytes in core, convert and cache on-demand. The user selects an encoding (UTF-8, ASCII, Hex, Binary) and the display is converted accordingly.
 
 ### Data Chunk Structure
 
@@ -132,17 +134,9 @@ Serial I/O runs on a dedicated async runtime, communicating via channels:
 Displays sent/received data with sent data visually differentiated.
 
 **Search/Filter:**
-- Search operates on the DISPLAYED representation (encoded strings, not raw bytes)
-- In Hex mode: search for "DE AD BE EF" (with or without spaces)
-- In UTF-8 mode: search for text
+- Search operates on the DISPLAYED representation (encoded UTF-8 strings, not raw bytes)
+    For example: In hex mode, the data will displayed like, e.g.: "DE AD BE EF". Searching "E" should therefore have 3 matches.
 - Filter (UTF-8/ASCII): show only lines matching pattern (regex support)
-- Core provides:
-  - Raw data storage and encoding functions
-  - Shared search utilities (`search/` module) with regex caching and incremental search
-- UI handles:
-  - Encoding chunks before passing to search engine
-  - Managing UI state (current match, scroll position)
-  - Rendering highlighted matches
 
 ### 2. Graph View
 
@@ -205,25 +199,12 @@ Navigation:
 Search:
   /         - Start search
   n/N       - Next/previous match
-  Esc       - Clear search
 
 Views:
   1         - Traffic view
   2         - Graph view
   3         - Settings
-
-Command Mode:
-  :         - Enter command mode
-  :q        - Quit
-  :w <path> - Save to file
-  :set encoding=hex
-  :set baud=115200
-  :connect /dev/ttyUSB0
 ```
-
-### Command Mode
-
-Lives entirely in the TUI crate. Parses commands and calls core API.
 
 ---
 
@@ -265,8 +246,13 @@ serial-tui:
 
 3. **Blocking the UI on I/O:** Always use channels for serial communication.
 
-4. **Duplicating data between core and UI:** UI should reference or request slices from core, not maintain its own copy of serial data.
+4. **Monolithic files:** If a file exceeds ~1000 lines, consider splitting or even extracting into
+   a decoupled library.
 
-5. **Monolithic files:** If a file exceeds ~500 lines, consider splitting. The previous 5000-line entangled file was a symptom of poor separation.
+5. **Avoid `new` implementations:** Often `new` is not necessary. Should ONLY
+   be added when providing some sort of logic, NOT when `Struct { ... }` can be
+   used instead.
 
-6. **Premature optimization of encoding:** Get it working with simple conversion first, then add caching if profiling shows it's needed.
+6. **Dumb functions that can be auto-generated:** Usage of crates such as
+   `strum`, `thiserror`, etc. is incentivised when it can simplify the codebase
+   and remove the need for boilerplate code.

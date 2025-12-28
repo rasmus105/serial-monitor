@@ -135,14 +135,10 @@ impl SearchEngine {
     /// been searched yet will be processed. Call `invalidate()` to force a
     /// full re-search.
     ///
-    /// # Arguments
-    ///
     /// * `total_chunks` - Total number of chunks available
     /// * `get_chunk` - Accessor closure to get the encoded string for a chunk index
     ///
-    /// # Returns
-    ///
-    /// Slice of all matches found (including previously found matches)
+    /// Returns slice of all matches found (including previously found matches)
     ///
     /// # Example
     ///
@@ -347,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_search_literal() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
         engine.set_pattern("Error", PatternMode::Normal).unwrap();
 
         let chunks = sample_chunks();
@@ -360,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_search_regex() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
         engine
             .set_pattern(r"Error:\s+\w+", PatternMode::Regex)
             .unwrap();
@@ -373,7 +369,7 @@ mod tests {
 
     #[test]
     fn test_search_with_vecdeque() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
         engine.set_pattern("test", PatternMode::Normal).unwrap();
 
         let chunks: VecDeque<String> = ["test one", "no match", "test two"]
@@ -387,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_incremental_search() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
         engine.set_pattern("test", PatternMode::Normal).unwrap();
 
         // Initial search with 2 chunks
@@ -409,7 +405,7 @@ mod tests {
 
     #[test]
     fn test_invalidate_forces_full_research() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
         engine.set_pattern("test", PatternMode::Normal).unwrap();
 
         let chunks = vec!["test".to_string()];
@@ -428,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_navigation() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
         engine.set_pattern("Error", PatternMode::Normal).unwrap();
 
         let chunks = sample_chunks();
@@ -459,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_buffer_truncation() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
         engine.set_pattern("match", PatternMode::Normal).unwrap();
 
         let chunks = vec![
@@ -482,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_matches_for_chunk() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
         engine.set_pattern("a", PatternMode::Normal).unwrap();
 
         let chunks = vec!["aaa".to_string(), "bbb".to_string(), "aba".to_string()];
@@ -503,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_status_message() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
 
         // No pattern
         assert_eq!(engine.status_message(), "");
@@ -527,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_no_pattern_returns_empty() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
 
         let chunks = vec!["test".to_string()];
         let matches = engine.search(chunks.len(), |i| &chunks[i]);
@@ -537,7 +533,7 @@ mod tests {
 
     #[test]
     fn test_set_pattern_resets_search() {
-        let mut engine = SearchEngine::new();
+        let mut engine = SearchEngine::default();
         engine.set_pattern("test", PatternMode::Normal).unwrap();
 
         let chunks = vec!["test".to_string(), "test".to_string()];
