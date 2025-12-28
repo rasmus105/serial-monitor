@@ -22,8 +22,8 @@ mod port;
 mod session;
 
 // utility crates to be used by libraries to avoid duplication across front-ends.
+pub mod display;
 pub mod graph;
-pub mod search;
 
 pub use buffer::{DataBuffer, DataChunk, Direction};
 pub use chunking::{Chunker, ChunkingStrategy, LineDelimiter};
@@ -34,5 +34,5 @@ pub use file_saver::{
 };
 pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
 pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
-pub use search::{PatternMatcher, PatternMode, SearchEngine, SearchMatch};
+pub use display::{PatternMatcher, PatternMode, SearchMatch};
 pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};

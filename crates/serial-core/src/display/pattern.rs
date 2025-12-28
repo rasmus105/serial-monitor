@@ -36,22 +36,6 @@ impl PatternMode {
             PatternMode::Regex => PatternMode::Normal,
         }
     }
-
-    /// Get the display name for this mode
-    pub fn name(&self) -> &str {
-        self.as_ref()
-    }
-
-    /// Get a description of this mode
-    pub fn description(&self) -> &'static str {
-        self.get_message()
-            .expect("Descriptions added for all modes")
-    }
-
-    /// Get all available modes
-    pub fn all() -> &'static [PatternMode] {
-        Self::VARIANTS
-    }
 }
 
 /// Compiled pattern for efficient matching
@@ -96,7 +80,7 @@ pub struct PatternMatcher {
     /// The original pattern string
     pattern: Option<String>,
     /// The matching mode
-    mode: PatternMode,
+    pub mode: PatternMode,
     /// Compiled pattern for efficient matching
     compiled: Option<CompiledPattern>,
     /// Error message if pattern compilation failed.
@@ -172,11 +156,6 @@ impl PatternMatcher {
     /// Get the current pattern string
     pub fn pattern(&self) -> Option<&str> {
         self.pattern.as_deref()
-    }
-
-    /// Get the current mode
-    pub fn mode(&self) -> PatternMode {
-        self.mode
     }
 
     /// Get the error message if pattern compilation failed
@@ -308,7 +287,7 @@ mod tests {
 
         // Should work - "hello" is a valid regex too
         matcher.set_mode(PatternMode::Regex).unwrap();
-        assert_eq!(matcher.mode(), PatternMode::Regex);
+        assert_eq!(matcher.mode, PatternMode::Regex);
         assert!(matcher.is_match("hello world"));
     }
 

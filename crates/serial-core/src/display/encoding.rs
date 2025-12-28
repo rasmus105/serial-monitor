@@ -3,7 +3,7 @@
 //! Provides multiple encoding modes with configurable formatting options
 //! for hexadecimal and binary representations.
 
-use strum::{AsRefStr, Display, EnumMessage, VariantArray};
+use strum::{AsRefStr, Display, EnumMessage};
 
 /// Formatting options for hexadecimal display
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,9 +45,7 @@ impl Default for BinaryFormat {
 }
 
 /// Encoding mode for displaying raw bytes
-#[derive(
-    Debug, Default, Clone, Copy, PartialEq, Eq, Display, EnumMessage, AsRefStr, VariantArray,
-)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Display, EnumMessage, AsRefStr)]
 pub enum Encoding {
     /// UTF-8 with replacement character for invalid sequences
     #[default]
@@ -70,52 +68,7 @@ pub enum Encoding {
     Binary(BinaryFormat),
 }
 
-impl Encoding {
-    /// Create UTF-8 encoding
-    pub fn utf8() -> Self {
-        Self::Utf8
-    }
 
-    /// Create ASCII encoding
-    pub fn ascii() -> Self {
-        Self::Ascii
-    }
-
-    /// Create Hex encoding with default format
-    pub fn hex() -> Self {
-        Self::Hex(HexFormat::default())
-    }
-
-    /// Create Hex encoding with custom format
-    pub fn hex_with_format(format: HexFormat) -> Self {
-        Self::Hex(format)
-    }
-
-    /// Create Binary encoding with default format
-    pub fn binary() -> Self {
-        Self::Binary(BinaryFormat::default())
-    }
-
-    /// Create Binary encoding with custom format
-    pub fn binary_with_format(format: BinaryFormat) -> Self {
-        Self::Binary(format)
-    }
-
-    /// Get display name for this encoding
-    pub fn name(&self) -> &str {
-        self.as_ref()
-    }
-
-    /// Get description for this encoding
-    pub fn description(&self) -> &'static str {
-        self.get_message().expect("All variants have messages")
-    }
-
-    /// Get all base encoding variants (without format variations)
-    pub fn all_variants() -> &'static [Encoding] {
-        Self::VARIANTS
-    }
-}
 
 /// Encode raw bytes to a display string using the specified encoding
 pub fn encode(data: &[u8], encoding: Encoding) -> String {

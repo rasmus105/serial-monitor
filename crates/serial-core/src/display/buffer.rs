@@ -146,16 +146,6 @@ impl DisplayBuffer {
         }
     }
 
-    /// Get total chunk count in current view
-    pub fn len(&self) -> usize {
-        self.chunks().len()
-    }
-
-    /// Check if current view is empty
-    pub fn is_empty(&self) -> bool {
-        self.chunks().is_empty()
-    }
-
     // =========================================================================
     // Filtering
     // =========================================================================
@@ -195,7 +185,7 @@ impl DisplayBuffer {
 
     /// Get filter mode
     pub fn filter_mode(&self) -> PatternMode {
-        self.filter.pattern.mode()
+        self.filter.pattern.mode
     }
 
     /// Get filter error
@@ -243,29 +233,26 @@ impl DisplayBuffer {
 
     /// Get search pattern
     pub fn search_pattern(&self) -> Option<&str> {
-        self.search.pattern()
+        self.search.pattern.pattern()
     }
 
     /// Get search mode
     pub fn search_mode(&self) -> PatternMode {
-        self.search.mode()
+        self.search.pattern.mode
     }
 
     /// Get search error
     pub fn search_error(&self) -> Option<&str> {
-        self.search.error()
+        self.search.pattern.error()
     }
 
     /// Get all search matches
     ///
     /// Matches are within the current view (chunks()).
     pub fn matches(&mut self) -> &[SearchMatch] {
-        self.search.update(self.chunks())
-    }
-
-    /// Get match count
-    pub fn match_count(&self) -> usize {
-        self.search.match_count()
+        // Need to get the chunks reference first to avoid borrow conflict
+        let chunks = self.chunks();
+        self.search.update(chunks)
     }
 
     /// Go to next match
@@ -284,7 +271,7 @@ impl DisplayBuffer {
 
     /// Get current match index
     pub fn current_match_index(&self) -> Option<usize> {
-        self.search.current_match_index()
+        self.search.current_match
     }
 
     /// Get current match

@@ -28,13 +28,13 @@ pub struct SearchMatch {
 #[derive(Debug, Default)]
 pub(crate) struct SearchState {
     /// Pattern matcher for searching
-    pattern: PatternMatcher,
+    pub(crate) pattern: PatternMatcher,
 
     /// All matches found in the current view
-    matches: Vec<SearchMatch>,
+    pub(crate) matches: Vec<SearchMatch>,
 
     /// Current match index for navigation
-    current_match: Option<usize>,
+    pub(crate) current_match: Option<usize>,
 
     /// Number of chunks that have been searched
     searched_count: usize,
@@ -69,26 +69,6 @@ impl SearchState {
         self.searched_count = 0;
     }
 
-    /// Check if a search pattern is set
-    pub fn has_pattern(&self) -> bool {
-        self.pattern.has_pattern()
-    }
-
-    /// Get the current pattern string
-    pub fn pattern(&self) -> Option<&str> {
-        self.pattern.pattern()
-    }
-
-    /// Get the current pattern mode
-    pub fn mode(&self) -> PatternMode {
-        self.pattern.mode()
-    }
-
-    /// Get pattern error if any
-    pub fn error(&self) -> Option<&str> {
-        self.pattern.error()
-    }
-
     // -------------------------------------------------------------------------
     // Search execution
     // -------------------------------------------------------------------------
@@ -115,21 +95,6 @@ impl SearchState {
     // -------------------------------------------------------------------------
     // Match access
     // -------------------------------------------------------------------------
-
-    /// Get all matches
-    pub fn matches(&self) -> &[SearchMatch] {
-        &self.matches
-    }
-
-    /// Get match count
-    pub fn match_count(&self) -> usize {
-        self.matches.len()
-    }
-
-    /// Get current match index
-    pub fn current_match_index(&self) -> Option<usize> {
-        self.current_match
-    }
 
     /// Get current match
     pub fn current_match(&self) -> Option<&SearchMatch> {
@@ -198,15 +163,15 @@ impl SearchState {
 
     /// Get status message for display
     pub fn status_message(&self) -> String {
-        if let Some(error) = self.error() {
+        if let Some(error) = self.pattern.error() {
             return error.to_string();
         }
 
-        if !self.has_pattern() {
+        if !self.pattern.has_pattern() {
             return String::new();
         }
 
-        let pattern = self.pattern().unwrap_or("");
+        let pattern = self.pattern.pattern().unwrap_or("");
 
         if self.matches.is_empty() {
             return format!("Pattern not found: {}", pattern);

@@ -5,7 +5,7 @@
 //! by DisplayBuffer - this module just handles the filter logic.
 
 use super::chunk::DisplayChunk;
-use super::pattern::{PatternMatcher, PatternMode};
+use super::pattern::PatternMatcher;
 
 /// Internal filter state
 ///
@@ -24,16 +24,6 @@ pub(crate) struct FilterState {
 }
 
 impl FilterState {
-    /// Check if any filter is active
-    ///
-    /// A filter is active if:
-    /// - A pattern is set, OR
-    /// - TX is hidden, OR
-    /// - RX is hidden
-    pub fn is_active(&self) -> bool {
-        self.pattern.has_pattern() || !self.show_tx || !self.show_rx
-    }
-
     /// Check if a chunk passes all filter criteria
     pub fn matches(&self, chunk: &DisplayChunk) -> bool {
         // Direction check

@@ -17,27 +17,7 @@ pub struct DisplayChunk {
     pub direction: Direction,
 }
 
-impl DisplayChunk {
-    /// Check if this chunk was transmitted (TX)
-    pub fn is_tx(&self) -> bool {
-        self.direction == Direction::Tx
-    }
 
-    /// Check if this chunk was received (RX)
-    pub fn is_rx(&self) -> bool {
-        self.direction == Direction::Rx
-    }
-
-    /// Get the length of the content in bytes
-    pub fn len(&self) -> usize {
-        self.content.len()
-    }
-
-    /// Check if the content is empty
-    pub fn is_empty(&self) -> bool {
-        self.content.is_empty()
-    }
-}
 
 #[cfg(test)]
 mod tests {
