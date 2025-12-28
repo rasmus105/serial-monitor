@@ -228,8 +228,7 @@ impl GraphParser for Regex {
         for caps in self.regex.captures_iter(text) {
             if self.has_key_value_groups {
                 // Generic key/value pattern: (?P<key>...) and (?P<value>...)
-                if let (Some(key_match), Some(value_match)) =
-                    (caps.name("key"), caps.name("value"))
+                if let (Some(key_match), Some(value_match)) = (caps.name("key"), caps.name("value"))
                     && let Ok(value) = value_match.as_str().parse::<f64>()
                 {
                     results.push(ParsedValue {
@@ -360,11 +359,7 @@ impl Csv {
             .map(|p| p + 1)
             .unwrap_or(0);
 
-        if start >= end {
-            &[]
-        } else {
-            &data[start..end]
-        }
+        if start >= end { &[] } else { &data[start..end] }
     }
 }
 

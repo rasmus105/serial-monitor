@@ -27,12 +27,12 @@ pub mod graph;
 
 pub use buffer::{DataBuffer, DataChunk, Direction};
 pub use chunking::{Chunker, ChunkingStrategy, LineDelimiter};
-pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8, Encoding};
+pub use display::{PatternMatcher, PatternMode, SearchMatch};
+pub use encoding::{Encoding, encode, encode_ascii, encode_binary, encode_hex, encode_utf8};
 pub use error::{Error, Result};
 pub use file_saver::{
-    start_file_saver, FileSaveConfig, FileSaverCommand, FileSaverHandle, SaveFormat,
+    FileSaveConfig, FileSaverCommand, FileSaverHandle, SaveFormat, start_file_saver,
 };
-pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
-pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
-pub use display::{PatternMatcher, PatternMode, SearchMatch};
+pub use file_sender::{FileSendConfig, FileSendHandle, FileSendProgress, send_file};
+pub use port::{DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits, list_ports};
 pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};

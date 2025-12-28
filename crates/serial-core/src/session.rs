@@ -50,11 +50,6 @@ pub struct SessionConfig {
 }
 
 impl SessionConfig {
-    /// Create a new session config with default settings
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Set the RX chunking strategy
     pub fn with_rx_chunking(mut self, strategy: ChunkingStrategy) -> Self {
         self.rx_chunking = strategy;
@@ -213,7 +208,15 @@ impl Session {
 
         // Spawn the I/O task
         tokio::spawn(async move {
-            io_task(port, buffer_clone, event_tx, command_rx, rx_chunker, tx_chunker).await;
+            io_task(
+                port,
+                buffer_clone,
+                event_tx,
+                command_rx,
+                rx_chunker,
+                tx_chunker,
+            )
+            .await;
         });
 
         Ok(SessionHandle {
@@ -261,7 +264,7 @@ async fn io_task(
                     Ok(n) => {
                         // Process through chunker - may produce 0, 1, or many chunks
                         let chunks = rx_chunker.process(&read_buf[..n]);
-                        
+
                         for chunk in chunks {
                             // Store in buffer
                             {
@@ -297,7 +300,7 @@ async fn io_task(
                             Ok(()) => {
                                 // Process through TX chunker
                                 let chunks = tx_chunker.process(&data);
-                                
+
                                 for chunk in chunks {
                                     // Store in buffer
                                     {
@@ -307,7 +310,7 @@ async fn io_task(
                                     // Notify UI
                                     let _ = event_tx.send(SessionEvent::DataSent(chunk)).await;
                                 }
-                                
+
                                 // For TX, we might want to flush immediately if using line-delimited
                                 // (since the user's send is a complete "message")
                                 if let Some(chunk) = tx_chunker.flush() {

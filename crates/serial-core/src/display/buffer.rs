@@ -251,7 +251,11 @@ impl DisplayBuffer {
     /// Matches are within the current view (chunks()).
     pub fn matches(&mut self) -> &[SearchMatch] {
         // Need to get the chunks reference first to avoid borrow conflict
-        let chunks = self.chunks();
+        let chunks = if self.is_filter_active() {
+            &self.filtered_chunks
+        } else {
+            &self.all_chunks
+        };
         self.search.update(chunks)
     }
 

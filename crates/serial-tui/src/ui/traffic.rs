@@ -1,6 +1,7 @@
 //! Traffic view rendering
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::Marker,
@@ -9,18 +10,16 @@ use ratatui::{
         Axis, Block, Borders, Chart, Clear, Dataset, GraphType, List, ListItem, Paragraph,
         Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
-    Frame,
 };
-use serial_core::{encode, Direction as DataDirection, GraphMode};
+use serial_core::{Direction as DataDirection, GraphMode, encode};
 use strum::IntoEnumIterator;
 
 use crate::app::{
-    App, ConfigSection, ConnectionState, EnumNavigation, GraphConfigField, GraphFocus,
-    HexGrouping, InputMode, PaneContent, PaneFocus, SearchMatch, TrafficConfigField, TrafficFocus,
-    WrapMode,
+    App, ConfigSection, ConnectionState, EnumNavigation, GraphConfigField, GraphFocus, HexGrouping,
+    InputMode, PaneContent, PaneFocus, SearchMatch, TrafficConfigField, TrafficFocus, WrapMode,
 };
 use crate::command::TrafficCommand;
-use crate::wrap::{truncate_line_styled, wrap_line_styled, GutterConfig, StyledSegment};
+use crate::wrap::{GutterConfig, StyledSegment, truncate_line_styled, wrap_line_styled};
 
 use super::{create_separator, push_section_separator};
 
@@ -1094,10 +1093,9 @@ fn render_parsed_data_graph(frame: &mut Frame, app: &App, area: Rect) {
     let parsed_data = engine.parsed_data();
 
     if parsed_data.is_empty() {
-        let placeholder = Paragraph::new(
-            "No parsed data yet.\nEnsure your data contains key=value patterns.",
-        )
-        .style(Style::default().fg(Color::DarkGray));
+        let placeholder =
+            Paragraph::new("No parsed data yet.\nEnsure your data contains key=value patterns.")
+                .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(placeholder, area);
         return;
     }
@@ -1167,9 +1165,8 @@ fn render_parsed_data_graph(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     if all_data.is_empty() {
-        let placeholder =
-            Paragraph::new("No visible data in selected time window.")
-                .style(Style::default().fg(Color::DarkGray));
+        let placeholder = Paragraph::new("No visible data in selected time window.")
+            .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(placeholder, area);
         return;
     }
@@ -1235,8 +1232,11 @@ fn render_parsed_data_graph(frame: &mut Frame, app: &App, area: Rect) {
 fn render_graph_config_panel(frame: &mut Frame, app: &App, area: Rect, focused: bool) {
     let dropdown_open = app.input.mode == InputMode::GraphConfigDropdown;
     let text_input_open = app.input.mode == InputMode::GraphConfigTextInput;
-    
-    let border_style = if (focused && matches!(app.graph.focus, GraphFocus::Config)) || dropdown_open || text_input_open {
+
+    let border_style = if (focused && matches!(app.graph.focus, GraphFocus::Config))
+        || dropdown_open
+        || text_input_open
+    {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
@@ -1270,7 +1270,8 @@ fn render_graph_config_panel(frame: &mut Frame, app: &App, area: Rect, focused: 
             continue;
         }
 
-        let is_selected = app.graph.config.field == field && (is_focused || dropdown_open || text_input_open);
+        let is_selected =
+            app.graph.config.field == field && (is_focused || dropdown_open || text_input_open);
 
         let name: &'static str = field.into();
         let value = app.graph.get_config_display(field);
@@ -1363,8 +1364,8 @@ fn render_graph_config_panel(frame: &mut Frame, app: &App, area: Rect, focused: 
 
     // Add series section if in ParsedData mode and there are series
     let series_names = app.graph.series_names();
-    if !series_names.is_empty() 
-        && app.graph.engine.as_ref().map(|e| e.mode()) == Some(GraphMode::ParsedData) 
+    if !series_names.is_empty()
+        && app.graph.engine.as_ref().map(|e| e.mode()) == Some(GraphMode::ParsedData)
     {
         lines.push(Line::from("")); // Spacer
         let series_sep = create_separator("Series", panel_width);

@@ -116,10 +116,15 @@ pub async fn send_file(
     config: FileSendConfig,
 ) -> Result<FileSendHandle> {
     let path = path.as_ref().to_path_buf();
-    
+
     // Open file and get size
-    let file = File::open(&path).await.map_err(|e| Error::Io(e.to_string()))?;
-    let metadata = file.metadata().await.map_err(|e| Error::Io(e.to_string()))?;
+    let file = File::open(&path)
+        .await
+        .map_err(|e| Error::Io(e.to_string()))?;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|e| Error::Io(e.to_string()))?;
     let total_bytes = metadata.len();
     let total_chunks = (total_bytes as usize).div_ceil(config.chunk_size);
 

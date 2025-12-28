@@ -68,8 +68,6 @@ pub enum Encoding {
     Binary(BinaryFormat),
 }
 
-
-
 /// Encode raw bytes to a display string using the specified encoding
 pub fn encode(data: &[u8], encoding: Encoding) -> String {
     match encoding {

@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use serial_core::{
-    send_file, start_file_saver, DataChunk, FileSaveConfig, FileSaverHandle, FileSendConfig,
-    SearchEngine, Session, SessionEvent,
+    DataChunk, FileSaveConfig, FileSaverHandle, FileSendConfig, SearchEngine, Session,
+    SessionEvent, send_file, start_file_saver,
 };
 
 use crate::settings::{Settings, SettingsPanelState};
@@ -17,8 +17,8 @@ pub mod types;
 // Re-export all public types
 pub use serial_core::SearchMatch;
 pub use state::{
-    FileSendState, GraphState, GraphTimeWindow, InputState, PortSelectState, TabLayout, TabState,
-    TextInputResult, TrafficState, TAB_COUNT,
+    FileSendState, GraphState, GraphTimeWindow, InputState, PortSelectState, TAB_COUNT, TabLayout,
+    TabState, TextInputResult, TrafficState,
 };
 pub use types::{
     ChunkingMode, ConfigField, ConfigFieldKind, ConfigOption, ConfigPanelState, ConfigSection,
@@ -125,10 +125,11 @@ impl App {
 
         self.status = format!("Connecting to {}...", port_name);
 
-        match self
-            .runtime
-            .block_on(Session::connect_with_config(port_name, serial_config, session_config))
-        {
+        match self.runtime.block_on(Session::connect_with_config(
+            port_name,
+            serial_config,
+            session_config,
+        )) {
             Ok(handle) => {
                 self.connection = ConnectionState::Connected(handle);
                 self.view = View::Connected;
@@ -255,9 +256,8 @@ impl App {
         };
 
         // Build config
-        let mut config =
-            FileSaveConfig::new(self.traffic.file_save.directory.clone(), &port_name)
-                .with_format(self.traffic.file_save.format);
+        let mut config = FileSaveConfig::new(self.traffic.file_save.directory.clone(), &port_name)
+            .with_format(self.traffic.file_save.format);
 
         // Set custom filename if provided
         if !self.traffic.file_save.filename.is_empty() {

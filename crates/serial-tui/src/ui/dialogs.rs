@@ -1,11 +1,11 @@
 //! Dialog and status bar rendering
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::app::{App, InputMode};
@@ -89,9 +89,7 @@ pub(super) fn render_quit_confirm_dialog(frame: &mut Frame) {
             Span::raw(": Yes    "),
             Span::styled(
                 "N/q/Esc",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::raw(": Cancel"),
         ]),

@@ -260,7 +260,8 @@ serial-tui:
 7. **Trivial getters/setters:** Avoid writing functions like `fn show_tx(&self) -> bool { self.show_tx }`.
    These add maintenance burden without providing value. Instead, make fields public (especially for
    crate-internal types) and access them directly. Only add methods when they provide actual logic
-   beyond simple field access.
+   beyond simple field access OR trivial getters that ARE appropriate by providing immutable access, forcing
+   correct library usage.
 
 8. **Tests that verify basic logic or compilation:** Don't write tests that just verify Rust compiles
    correctly or that basic boolean/arithmetic logic works. Tests like `assert!(!filter.is_active())`

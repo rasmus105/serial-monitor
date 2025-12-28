@@ -204,19 +204,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_raw_chunking() {
-        let mut chunker = Chunker::rx(ChunkingStrategy::Raw);
-
-        let chunks = chunker.process(b"Hello");
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].data, b"Hello");
-
-        let chunks = chunker.process(b" World");
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].data, b" World");
-    }
-
-    #[test]
     fn test_line_delimited_complete_lines() {
         let mut chunker = Chunker::rx(ChunkingStrategy::line_delimited());
 

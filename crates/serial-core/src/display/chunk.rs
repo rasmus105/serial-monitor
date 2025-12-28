@@ -17,8 +17,6 @@ pub struct DisplayChunk {
     pub direction: Direction,
 }
 
-
-
 #[cfg(test)]
 mod tests {
     // Tests will be added with DisplayBuffer integration tests

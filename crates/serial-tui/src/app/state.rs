@@ -2,9 +2,9 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serial_core::{
-    list_ports, ChunkingStrategy, DataBits, Encoding, FileSendHandle, FileSendProgress,
-    FlowControl, GraphEngine, GraphMode, LineDelimiter, Parity, ParserType, PatternMatcher,
-    PortInfo, SaveFormat, SerialConfig, SessionConfig, StopBits,
+    ChunkingStrategy, DataBits, Encoding, FileSendHandle, FileSendProgress, FlowControl,
+    GraphEngine, GraphMode, LineDelimiter, Parity, ParserType, PatternMatcher, PortInfo,
+    SaveFormat, SerialConfig, SessionConfig, StopBits, list_ports,
 };
 use strum::IntoEnumIterator;
 

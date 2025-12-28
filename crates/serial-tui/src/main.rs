@@ -4,9 +4,9 @@ use std::io;
 
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 use serial_tui::App;
 
@@ -35,7 +35,9 @@ mod event_loop {
             terminal.draw(|frame| serial_tui::ui::render(frame, app))?;
 
             // Handle input
-            if event::poll(app.tick_rate())? && let Event::Key(key) = event::read()? {
+            if event::poll(app.tick_rate())?
+                && let Event::Key(key) = event::read()?
+            {
                 app.handle_key(key);
             }
 

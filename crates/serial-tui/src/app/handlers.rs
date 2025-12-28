@@ -1,19 +1,19 @@
 //! Key event handlers for the application.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use serial_core::{encode, PatternMode};
+use serial_core::{PatternMode, encode};
 
 use crate::command::{
-    map_global_nav_key, DropdownCommand, GlobalNavCommand, PortSelectCommand, TrafficCommand,
+    DropdownCommand, GlobalNavCommand, PortSelectCommand, TrafficCommand, map_global_nav_key,
 };
-use crate::settings::{key_event_to_binding, map_settings_key, GeneralSetting, SettingsCommand};
+use crate::settings::{GeneralSetting, SettingsCommand, key_event_to_binding, map_settings_key};
 
+use super::App;
 use super::state::TextInputResult;
 use super::types::{
     EnumNavigation, InputMode, PaneContent, PaneFocus, PortSelectFocus, TrafficConfigField,
     TrafficFocus, View,
 };
-use super::App;
 
 /// Approximate visible height for config panel scroll calculations.
 /// The actual height is set during rendering, but this provides a reasonable default.

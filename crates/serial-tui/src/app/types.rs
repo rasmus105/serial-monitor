@@ -1,8 +1,6 @@
 //! Type definitions, traits, and enums for the application.
 
-use serial_core::{
-    DataBits, Encoding, FlowControl, Parity, PatternMode, SaveFormat, StopBits,
-};
+use serial_core::{DataBits, Encoding, FlowControl, Parity, PatternMode, SaveFormat, StopBits};
 use strum::{EnumCount, EnumIter, IntoStaticStr, VariantArray};
 
 // =============================================================================
@@ -42,7 +40,10 @@ pub trait ConfigOption: Sized + Copy + PartialEq + 'static {
 
 /// Marker trait for local enums that use strum derives.
 /// This allows the blanket `ConfigOption` impl without conflicting with external types.
-pub trait LocalStrumEnum: Sized + Copy + PartialEq + 'static + VariantArray + Into<&'static str> {}
+pub trait LocalStrumEnum:
+    Sized + Copy + PartialEq + 'static + VariantArray + Into<&'static str>
+{
+}
 
 // Implement marker trait for all local strum enums that need ConfigOption
 impl LocalStrumEnum for ChunkingMode {}
@@ -69,7 +70,7 @@ impl<T: LocalStrumEnum> ConfigOption for T {
 // =============================================================================
 
 /// Trait providing navigation methods for enums that derive `VariantArray` and `IntoStaticStr`.
-/// 
+///
 /// This trait has default implementations using strum's derives, so any enum that
 /// derives `VariantArray` and `IntoStaticStr` can implement this trait with no body.
 pub trait EnumNavigation: Sized + Copy + PartialEq + VariantArray + Into<&'static str> {
@@ -102,7 +103,7 @@ pub trait EnumNavigation: Sized + Copy + PartialEq + VariantArray + Into<&'stati
 
 /// Trait for config field enums (e.g., ConfigField, TrafficConfigField)
 /// Provides common methods for navigating and querying field properties.
-/// 
+///
 /// Requires `EnumNavigation` which provides `next()`, `prev()`, `index()`, `label()`.
 pub trait ConfigFieldKind: EnumNavigation + Default {
     /// Whether this field is a toggle (ON/OFF)
@@ -183,7 +184,7 @@ impl<F: ConfigFieldKind> ConfigPanelState<F> {
             field_line_positions: Vec::new(),
         }
     }
-    
+
     /// Create with initial visibility
     pub fn with_visible(visible: bool) -> Self {
         Self {
@@ -191,34 +192,34 @@ impl<F: ConfigFieldKind> ConfigPanelState<F> {
             ..Self::new()
         }
     }
-    
+
     /// Move to next field
     pub fn next_field(&mut self) {
         self.field = self.field.next();
     }
-    
+
     /// Move to previous field
     pub fn prev_field(&mut self) {
         self.field = self.field.prev();
     }
-    
+
     /// Open dropdown with current index
     pub fn open_dropdown(&mut self, current_index: usize) {
         self.dropdown_index = current_index;
     }
-    
+
     /// Update the visual line positions of all fields.
     /// Call this during render after building the line list.
     pub fn set_field_line_positions(&mut self, positions: Vec<usize>) {
         self.field_line_positions = positions;
     }
-    
+
     /// Get the visual line position for the currently selected field.
     /// Returns None if positions haven't been set yet.
     pub fn current_field_line(&self) -> Option<usize> {
         self.field_line_positions.get(self.field.index()).copied()
     }
-    
+
     /// Adjust scroll offset to ensure the selected field is visible.
     /// Uses the cached line positions from the last render.
     pub fn adjust_scroll(&mut self, visible_height: usize) {
@@ -286,7 +287,11 @@ impl ConfigOption for StopBits {
 
 impl ConfigOption for FlowControl {
     fn all_variants() -> &'static [Self] {
-        &[FlowControl::None, FlowControl::Software, FlowControl::Hardware]
+        &[
+            FlowControl::None,
+            FlowControl::Software,
+            FlowControl::Hardware,
+        ]
     }
 
     fn display_name(&self) -> &'static str {
@@ -329,8 +334,12 @@ impl ConfigOption for SaveFormat {
 }
 
 impl ConfigOption for PatternMode {
-    fn all_variants() -> &'static [Self] { PatternMode::all() }
-    fn display_name(&self) -> &'static str { self.name() }
+    fn all_variants() -> &'static [Self] {
+        PatternMode::all()
+    }
+    fn display_name(&self) -> &'static str {
+        self.name()
+    }
 }
 
 // =============================================================================
@@ -547,7 +556,9 @@ pub enum GraphFocus {
 // =============================================================================
 
 /// Which configuration field is selected in port selection
-#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr,
+)]
 pub enum ConfigField {
     // Serial port settings (section: Serial)
     #[default]
@@ -673,13 +684,21 @@ impl ConfigField {
 }
 
 impl ConfigFieldKind for ConfigField {
-    fn is_toggle(&self) -> bool { ConfigField::is_toggle(self) }
-    fn is_text_input(&self) -> bool { ConfigField::is_text_input(self) }
-    fn section(&self) -> ConfigSection { ConfigField::section(self) }
+    fn is_toggle(&self) -> bool {
+        ConfigField::is_toggle(self)
+    }
+    fn is_text_input(&self) -> bool {
+        ConfigField::is_text_input(self)
+    }
+    fn section(&self) -> ConfigSection {
+        ConfigField::section(self)
+    }
 }
 
 /// Which configuration field is selected in traffic view config panel
-#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr,
+)]
 pub enum TrafficConfigField {
     // Display settings (section: TrafficDisplay)
     #[default]
@@ -739,7 +758,7 @@ impl TrafficConfigField {
     pub fn is_text_input(&self) -> bool {
         matches!(
             self,
-            TrafficConfigField::SaveFilename 
+            TrafficConfigField::SaveFilename
                 | TrafficConfigField::SaveDirectory
                 | TrafficConfigField::FilterPattern
         )
@@ -772,8 +791,9 @@ impl TrafficConfigField {
             | TrafficConfigField::ShowRx
             | TrafficConfigField::HexGrouping => ConfigSection::TrafficDisplay,
             // Filtering
-            TrafficConfigField::FilterEnabled
-            | TrafficConfigField::FilterPattern => ConfigSection::Filtering,
+            TrafficConfigField::FilterEnabled | TrafficConfigField::FilterPattern => {
+                ConfigSection::Filtering
+            }
             // File saving
             TrafficConfigField::SaveEnabled
             | TrafficConfigField::SaveFormat
@@ -794,13 +814,21 @@ impl TrafficConfigField {
 }
 
 impl ConfigFieldKind for TrafficConfigField {
-    fn is_toggle(&self) -> bool { TrafficConfigField::is_toggle(self) }
-    fn is_text_input(&self) -> bool { TrafficConfigField::is_text_input(self) }
-    fn section(&self) -> ConfigSection { TrafficConfigField::section(self) }
+    fn is_toggle(&self) -> bool {
+        TrafficConfigField::is_toggle(self)
+    }
+    fn is_text_input(&self) -> bool {
+        TrafficConfigField::is_text_input(self)
+    }
+    fn section(&self) -> ConfigSection {
+        TrafficConfigField::section(self)
+    }
 }
 
 /// Which configuration field is selected in graph view config panel
-#[derive(Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Default, EnumIter, EnumCount, VariantArray, IntoStaticStr,
+)]
 pub enum GraphConfigField {
     // Graph settings (section: GraphSettings)
     #[default]
@@ -836,9 +864,15 @@ impl GraphConfigField {
 }
 
 impl ConfigFieldKind for GraphConfigField {
-    fn is_toggle(&self) -> bool { GraphConfigField::is_toggle(self) }
-    fn is_text_input(&self) -> bool { GraphConfigField::is_text_input(self) }
-    fn section(&self) -> ConfigSection { GraphConfigField::section(self) }
+    fn is_toggle(&self) -> bool {
+        GraphConfigField::is_toggle(self)
+    }
+    fn is_text_input(&self) -> bool {
+        GraphConfigField::is_text_input(self)
+    }
+    fn section(&self) -> ConfigSection {
+        GraphConfigField::section(self)
+    }
 }
 
 /// Which file saving configuration field is selected in port selection config panel
@@ -980,16 +1014,16 @@ impl InputMode {
                 prefix: "File: ",
                 color: Color::Blue,
             }),
-            InputMode::ConfigDropdown => None,         // Uses special rendering
-            InputMode::TrafficConfigDropdown => None,  // Uses special rendering
-            InputMode::GraphConfigDropdown => None,    // Uses special rendering
-            InputMode::SettingsDropdown => None,       // Uses special rendering
-            InputMode::WindowCommand => None,          // Uses status bar message
+            InputMode::ConfigDropdown => None, // Uses special rendering
+            InputMode::TrafficConfigDropdown => None, // Uses special rendering
+            InputMode::GraphConfigDropdown => None, // Uses special rendering
+            InputMode::SettingsDropdown => None, // Uses special rendering
+            InputMode::WindowCommand => None,  // Uses status bar message
             InputMode::CommandLine => Some(InputModeStyle {
                 prefix: ":",
                 color: Color::Yellow,
             }),
-            InputMode::SplitSelect => None,            // Uses status bar message
+            InputMode::SplitSelect => None, // Uses status bar message
             InputMode::ConfigTextInput => Some(InputModeStyle {
                 prefix: "",
                 color: Color::Cyan,
@@ -1026,25 +1060,27 @@ pub enum TimestampFormat {
 
 impl TimestampFormat {
     /// Format a SystemTime according to this format
-    pub fn format(&self, time: std::time::SystemTime, session_start: std::time::SystemTime) -> String {
+    pub fn format(
+        &self,
+        time: std::time::SystemTime,
+        session_start: std::time::SystemTime,
+    ) -> String {
         match self {
             TimestampFormat::Relative => {
-                let elapsed = time
-                    .duration_since(session_start)
-                    .unwrap_or_default();
+                let elapsed = time.duration_since(session_start).unwrap_or_default();
                 let secs = elapsed.as_secs_f64();
                 // Always produce 7 characters: "+XXXX.Xs" pattern
                 // Decrease decimal precision as integer part grows
                 if secs < 10.0 {
-                    format!("+{:05.3}s", secs)    // +1.234s (7 chars)
+                    format!("+{:05.3}s", secs) // +1.234s (7 chars)
                 } else if secs < 100.0 {
-                    format!("+{:05.2}s", secs)    // +12.34s (7 chars)
+                    format!("+{:05.2}s", secs) // +12.34s (7 chars)
                 } else if secs < 1000.0 {
-                    format!("+{:05.1}s", secs)    // +123.4s (7 chars)
+                    format!("+{:05.1}s", secs) // +123.4s (7 chars)
                 } else if secs < 10000.0 {
-                    format!("+{:.1}s", secs)      // +1234.5s (8 chars)
+                    format!("+{:.1}s", secs) // +1234.5s (8 chars)
                 } else if secs < 100000.0 {
-                    format!("+{:.0}s", secs)      // +12345s (7 chars)
+                    format!("+{:.0}s", secs) // +12345s (7 chars)
                 } else {
                     // For very long sessions (27+ hours), just show the number
                     format!("+{:.0}s", secs)
@@ -1075,9 +1111,9 @@ impl TimestampFormat {
     /// Get the display width of timestamps in this format (for gutter sizing)
     pub fn width(&self) -> usize {
         match self {
-            TimestampFormat::Relative => 9,        // "+1234.5s " - max reasonable width (up to ~3 hours)
+            TimestampFormat::Relative => 9, // "+1234.5s " - max reasonable width (up to ~3 hours)
             TimestampFormat::AbsoluteMillis => 13, // "12:34:56.789 "
-            TimestampFormat::Absolute => 9,        // "12:34:56 "
+            TimestampFormat::Absolute => 9, // "12:34:56 "
         }
     }
 }

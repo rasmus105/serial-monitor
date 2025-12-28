@@ -477,7 +477,10 @@ pub fn truncate_line_styled(
         let available_for_content = content_width.saturating_sub(ellipsis_width);
 
         if available_for_content == 0 {
-            spans.push(Span::styled(ellipsis.to_owned(), Style::default().add_modifier(Modifier::DIM)));
+            spans.push(Span::styled(
+                ellipsis.to_owned(),
+                Style::default().add_modifier(Modifier::DIM),
+            ));
         } else {
             let mut remaining_width = available_for_content;
 

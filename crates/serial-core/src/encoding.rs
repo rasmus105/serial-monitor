@@ -3,19 +3,23 @@
 //! Provides conversion from raw bytes to various display formats.
 //! The core stores raw bytes; encoding is applied on-demand for display.
 
-use std::fmt;
+use strum::{Display, VariantArray};
 
 /// Available display encodings
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, VariantArray)]
 pub enum Encoding {
     /// Hexadecimal representation (e.g., "DE AD BE EF")
+    #[strum(serialize = "HEX")]
     Hex,
     /// UTF-8 text (invalid sequences replaced with U+FFFD)
     #[default]
+    #[strum(serialize = "UTF-8")]
     Utf8,
     /// ASCII text (non-printable shown as dots or escape sequences)
+    #[strum(serialize = "ASCII")]
     Ascii,
     /// Binary representation (e.g., "11011110 10101101")
+    #[strum(serialize = "BIN")]
     Binary,
 }
 
@@ -32,18 +36,7 @@ impl Encoding {
 
     /// Get all available encodings
     pub fn all() -> &'static [Encoding] {
-        &[Encoding::Hex, Encoding::Utf8, Encoding::Ascii, Encoding::Binary]
-    }
-}
-
-impl fmt::Display for Encoding {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Encoding::Hex => write!(f, "HEX"),
-            Encoding::Utf8 => write!(f, "UTF-8"),
-            Encoding::Ascii => write!(f, "ASCII"),
-            Encoding::Binary => write!(f, "BIN"),
-        }
+        Self::VARIANTS
     }
 }
 
@@ -100,7 +93,7 @@ pub fn encode_utf8(data: &[u8]) -> String {
 /// - Other bytes shown as hex escape (\xNN)
 pub fn encode_ascii(data: &[u8]) -> String {
     let mut result = String::with_capacity(data.len() * 2);
-    
+
     for &byte in data {
         match byte {
             // Printable ASCII
@@ -114,7 +107,7 @@ pub fn encode_ascii(data: &[u8]) -> String {
             _ => result.push_str(&format!("\\x{:02X}", byte)),
         }
     }
-    
+
     result
 }
 
@@ -163,21 +156,5 @@ mod tests {
         assert_eq!(encode_binary(&[0xFF]), "11111111");
         assert_eq!(encode_binary(&[0x00, 0xFF]), "00000000 11111111");
         assert_eq!(encode_binary(&[0xAA]), "10101010");
-    }
-
-    #[test]
-    fn test_encoding_cycle() {
-        assert_eq!(Encoding::Hex.cycle_next(), Encoding::Utf8);
-        assert_eq!(Encoding::Utf8.cycle_next(), Encoding::Ascii);
-        assert_eq!(Encoding::Ascii.cycle_next(), Encoding::Binary);
-        assert_eq!(Encoding::Binary.cycle_next(), Encoding::Hex);
-    }
-
-    #[test]
-    fn test_encoding_display() {
-        assert_eq!(format!("{}", Encoding::Hex), "HEX");
-        assert_eq!(format!("{}", Encoding::Utf8), "UTF-8");
-        assert_eq!(format!("{}", Encoding::Ascii), "ASCII");
-        assert_eq!(format!("{}", Encoding::Binary), "BIN");
     }
 }

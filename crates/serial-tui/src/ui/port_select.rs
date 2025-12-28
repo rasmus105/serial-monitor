@@ -1,11 +1,14 @@
 //! Port selection view rendering
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    Frame,
+    widgets::{
+        Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
 };
 use strum::IntoEnumIterator;
 
@@ -75,16 +78,47 @@ fn render_port_list(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     // Build dynamic title with actual keybindings
-    let path_key = app.settings.keybindings.port_select.shortcut_hint(PortSelectCommand::EnterPortPath).unwrap_or_else(|| ":".to_string());
-    let refresh_key = app.settings.keybindings.port_select.shortcut_hint(PortSelectCommand::RefreshPorts).unwrap_or_else(|| "r".to_string());
-    let toggle_key = app.settings.keybindings.port_select.shortcut_hint(PortSelectCommand::ToggleConfigPanel).unwrap_or_else(|| "t".to_string());
-    let nav_keys = app.settings.keybindings.global_nav.shortcut_hint(GlobalNavCommand::Down).unwrap_or_else(|| "j".to_string());
-    let confirm_key = app.settings.keybindings.global_nav.shortcut_hint(GlobalNavCommand::Confirm).unwrap_or_else(|| "Enter".to_string());
+    let path_key = app
+        .settings
+        .keybindings
+        .port_select
+        .shortcut_hint(PortSelectCommand::EnterPortPath)
+        .unwrap_or_else(|| ":".to_string());
+    let refresh_key = app
+        .settings
+        .keybindings
+        .port_select
+        .shortcut_hint(PortSelectCommand::RefreshPorts)
+        .unwrap_or_else(|| "r".to_string());
+    let toggle_key = app
+        .settings
+        .keybindings
+        .port_select
+        .shortcut_hint(PortSelectCommand::ToggleConfigPanel)
+        .unwrap_or_else(|| "t".to_string());
+    let nav_keys = app
+        .settings
+        .keybindings
+        .global_nav
+        .shortcut_hint(GlobalNavCommand::Down)
+        .unwrap_or_else(|| "j".to_string());
+    let confirm_key = app
+        .settings
+        .keybindings
+        .global_nav
+        .shortcut_hint(GlobalNavCommand::Confirm)
+        .unwrap_or_else(|| "Enter".to_string());
 
     let title = if app.port_select.ports.is_empty() {
-        format!(" Select Port [{}: path, {}: refresh, {}: toggle config] ", path_key, refresh_key, toggle_key)
+        format!(
+            " Select Port [{}: path, {}: refresh, {}: toggle config] ",
+            path_key, refresh_key, toggle_key
+        )
     } else {
-        format!(" Select Port [{}: nav, {}: connect, {}: path, {}: refresh] ", nav_keys, confirm_key, path_key, refresh_key)
+        format!(
+            " Select Port [{}: nav, {}: connect, {}: path, {}: refresh] ",
+            nav_keys, confirm_key, path_key, refresh_key
+        )
     };
 
     let border_style = if is_focused {
@@ -115,8 +149,18 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     // Build dynamic title
-    let confirm_key = app.settings.keybindings.global_nav.shortcut_hint(GlobalNavCommand::Confirm).unwrap_or_else(|| "Enter".to_string());
-    let toggle_key = app.settings.keybindings.port_select.shortcut_hint(PortSelectCommand::ToggleConfigPanel).unwrap_or_else(|| "t".to_string());
+    let confirm_key = app
+        .settings
+        .keybindings
+        .global_nav
+        .shortcut_hint(GlobalNavCommand::Confirm)
+        .unwrap_or_else(|| "Enter".to_string());
+    let toggle_key = app
+        .settings
+        .keybindings
+        .port_select
+        .shortcut_hint(PortSelectCommand::ToggleConfigPanel)
+        .unwrap_or_else(|| "t".to_string());
     let title = format!(" Config [{}: select, {}: toggle] ", confirm_key, toggle_key);
 
     let block = Block::default()
@@ -134,10 +178,11 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
 
     for field in ConfigField::iter() {
         // Add separator when section changes
-        prev_section = push_section_separator(&mut lines, prev_section, field.section(), panel_width);
+        prev_section =
+            push_section_separator(&mut lines, prev_section, field.section(), panel_width);
 
-        let is_selected =
-            app.port_select.config.field == field && (is_focused || dropdown_open || text_input_open);
+        let is_selected = app.port_select.config.field == field
+            && (is_focused || dropdown_open || text_input_open);
         let prefix = if is_selected { "> " } else { "  " };
 
         let label_style = if is_selected {
@@ -170,7 +215,7 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
             let label_text = format!("{}{}: ", prefix, field.label());
             let label_len = label_text.chars().count();
             let available_width = panel_width.saturating_sub(label_len);
-            
+
             if display_value.chars().count() <= available_width {
                 // Fits on one line
                 lines.push(Line::from(vec![
@@ -183,13 +228,13 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
                 let chars: Vec<char> = display_value.chars().collect();
                 let first_line_chars: String = chars.iter().take(available_width).collect();
                 let remaining: String = chars.iter().skip(available_width).collect();
-                
+
                 lines.push(Line::from(vec![
                     Span::styled(prefix, label_style),
                     Span::styled(format!("{}: ", field.label()), label_style),
                     Span::styled(first_line_chars, value_style),
                 ]));
-                
+
                 // Continuation lines - indent to align with value
                 let indent = " ".repeat(label_len);
                 let mut remaining_chars: Vec<char> = remaining.chars().collect();
@@ -215,7 +260,7 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     let visible_height = inner.height as usize;
     let total_lines = lines.len();
     let scroll_offset = app.port_select.config.scroll_offset;
-    
+
     // Only scroll if content exceeds visible height
     let needs_scroll = total_lines > visible_height;
     let actual_scroll = if needs_scroll {
@@ -223,13 +268,17 @@ fn render_config_panel(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         0
     };
-    
+
     // Take only the visible lines
-    let visible_lines: Vec<Line> = lines.into_iter().skip(actual_scroll).take(visible_height).collect();
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(actual_scroll)
+        .take(visible_height)
+        .collect();
 
     let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, inner);
-    
+
     // Render scroll indicator if needed
     if needs_scroll {
         let mut scrollbar_state = ScrollbarState::new(total_lines)

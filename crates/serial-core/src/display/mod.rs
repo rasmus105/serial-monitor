@@ -80,6 +80,6 @@ mod search;
 // Public exports
 pub use buffer::DisplayBuffer;
 pub use chunk::DisplayChunk;
-pub use encoding::{encode, BinaryFormat, Encoding, HexFormat};
+pub use encoding::{BinaryFormat, Encoding, HexFormat, encode};
 pub use pattern::{PatternMatcher, PatternMode};
 pub use search::SearchMatch;

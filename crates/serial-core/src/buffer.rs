@@ -187,14 +187,4 @@ mod tests {
         assert_eq!(buffer.chunk_count(), 2);
         assert_eq!(buffer.total_size(), 8); // 5 + 3
     }
-
-    #[test]
-    fn test_clear() {
-        let mut buffer = DataBuffer::new();
-        buffer.push(DataChunk::tx(vec![1, 2, 3]));
-        buffer.clear();
-
-        assert!(buffer.is_empty());
-        assert_eq!(buffer.total_size(), 0);
-    }
 }

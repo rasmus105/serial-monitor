@@ -1,11 +1,11 @@
 //! UI rendering
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Clear,
-    Frame,
 };
 
 use crate::app::{App, ConfigSection, InputMode, View};

@@ -137,10 +137,8 @@ pub const TRAFFIC_COMMANDS: &[TrafficCommand] = &[
 ];
 
 /// All dropdown commands
-pub const DROPDOWN_COMMANDS: &[DropdownCommand] = &[
-    DropdownCommand::Confirm,
-    DropdownCommand::Cancel,
-];
+pub const DROPDOWN_COMMANDS: &[DropdownCommand] =
+    &[DropdownCommand::Confirm, DropdownCommand::Cancel];
 
 // =============================================================================
 // KeyBindings - All application keybindings
@@ -466,8 +464,12 @@ impl SettingsPanelState {
             // Adjust scroll if selection moved past visible area
             // Keep a few lines of context visible
             let scroll_margin = 2;
-            if self.selected_command >= self.scroll_offset + visible_height.saturating_sub(scroll_margin) {
-                self.scroll_offset = self.selected_command.saturating_sub(visible_height.saturating_sub(scroll_margin + 1));
+            if self.selected_command
+                >= self.scroll_offset + visible_height.saturating_sub(scroll_margin)
+            {
+                self.scroll_offset = self
+                    .selected_command
+                    .saturating_sub(visible_height.saturating_sub(scroll_margin + 1));
             }
         }
     }

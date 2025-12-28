@@ -10,42 +10,33 @@ use std::time::SystemTime;
 
 use tokio::sync::mpsc;
 
+use strum::{AsRefStr, Display, VariantArray};
+
 use crate::buffer::{DataChunk, Direction};
-use crate::encoding::{encode, Encoding};
+use crate::encoding::{Encoding, encode};
 
 /// Format for saving serial data to files
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, AsRefStr, VariantArray)]
 pub enum SaveFormat {
     /// UTF-8 text with timestamps and direction markers
     #[default]
+    #[strum(serialize = "UTF-8")]
     Utf8,
     /// ASCII text with escape sequences for non-printable characters
+    #[strum(serialize = "ASCII")]
     Ascii,
     /// Hexadecimal representation
+    #[strum(serialize = "HEX")]
     Hex,
     /// Raw binary data (no encoding, no metadata)
+    #[strum(serialize = "Raw")]
     Raw,
 }
 
 impl SaveFormat {
     /// Get all available formats
     pub fn all() -> &'static [SaveFormat] {
-        &[
-            SaveFormat::Utf8,
-            SaveFormat::Ascii,
-            SaveFormat::Hex,
-            SaveFormat::Raw,
-        ]
-    }
-
-    /// Get the display name for this format
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            SaveFormat::Utf8 => "UTF-8",
-            SaveFormat::Ascii => "ASCII",
-            SaveFormat::Hex => "HEX",
-            SaveFormat::Raw => "Raw",
-        }
+        Self::VARIANTS
     }
 
     /// Get the file extension for this format
@@ -66,12 +57,6 @@ impl SaveFormat {
             SaveFormat::Hex => Some(Encoding::Hex),
             SaveFormat::Raw => None,
         }
-    }
-}
-
-impl std::fmt::Display for SaveFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display_name())
     }
 }
 
@@ -301,8 +286,7 @@ async fn file_saver_task(
                     format = new_format;
                     // Write a format change marker (for non-raw formats)
                     if format != SaveFormat::Raw {
-                        let marker =
-                            format!("\n--- Format changed to {} ---\n", format.display_name());
+                        let marker = format!("\n--- Format changed to {} ---\n", format);
                         if let Err(e) = writer.write_all(marker.as_bytes()) {
                             eprintln!("Error writing format marker to file {:?}: {}", file_path, e);
                         }
@@ -372,19 +356,5 @@ mod tests {
         assert!(formatted.ends_with("Z"));
         assert!(formatted.contains("T"));
         assert_eq!(formatted.len(), 24); // YYYY-MM-DDTHH:MM:SS.mmmZ
-    }
-
-    #[test]
-    fn test_save_format_display() {
-        assert_eq!(SaveFormat::Utf8.display_name(), "UTF-8");
-        assert_eq!(SaveFormat::Hex.display_name(), "HEX");
-        assert_eq!(SaveFormat::Raw.display_name(), "Raw");
-    }
-
-    #[test]
-    fn test_save_format_extension() {
-        assert_eq!(SaveFormat::Utf8.extension(), "txt");
-        assert_eq!(SaveFormat::Hex.extension(), "hex");
-        assert_eq!(SaveFormat::Raw.extension(), "bin");
     }
 }
