@@ -812,6 +812,7 @@ name = "serial-core"
 version = "0.1.0"
 dependencies = [
  "enum_dispatch",
+ "memchr",
  "regex",
  "serde_json",
  "strum",

@@ -30,8 +30,9 @@ unicode-width = "0.2"
 strum = { version = "0.26", features = ["derive"] }
 enum_dispatch = "0.3.13"
 
-# Regex
+# Pattern matching
 regex = "1"
+memchr = "2.7.6"
 
 # JSON
 serde_json = "1"

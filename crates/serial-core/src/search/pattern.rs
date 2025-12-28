@@ -1,19 +1,30 @@
 //! Pattern matching utilities with caching
 //!
 //! Provides efficient pattern matching for search and filter operations.
-//! Supports both literal string matching (case-insensitive) and regex matching.
-//! Regex patterns are compiled once and cached for reuse.
+//! Supports both literal string matching (case-sensitive, using SIMD-accelerated
+//! memchr) and regex matching. Patterns are compiled once and cached for reuse.
 
+use memchr::memmem::Finder;
 use regex::Regex;
-use std::fmt;
+use strum::{AsRefStr, Display, EnumMessage, VariantArray};
 
 /// Pattern matching mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumMessage, AsRefStr, VariantArray,
+)]
 pub enum PatternMode {
-    /// Literal string matching (case-insensitive)
-    #[default]
+    /// Literal string matching (case-sensitive)
+    #[strum(
+        serialize = "Normal",
+        message = "Pattern is interpreted as a literal string (case-sensitive)"
+    )]
     Normal,
     /// Regular expression matching
+    #[default]
+    #[strum(
+        serialize = "Regex",
+        message = "Pattern is interpreted as a regular expression"
+    )]
     Regex,
 }
 
@@ -27,42 +38,33 @@ impl PatternMode {
     }
 
     /// Get the display name for this mode
-    pub fn name(&self) -> &'static str {
-        match self {
-            PatternMode::Normal => "Normal",
-            PatternMode::Regex => "Regex",
-        }
+    pub fn name(&self) -> &str {
+        self.as_ref()
     }
 
     /// Get a description of this mode
     pub fn description(&self) -> &'static str {
-        match self {
-            PatternMode::Normal => "Pattern is interpreted as a literal string (case-insensitive)",
-            PatternMode::Regex => "Pattern is interpreted as a regular expression",
-        }
+        self.get_message()
+            .expect("Descriptions added for all modes")
     }
 
     /// Get all available modes
     pub fn all() -> &'static [PatternMode] {
-        &[PatternMode::Normal, PatternMode::Regex]
-    }
-}
-
-impl fmt::Display for PatternMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())
+        Self::VARIANTS
     }
 }
 
 /// Compiled pattern for efficient matching
 ///
-/// This enum holds either a pre-lowercased literal string for case-insensitive
-/// matching, or a compiled regex. Creating a `CompiledPattern` validates and
-/// compiles the pattern once, allowing for efficient repeated matching.
+/// This enum holds either a literal string finder for case-sensitive matching
+/// (using SIMD-accelerated memchr), or a compiled regex. Creating a
+/// `CompiledPattern` validates and compiles the pattern once, allowing for
+/// efficient repeated matching.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum CompiledPattern {
-    /// Lowercased literal for case-insensitive matching
-    Literal(String),
+    /// Literal finder for case-sensitive matching
+    Literal(Finder<'static>),
     /// Compiled regex
     Regex(Regex),
 }
@@ -70,19 +72,19 @@ enum CompiledPattern {
 /// A cached pattern matcher for efficient search/filter operations
 ///
 /// `PatternMatcher` compiles and caches patterns for efficient reuse.
-/// It supports both literal string matching (case-insensitive) and regex matching.
+/// It supports both literal string matching (case-sensitive) and regex matching.
 ///
 /// # Example
 ///
 /// ```
 /// use serial_core::{PatternMatcher, PatternMode};
 ///
-/// let mut matcher = PatternMatcher::new();
+/// let mut matcher = PatternMatcher::default();
 ///
-/// // Set a literal pattern (case-insensitive)
+/// // Set a literal pattern (case-sensitive)
 /// matcher.set_pattern("hello", PatternMode::Normal).unwrap();
-/// assert!(matcher.is_match("Hello World"));
-/// assert!(matcher.is_match("HELLO"));
+/// assert!(matcher.is_match("hello world"));
+/// assert!(!matcher.is_match("HELLO")); // case-sensitive
 ///
 /// // Set a regex pattern
 /// matcher.set_pattern(r"\d+", PatternMode::Regex).unwrap();
@@ -102,16 +104,11 @@ pub struct PatternMatcher {
 }
 
 impl PatternMatcher {
-    /// Create a new empty PatternMatcher
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Create a PatternMatcher with an initial pattern
     ///
     /// Returns an error if the pattern is invalid (e.g., invalid regex).
     pub fn with_pattern(pattern: &str, mode: PatternMode) -> Result<Self, String> {
-        let mut matcher = Self::new();
+        let mut matcher = Self::default();
         matcher.set_pattern(pattern, mode)?;
         Ok(matcher)
     }
@@ -131,17 +128,15 @@ impl PatternMatcher {
         }
 
         let compiled = match mode {
-            PatternMode::Normal => CompiledPattern::Literal(pattern.to_lowercase()),
-            PatternMode::Regex => {
-                match Regex::new(pattern) {
-                    Ok(re) => CompiledPattern::Regex(re),
-                    Err(e) => {
-                        let error_msg = format!("Invalid regex: {}", e);
-                        self.error = Some(error_msg.clone());
-                        return Err(error_msg);
-                    }
+            PatternMode::Normal => CompiledPattern::Literal(Finder::new(pattern).into_owned()),
+            PatternMode::Regex => match Regex::new(pattern) {
+                Ok(re) => CompiledPattern::Regex(re),
+                Err(e) => {
+                    let error_msg = format!("Invalid regex: {}", e);
+                    self.error = Some(error_msg.clone());
+                    return Err(error_msg);
                 }
-            }
+            },
         };
 
         self.pattern = Some(pattern.to_string());
@@ -195,9 +190,7 @@ impl PatternMatcher {
     pub fn is_match(&self, text: &str) -> bool {
         match &self.compiled {
             None => true, // No pattern = match everything
-            Some(CompiledPattern::Literal(pattern_lower)) => {
-                text.to_lowercase().contains(pattern_lower)
-            }
+            Some(CompiledPattern::Literal(finder)) => finder.find(text.as_bytes()).is_some(),
             Some(CompiledPattern::Regex(re)) => re.is_match(text),
         }
     }
@@ -208,33 +201,26 @@ impl PatternMatcher {
     pub fn find_matches(&self, text: &str) -> Vec<(usize, usize)> {
         match &self.compiled {
             None => vec![],
-            Some(CompiledPattern::Literal(pattern_lower)) => {
-                let text_lower = text.to_lowercase();
-                let mut matches = Vec::new();
-                let mut search_start = 0;
-
-                while let Some(rel_pos) = text_lower[search_start..].find(pattern_lower) {
-                    let byte_start = search_start + rel_pos;
-                    let byte_end = byte_start + pattern_lower.len();
-                    matches.push((byte_start, byte_end));
-                    search_start = byte_end;
-                }
-
-                matches
+            Some(CompiledPattern::Literal(finder)) => {
+                let needle_len = finder.needle().len();
+                finder
+                    .find_iter(text.as_bytes())
+                    .map(|start| (start, start + needle_len))
+                    .collect()
             }
             Some(CompiledPattern::Regex(re)) => {
-                re.find_iter(text)
-                    .map(|m| (m.start(), m.end()))
-                    .collect()
+                re.find_iter(text).map(|m| (m.start(), m.end())).collect()
             }
         }
     }
+
+    // pub fn find_matches_chunks
 }
 
 impl Clone for PatternMatcher {
     fn clone(&self) -> Self {
         // Re-create by re-compiling the pattern (Regex doesn't implement Clone easily)
-        let mut new = Self::new();
+        let mut new = Self::default();
         if let Some(ref pattern) = self.pattern {
             // Ignore error on clone - pattern was already validated
             let _ = new.set_pattern(pattern, self.mode);
@@ -249,26 +235,26 @@ mod tests {
 
     #[test]
     fn test_empty_pattern_matches_all() {
-        let matcher = PatternMatcher::new();
+        let matcher = PatternMatcher::default();
         assert!(matcher.is_match("anything"));
         assert!(matcher.is_match(""));
     }
 
     #[test]
-    fn test_literal_case_insensitive() {
-        let mut matcher = PatternMatcher::new();
+    fn test_literal_case_sensitive() {
+        let mut matcher = PatternMatcher::default();
         matcher.set_pattern("hello", PatternMode::Normal).unwrap();
 
         assert!(matcher.is_match("hello"));
-        assert!(matcher.is_match("HELLO"));
-        assert!(matcher.is_match("Hello World"));
         assert!(matcher.is_match("say hello there"));
+        assert!(!matcher.is_match("HELLO")); // case-sensitive
+        assert!(!matcher.is_match("Hello World")); // case-sensitive
         assert!(!matcher.is_match("hi there"));
     }
 
     #[test]
     fn test_regex_matching() {
-        let mut matcher = PatternMatcher::new();
+        let mut matcher = PatternMatcher::default();
         matcher.set_pattern(r"\d{3}", PatternMode::Regex).unwrap();
 
         assert!(matcher.is_match("code: 123"));
@@ -279,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_invalid_regex() {
-        let mut matcher = PatternMatcher::new();
+        let mut matcher = PatternMatcher::default();
         let result = matcher.set_pattern(r"[invalid", PatternMode::Regex);
 
         assert!(result.is_err());
@@ -289,27 +275,26 @@ mod tests {
 
     #[test]
     fn test_find_matches_literal() {
-        let mut matcher = PatternMatcher::new();
+        let mut matcher = PatternMatcher::default();
         matcher.set_pattern("ab", PatternMode::Normal).unwrap();
 
-        let matches = matcher.find_matches("ab AB aB Ab");
-        // "ab AB aB Ab" lowercased is "ab ab ab ab"
-        // Positions: 0-2, 3-5, 6-8, 9-11
-        assert_eq!(matches.len(), 4);
-        assert_eq!(matches[0], (0, 2));
-        assert_eq!(matches[1], (3, 5));
+        // Case-sensitive: only matches exact "ab"
+        let matches = matcher.find_matches("ab AB aB Ab ab");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0], (0, 2)); // first "ab"
+        assert_eq!(matches[1], (12, 14)); // last "ab"
     }
 
     #[test]
     fn test_find_matches_regex() {
-        let mut matcher = PatternMatcher::new();
+        let mut matcher = PatternMatcher::default();
         matcher.set_pattern(r"\d+", PatternMode::Regex).unwrap();
 
         let matches = matcher.find_matches("a1b23c456");
         assert_eq!(matches.len(), 3);
-        assert_eq!(matches[0], (1, 2));  // "1"
-        assert_eq!(matches[1], (3, 5));  // "23"
-        assert_eq!(matches[2], (6, 9));  // "456"
+        assert_eq!(matches[0], (1, 2)); // "1"
+        assert_eq!(matches[1], (3, 5)); // "23"
+        assert_eq!(matches[2], (6, 9)); // "456"
     }
 
     #[test]
@@ -320,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_set_mode_recompiles() {
-        let mut matcher = PatternMatcher::new();
+        let mut matcher = PatternMatcher::default();
         matcher.set_pattern("hello", PatternMode::Normal).unwrap();
 
         // Should work - "hello" is a valid regex too
@@ -331,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut matcher = PatternMatcher::new();
+        let mut matcher = PatternMatcher::default();
         matcher.set_pattern("test", PatternMode::Normal).unwrap();
         assert!(matcher.has_pattern());
 
