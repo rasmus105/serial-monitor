@@ -23,6 +23,7 @@ mod session;
 // Utility modules for frontends to avoid duplication
 pub mod buffer;
 pub mod crash;
+pub mod ui;
 
 // Re-export commonly used types from buffer
 pub use buffer::{
