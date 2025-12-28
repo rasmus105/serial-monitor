@@ -57,7 +57,7 @@ impl PatternMode {
 /// Compiled pattern for efficient matching
 ///
 /// This enum holds either a literal string finder for case-sensitive matching
-/// (using SIMD-accelerated memchr), or a compiled regex. Creating a
+/// using SIMD-accelerated memchr, or a compiled regex. Creating a
 /// `CompiledPattern` validates and compiles the pattern once, allowing for
 /// efficient repeated matching.
 #[allow(clippy::large_enum_variant)]
@@ -99,7 +99,7 @@ pub struct PatternMatcher {
     mode: PatternMode,
     /// Compiled pattern for efficient matching
     compiled: Option<CompiledPattern>,
-    /// Error message if pattern compilation failed
+    /// Error message if pattern compilation failed.
     error: Option<String>,
 }
 

@@ -25,7 +25,7 @@ use super::search::{SearchMatch, SearchState};
 /// # Example
 ///
 /// ```ignore
-/// use serial_core::display::{DisplayBuffer, Encoding};
+/// use serial_core::display::{DisplayBuffer, Encoding, PatternMode};
 ///
 /// // Create buffer with UTF-8 encoding
 /// let mut display = DisplayBuffer {
@@ -38,8 +38,8 @@ use super::search::{SearchMatch, SearchState};
 ///
 /// // Set up filtering
 /// display.set_filter_pattern("error", PatternMode::Normal)?;
-/// display.set_show_rx(true);
-/// display.set_show_tx(false);
+/// display.show_rx = true;
+/// display.show_tx = false;
 ///
 /// // Search within current view
 /// display.set_search_pattern("timeout", PatternMode::Normal)?;
@@ -68,6 +68,12 @@ pub struct DisplayBuffer {
     /// Filter state (pattern + direction)
     filter: FilterState,
 
+    /// Show TX (transmitted) chunks
+    pub show_tx: bool,
+
+    /// Show RX (received) chunks
+    pub show_rx: bool,
+
     /// Search state
     search: SearchState,
 
@@ -83,6 +89,8 @@ impl Default for DisplayBuffer {
             encoding: Encoding::default(),
             encoding_changed: false,
             filter: FilterState::default(),
+            show_tx: true,
+            show_rx: true,
             search: SearchState::default(),
             synced_count: 0,
         }
@@ -131,7 +139,7 @@ impl DisplayBuffer {
     /// Search and rendering should use this method - they don't need to know
     /// whether filtering is active.
     pub fn chunks(&self) -> &VecDeque<Rc<DisplayChunk>> {
-        if self.filter.is_active() {
+        if self.is_filter_active() {
             &self.filtered_chunks
         } else {
             &self.all_chunks
@@ -152,9 +160,14 @@ impl DisplayBuffer {
     // Filtering
     // =========================================================================
 
+    /// Check if any filter is active
+    fn is_filter_active(&self) -> bool {
+        self.filter.pattern.has_pattern() || !self.show_tx || !self.show_rx
+    }
+
     /// Set filter pattern
     pub fn set_filter_pattern(&mut self, pattern: &str, mode: PatternMode) -> Result<(), String> {
-        self.filter.set_pattern(pattern, mode)?;
+        self.filter.pattern.set_pattern(pattern, mode)?;
         self.rebuild_filtered_view();
         self.search.invalidate();
         Ok(())
@@ -162,7 +175,7 @@ impl DisplayBuffer {
 
     /// Set filter pattern mode
     pub fn set_filter_mode(&mut self, mode: PatternMode) -> Result<(), String> {
-        self.filter.set_mode(mode)?;
+        self.filter.pattern.set_mode(mode)?;
         self.rebuild_filtered_view();
         self.search.invalidate();
         Ok(())
@@ -170,64 +183,43 @@ impl DisplayBuffer {
 
     /// Clear filter pattern
     pub fn clear_filter_pattern(&mut self) {
-        self.filter.clear_pattern();
+        self.filter.pattern.clear();
         self.rebuild_filtered_view();
         self.search.invalidate();
     }
 
     /// Get filter pattern
     pub fn filter_pattern(&self) -> Option<&str> {
-        self.filter.pattern()
+        self.filter.pattern.pattern()
     }
 
     /// Get filter mode
     pub fn filter_mode(&self) -> PatternMode {
-        self.filter.mode()
+        self.filter.pattern.mode()
     }
 
     /// Get filter error
     pub fn filter_error(&self) -> Option<&str> {
-        self.filter.error()
-    }
-
-    /// Set whether TX chunks are shown
-    pub fn set_show_tx(&mut self, show: bool) {
-        if self.filter.show_tx() != show {
-            self.filter.set_show_tx(show);
-            self.rebuild_filtered_view();
-            self.search.invalidate();
-        }
-    }
-
-    /// Set whether RX chunks are shown
-    pub fn set_show_rx(&mut self, show: bool) {
-        if self.filter.show_rx() != show {
-            self.filter.set_show_rx(show);
-            self.rebuild_filtered_view();
-            self.search.invalidate();
-        }
-    }
-
-    /// Check if TX chunks are shown
-    pub fn show_tx(&self) -> bool {
-        self.filter.show_tx()
-    }
-
-    /// Check if RX chunks are shown
-    pub fn show_rx(&self) -> bool {
-        self.filter.show_rx()
+        self.filter.pattern.error()
     }
 
     /// Rebuild the filtered view from all_chunks
-    fn rebuild_filtered_view(&mut self) {
+    ///
+    /// Call this after changing filter settings (pattern, show_tx, show_rx).
+    pub fn rebuild_filtered_view(&mut self) {
         self.filtered_chunks.clear();
-        if self.filter.is_active() {
+        if self.is_filter_active() {
+            // Sync filter state with our show_tx/show_rx
+            self.filter.show_tx = self.show_tx;
+            self.filter.show_rx = self.show_rx;
+
             for chunk in &self.all_chunks {
                 if self.filter.matches(chunk) {
                     self.filtered_chunks.push_back(Rc::clone(chunk));
                 }
             }
         }
+        self.search.invalidate();
     }
 
     // =========================================================================

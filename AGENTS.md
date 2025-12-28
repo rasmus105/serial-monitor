@@ -256,3 +256,13 @@ serial-tui:
 6. **Dumb functions that can be auto-generated:** Usage of crates such as
    `strum`, `thiserror`, etc. is incentivised when it can simplify the codebase
    and remove the need for boilerplate code.
+
+7. **Trivial getters/setters:** Avoid writing functions like `fn show_tx(&self) -> bool { self.show_tx }`.
+   These add maintenance burden without providing value. Instead, make fields public (especially for
+   crate-internal types) and access them directly. Only add methods when they provide actual logic
+   beyond simple field access.
+
+8. **Tests that verify basic logic or compilation:** Don't write tests that just verify Rust compiles
+   correctly or that basic boolean/arithmetic logic works. Tests like `assert!(!filter.is_active())`
+   after setting fields to their "inactive" values just test that `||` and `!` work as expected.
+   Tests should verify meaningful behavior, edge cases, or complex interactions - not obvious logic.
