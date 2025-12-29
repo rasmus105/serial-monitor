@@ -897,7 +897,6 @@ dependencies = [
  "crossterm 0.29.0",
  "ratatui",
  "serial-core",
- "strum",
  "tokio",
  "unicode-width 0.2.0",
 ]

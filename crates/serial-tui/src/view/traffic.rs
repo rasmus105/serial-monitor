@@ -33,6 +33,10 @@ pub struct TrafficView {
     pub search_input: TextInputState,
     /// Whether search input is focused.
     pub search_focused: bool,
+    /// Filter input state.
+    pub filter_input: TextInputState,
+    /// Whether filter input is focused.
+    pub filter_focused: bool,
     /// Send input state.
     pub send_input: TextInputState,
     /// Whether send input is focused.
@@ -230,6 +234,8 @@ impl TrafficView {
             scroll: 0,
             search_input: TextInputState::new().with_placeholder("Search pattern..."),
             search_focused: false,
+            filter_input: TextInputState::new().with_placeholder("Filter pattern..."),
+            filter_focused: false,
             send_input: TextInputState::new().with_placeholder("Data to send..."),
             send_focused: false,
             config: TrafficConfig::default(),
@@ -241,7 +247,7 @@ impl TrafficView {
     }
 
     pub fn is_input_mode(&self) -> bool {
-        self.search_focused || self.send_focused
+        self.search_focused || self.filter_focused || self.send_focused
     }
 
     /// Sync config changes to the session buffer
@@ -266,8 +272,8 @@ impl TrafficView {
         serial_config: &SerialConfig,
         focus: Focus,
     ) {
-        // Main area layout: traffic + optional search/send bar
-        let show_input_bar = self.search_focused || self.send_focused;
+        // Main area layout: traffic + optional search/filter/send bar
+        let show_input_bar = self.search_focused || self.filter_focused || self.send_focused;
         let main_chunks = if show_input_bar {
             Layout::default()
                 .direction(Direction::Vertical)
@@ -396,10 +402,17 @@ impl TrafficView {
         self.scroll = scroll;
 
         // Render block with title
+        let filter_info = if buffer.filter_pattern().is_some() {
+            let total_unfiltered = buffer.total_len();
+            format!(" | filter: {}/{}", total, total_unfiltered)
+        } else {
+            String::new()
+        };
         let block = block.title(format!(
-            " Traffic [{}/{}] ",
+            " Traffic [{}/{}]{} ",
             scroll + 1,
-            total.max(1)
+            total.max(1),
+            filter_info,
         ));
         block.render(area, buf);
 
@@ -480,10 +493,18 @@ impl TrafficView {
         self.scroll = scroll;
 
         // Render block with title showing display line position
+        let filter_info = if buffer.filter_pattern().is_some() {
+            let total_unfiltered = buffer.total_len();
+            let filtered_chunks = buffer.len();
+            format!(" | filter: {}/{}", filtered_chunks, total_unfiltered)
+        } else {
+            String::new()
+        };
         let block = block.title(format!(
-            " Traffic [{}/{}] ",
+            " Traffic [{}/{}]{} ",
             scroll + 1,
-            total_display_lines.max(1)
+            total_display_lines.max(1),
+            filter_info,
         ));
         block.render(area, buf);
 
@@ -714,6 +735,17 @@ impl TrafficView {
                 format!("Search [{}]", status)
             };
             (title, &self.search_input)
+        } else if self.filter_focused {
+            // Get filter status from buffer
+            let buffer = handle.buffer();
+            let total_chunks = buffer.total_len();
+            let visible_chunks = buffer.len();
+            let title = if total_chunks == visible_chunks {
+                "Filter".to_string()
+            } else {
+                format!("Filter [{}/{}]", visible_chunks, total_chunks)
+            };
+            (title, &self.filter_input)
         } else {
             ("Send".to_string(), &self.send_input)
         };
@@ -810,6 +842,9 @@ impl TrafficView {
         if self.search_focused {
             return self.handle_search_key(key, handle);
         }
+        if self.filter_focused {
+            return self.handle_filter_key(key, handle);
+        }
         if self.send_focused {
             return self.handle_send_key(key);
         }
@@ -874,6 +909,9 @@ impl TrafficView {
             }
             KeyCode::Char('/') => {
                 self.search_focused = true;
+            }
+            KeyCode::Char('f') => {
+                self.filter_focused = true;
             }
             KeyCode::Char('s') => {
                 self.send_focused = true;
@@ -989,6 +1027,44 @@ impl TrafficView {
                     let _ = handle.buffer_mut().set_search_pattern(pattern, mode);
                 } else {
                     handle.buffer_mut().clear_search();
+                }
+            }
+        }
+        None
+    }
+
+    fn handle_filter_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
+        match key.code {
+            KeyCode::Enter => {
+                // Confirm filter and exit filter mode
+                // Pattern is already set via incremental filtering
+                self.filter_focused = false;
+                // Layout changed - request clear to avoid artifacts
+                return Some(TrafficAction::RequestClear);
+            }
+            KeyCode::Esc => {
+                self.filter_focused = false;
+                self.filter_input.clear();
+                handle.buffer_mut().clear_filter();
+                // Layout changed - request clear to avoid artifacts
+                return Some(TrafficAction::RequestClear);
+            }
+            _ => {
+                // Handle the key input first
+                self.filter_input.handle_key(key);
+                
+                // Then update filter pattern incrementally
+                let pattern = &self.filter_input.content;
+                if !pattern.is_empty() {
+                    let mode = if self.config.pattern_mode_index == 1 {
+                        PatternMode::Regex
+                    } else {
+                        PatternMode::Normal
+                    };
+                    // Ignore errors during incremental filter (e.g., incomplete regex)
+                    let _ = handle.buffer_mut().set_filter_pattern(pattern, mode);
+                } else {
+                    handle.buffer_mut().clear_filter();
                 }
             }
         }
