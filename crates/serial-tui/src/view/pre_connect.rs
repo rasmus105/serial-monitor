@@ -41,6 +41,8 @@ pub struct PreConnectView {
     pub search_input: TextInputState,
     /// Whether search input is focused.
     pub search_focused: bool,
+    /// Last visible height for port list (for half-page scroll).
+    last_visible_height: usize,
 }
 
 /// Configuration state for pre-connection.
@@ -376,6 +378,7 @@ impl PreConnectView {
             config_nav: ConfigPanelNav::new(),
             search_input: TextInputState::new().with_placeholder("Search ports..."),
             search_focused: false,
+            last_visible_height: 20, // Reasonable default
         }
     }
 
@@ -395,7 +398,7 @@ impl PreConnectView {
     }
 
     pub fn draw(
-        &self,
+        &mut self,
         main_area: Rect,
         config_area: Option<Rect>,
         buf: &mut Buffer,
@@ -414,6 +417,9 @@ impl PreConnectView {
                 .split(main_area)
         };
 
+        // Track visible height for half-page scrolling (subtract borders)
+        self.last_visible_height = main_chunks[0].height.saturating_sub(2) as usize;
+
         // Port list
         let port_title = if self.port_list.has_search() {
             let status = self.port_list.search_status();
@@ -431,18 +437,10 @@ impl PreConnectView {
                 Theme::border()
             });
 
-        let mut port_list_state = PortListState {
-            ports: self.port_list.ports.clone(),
-            list_state: self.port_list.list_state.clone(),
-            search_pattern: self.port_list.search_pattern.clone(),
-            matching_indices: self.port_list.matching_indices.clone(),
-            current_match: self.port_list.current_match,
-        };
-
         PortList::new()
             .block(port_block)
             .focused(focus == Focus::Main && !self.search_focused)
-            .render(main_chunks[0], buf, &mut port_list_state);
+            .render(main_chunks[0], buf, &mut self.port_list);
 
         // Search bar if active
         if self.search_focused || self.port_list.has_search() {
@@ -455,8 +453,7 @@ impl PreConnectView {
                     Theme::border()
                 });
 
-            let mut search_state = self.search_input.clone();
-            TextInput::new(&mut search_state)
+            TextInput::new(&mut self.search_input)
                 .block(search_block)
                 .focused(self.search_focused)
                 .render(main_chunks[1], buf);
@@ -532,8 +529,8 @@ impl PreConnectView {
     }
 
     fn handle_main_key(&mut self, key: KeyEvent) -> Option<PreConnectAction> {
-        // Half-page scroll amount
-        const HALF_PAGE: usize = 15;
+        // Half-page scroll amount based on visible height
+        let half_page = self.last_visible_height / 2;
 
         // Ignore j/k with CTRL modifier (let it be consumed without action)
         let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -547,13 +544,13 @@ impl PreConnectView {
             }
             KeyCode::Char('d') if has_ctrl => {
                 // Half-page down
-                for _ in 0..HALF_PAGE {
+                for _ in 0..half_page {
                     self.port_list.select_next();
                 }
             }
             KeyCode::Char('u') if has_ctrl => {
                 // Half-page up
-                for _ in 0..HALF_PAGE {
+                for _ in 0..half_page {
                     self.port_list.select_prev();
                 }
             }

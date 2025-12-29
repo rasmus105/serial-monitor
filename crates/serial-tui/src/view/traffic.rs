@@ -11,7 +11,7 @@ use ratatui::{
 };
 use serial_core::{
     Direction as DataDirection, SerialConfig, SessionHandle,
-    buffer::PatternMode,
+    buffer::{PatternMode, SearchMatch},
     ui::{
         TimestampFormat,
         config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
@@ -22,12 +22,12 @@ use serial_core::{
 use crate::{
     app::{Focus, TrafficAction},
     theme::Theme,
-    widget::{ConfigPanel, TextInput, text_input::TextInputState},
+    widget::{ConfigKeyResult, ConfigPanel, TextInput, handle_config_key, text_input::TextInputState},
 };
 
 /// Traffic view state.
 pub struct TrafficView {
-    /// Current scroll position (visible chunk index).
+    /// Current scroll position (in display lines when wrapped, chunks when truncated).
     pub scroll: usize,
     /// Search input state.
     pub search_input: TextInputState,
@@ -45,6 +45,8 @@ pub struct TrafficView {
     pub session_start: Option<SystemTime>,
     /// Last known visible height (for scroll bounds calculation).
     last_visible_height: usize,
+    /// Last known content width (for wrap calculation in key handler).
+    last_content_width: usize,
 }
 
 /// Traffic view configuration.
@@ -57,6 +59,7 @@ pub struct TrafficConfig {
     pub timestamp_format_index: usize,
     pub auto_scroll: bool,
     pub pattern_mode_index: usize,
+    pub wrap_text: bool,
 }
 
 impl Default for TrafficConfig {
@@ -69,6 +72,7 @@ impl Default for TrafficConfig {
             timestamp_format_index: 0, // Relative
             auto_scroll: true,
             pattern_mode_index: 0, // Normal
+            wrap_text: true, // Wrap by default
         }
     }
 }
@@ -150,6 +154,19 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                 visible: always_visible,
                 validate: always_valid,
             },
+            FieldDef {
+                id: "wrap_text",
+                label: "Wrap Text",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.wrap_text),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.wrap_text = b;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
         ],
     },
     Section {
@@ -219,6 +236,7 @@ impl TrafficView {
             config_nav: ConfigPanelNav::new(),
             session_start: None,
             last_visible_height: 20, // Conservative default
+            last_content_width: 80,  // Conservative default
         }
     }
 
@@ -267,7 +285,7 @@ impl TrafficView {
 
         // Draw input bar if active
         if show_input_bar {
-            self.draw_input_bar(main_chunks[1], buf);
+            self.draw_input_bar(main_chunks[1], buf, handle);
         }
 
         // Draw config panel
@@ -277,33 +295,14 @@ impl TrafficView {
     }
 
     fn draw_traffic(&mut self, area: Rect, buf: &mut Buffer, handle: &SessionHandle, focus: Focus) {
+        // Update search matches before we get an immutable borrow
+        // This ensures matches are current for highlighting
+        let _ = handle.buffer_mut().matches();
+        
         let buffer = handle.buffer();
-
-        let inner_height = area.height.saturating_sub(2) as usize; // Account for borders
-        let total = buffer.len();
-        
-        // Update last visible height for key handler scroll bounds
-        if inner_height > 0 {
-            self.last_visible_height = inner_height;
-        }
-        
-        // Calculate scroll position with proper bounds
-        let max_scroll = total.saturating_sub(self.last_visible_height);
-        let scroll = if self.config.auto_scroll && total > 0 {
-            max_scroll
-        } else {
-            self.scroll.min(max_scroll)
-        };
-        
-        // Clamp stored scroll to valid range
-        self.scroll = scroll;
+        let current_match = buffer.current_match().copied();
 
         let block = Block::default()
-            .title(format!(
-                " Traffic [{}/{}] ",
-                scroll + 1,
-                total.max(1)
-            ))
             .borders(Borders::ALL)
             .border_style(if focus == Focus::Main && !self.is_input_mode() {
                 Theme::border_focused()
@@ -312,84 +311,112 @@ impl TrafficView {
             });
 
         let inner = block.inner(area);
-        block.render(area, buf);
-
+        
         if inner.height == 0 || inner.width == 0 {
+            block.render(area, buf);
             return;
         }
 
         let visible_height = inner.height as usize;
+        let inner_width = inner.width as usize;
 
+        // Calculate prefix width: "TX " or "RX " = 3 chars
+        let base_prefix_width = 3;
+        
         // For relative timestamps, calculate the max width needed for alignment
-        // by looking at the last visible chunk's timestamp
         let timestamp_width = if self.config.show_timestamps {
             match self.config.timestamp_format() {
                 TimestampFormat::Relative => {
-                    // Find the maximum timestamp width in visible chunks
+                    // Find the maximum timestamp width across all chunks
                     let session_start = self.session_start.unwrap_or_else(SystemTime::now);
                     buffer
                         .chunks()
-                        .skip(scroll)
-                        .take(visible_height)
                         .map(|chunk| {
                             let elapsed = chunk.timestamp.duration_since(session_start).unwrap_or_default();
                             let secs = elapsed.as_secs_f64();
-                            // "+{secs:.3}s" - calculate width
                             format!("+{:.3}s", secs).len()
                         })
                         .max()
-                        .unwrap_or(7) // Default "+0.000s" = 7 chars
+                        .unwrap_or(7)
                 }
-                TimestampFormat::AbsoluteMillis => 12, // "12:34:56.789" = 12 chars
-                TimestampFormat::Absolute => 8,       // "12:34:56" = 8 chars
+                TimestampFormat::AbsoluteMillis => 12,
+                TimestampFormat::Absolute => 8,
             }
         } else {
             0
         };
 
+        let prefix_width = base_prefix_width + if self.config.show_timestamps { timestamp_width + 1 } else { 0 };
+        let content_width = inner_width.saturating_sub(prefix_width);
+
+        // Store for key handler calculations
+        self.last_content_width = content_width;
+
+        if self.config.wrap_text {
+            self.draw_traffic_wrapped(
+                area, buf, handle, &buffer, inner, visible_height, 
+                content_width, prefix_width, timestamp_width, block,
+                current_match.as_ref(),
+            );
+        } else {
+            self.draw_traffic_truncated(
+                area, buf, handle, &buffer, inner, visible_height,
+                content_width, prefix_width, timestamp_width, block,
+                current_match.as_ref(),
+            );
+        }
+    }
+
+    fn draw_traffic_truncated(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        _handle: &SessionHandle,
+        buffer: &serial_core::buffer::DataBuffer,
+        inner: Rect,
+        visible_height: usize,
+        content_width: usize,
+        prefix_width: usize,
+        timestamp_width: usize,
+        block: Block,
+        current_match: Option<&SearchMatch>,
+    ) {
+        let total = buffer.len();
+        
+        // Update last visible height for key handler scroll bounds
+        self.last_visible_height = visible_height;
+        
+        // Calculate scroll position with proper bounds
+        let max_scroll = total.saturating_sub(visible_height);
+        let scroll = if self.config.auto_scroll && total > 0 {
+            max_scroll
+        } else {
+            self.scroll.min(max_scroll)
+        };
+        self.scroll = scroll;
+
+        // Render block with title
+        let block = block.title(format!(
+            " Traffic [{}/{}] ",
+            scroll + 1,
+            total.max(1)
+        ));
+        block.render(area, buf);
+
         // Render chunks
         let mut y = inner.y;
-        for (_i, chunk) in buffer.chunks().skip(scroll).take(visible_height).enumerate() {
+        for (visible_idx, chunk) in buffer.chunks().enumerate().skip(scroll).take(visible_height) {
             if y >= inner.y + inner.height {
                 break;
             }
 
-            // Direction indicator
-            let (dir_char, dir_style) = match chunk.direction {
-                DataDirection::Tx => ("TX", Theme::tx()),
-                DataDirection::Rx => ("RX", Theme::rx()),
-            };
-
-            // Build line
-            let mut spans = vec![
-                Span::styled(format!("{} ", dir_char), dir_style),
-            ];
-
-            // Timestamp - format according to config with alignment
-            if self.config.show_timestamps {
-                let session_start = self.session_start.unwrap_or(chunk.timestamp);
-                let formatted = self.config.timestamp_format().format(chunk.timestamp, session_start);
-                // Right-align timestamp within the calculated width
-                let padded = format!("{:>width$} ", formatted, width = timestamp_width);
-                spans.push(Span::styled(padded, Theme::muted()));
-            }
-
-            // Content (with search highlighting if matches exist)
-            let content = &chunk.encoded;
-            // Calculate prefix width: "TX " or "RX " = 3 chars, timestamp + space
-            let prefix_width = 3 + if self.config.show_timestamps { timestamp_width + 1 } else { 0 };
-            let max_content_len = (inner.width as usize).saturating_sub(prefix_width);
-            let display_content: String = if content.len() > max_content_len {
-                format!("{}...", &content[..max_content_len.saturating_sub(3)])
-            } else {
-                content.to_string()
-            };
-
-            spans.push(Span::raw(display_content));
-
-            let line = Line::from(spans);
+            // Get matches for this chunk
+            let matches: Vec<_> = buffer.matches_in_chunk(visible_idx).cloned().collect();
+            let line = self.format_chunk_line_highlighted(
+                &chunk, timestamp_width, content_width, prefix_width, true,
+                &matches, current_match,
+            );
             Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
-
             y += 1;
         }
 
@@ -401,32 +428,294 @@ impl TrafficView {
                 .render(Rect::new(inner.x + 1, inner.y, inner.width - 2, 1), buf);
         }
 
-        // Scrollbar - render on the border itself (not inside content area)
+        // Scrollbar
         if total > visible_height {
-            // ScrollbarState expects:
-            // - content_length: the number of scrollable positions (max_scroll + 1)
-            // - position: current scroll position (0 to max_scroll)
-            let max_scroll = total.saturating_sub(visible_height);
-            let mut scrollbar_state = ScrollbarState::new(max_scroll + 1).position(scroll);
-            // Position scrollbar on the right border, between the corners
-            let scrollbar_area = Rect::new(
-                area.x + area.width - 1,  // Right border column
-                area.y + 1,               // Start below top border
-                1,
-                area.height.saturating_sub(2), // Exclude top and bottom borders
-            );
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)  // No arrow at top
-                .end_symbol(None)    // No arrow at bottom
-                .render(scrollbar_area, buf, &mut scrollbar_state);
+            self.render_scrollbar(area, buf, max_scroll + 1, scroll);
         }
     }
 
-    fn draw_input_bar(&self, area: Rect, buf: &mut Buffer) {
-        let (title, input_state) = if self.search_focused {
-            ("Search", &self.search_input)
+    fn draw_traffic_wrapped(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        _handle: &SessionHandle,
+        buffer: &serial_core::buffer::DataBuffer,
+        inner: Rect,
+        visible_height: usize,
+        content_width: usize,
+        prefix_width: usize,
+        timestamp_width: usize,
+        block: Block,
+        current_match: Option<&SearchMatch>,
+    ) {
+        // Calculate total display lines (each chunk may span multiple lines when wrapped)
+        let chunks: Vec<_> = buffer.chunks().collect();
+        let mut display_lines: Vec<(usize, usize)> = Vec::new(); // (chunk_index, line_within_chunk)
+        
+        for (chunk_idx, chunk) in chunks.iter().enumerate() {
+            let content_len = chunk.encoded.len();
+            let num_lines = if content_width > 0 {
+                (content_len + content_width - 1) / content_width.max(1)
+            } else {
+                1
+            }.max(1); // At least one line per chunk
+            
+            for line_idx in 0..num_lines {
+                display_lines.push((chunk_idx, line_idx));
+            }
+        }
+
+        let total_display_lines = display_lines.len();
+        
+        // Update last visible height for key handler scroll bounds
+        self.last_visible_height = visible_height;
+        
+        // Calculate scroll position with proper bounds (in display lines)
+        let max_scroll = total_display_lines.saturating_sub(visible_height);
+        let scroll = if self.config.auto_scroll && total_display_lines > 0 {
+            max_scroll
         } else {
-            ("Send", &self.send_input)
+            self.scroll.min(max_scroll)
+        };
+        self.scroll = scroll;
+
+        // Render block with title showing display line position
+        let block = block.title(format!(
+            " Traffic [{}/{}] ",
+            scroll + 1,
+            total_display_lines.max(1)
+        ));
+        block.render(area, buf);
+
+        // Render display lines starting from scroll position
+        let mut y = inner.y;
+        for &(chunk_idx, line_within_chunk) in display_lines.iter().skip(scroll).take(visible_height) {
+            if y >= inner.y + inner.height {
+                break;
+            }
+
+            let chunk = &chunks[chunk_idx];
+            let content = &chunk.encoded;
+            
+            // Get matches for this chunk
+            let matches: Vec<_> = buffer.matches_in_chunk(chunk_idx).cloned().collect();
+            
+            // Calculate which part of content to show
+            let start = line_within_chunk * content_width;
+            let end = (start + content_width).min(content.len());
+
+            // Only show prefix on first line of chunk
+            if line_within_chunk == 0 {
+                let line = self.format_chunk_line_with_content_highlighted(
+                    chunk, timestamp_width, content, start, end, &matches, current_match
+                );
+                Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
+            } else {
+                // Continuation line - indent to align with content
+                let indent = " ".repeat(prefix_width);
+                let content_spans = self.create_highlighted_spans(content, start, end, &matches, current_match);
+                let mut spans = vec![Span::raw(indent)];
+                spans.extend(content_spans);
+                let line = Line::from(spans);
+                Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
+            }
+            
+            y += 1;
+        }
+
+        // Help text
+        if chunks.is_empty() {
+            let help = "No data yet. Waiting for traffic...";
+            Paragraph::new(help)
+                .style(Theme::muted())
+                .render(Rect::new(inner.x + 1, inner.y, inner.width - 2, 1), buf);
+        }
+
+        // Scrollbar
+        if total_display_lines > visible_height {
+            self.render_scrollbar(area, buf, max_scroll + 1, scroll);
+        }
+    }
+
+    fn format_chunk_line_highlighted(
+        &self,
+        chunk: &serial_core::buffer::ChunkView,
+        timestamp_width: usize,
+        content_width: usize,
+        _prefix_width: usize,
+        truncate: bool,
+        matches: &[SearchMatch],
+        current_match: Option<&SearchMatch>,
+    ) -> Line<'static> {
+        let (dir_char, dir_style) = match chunk.direction {
+            DataDirection::Tx => ("TX", Theme::tx()),
+            DataDirection::Rx => ("RX", Theme::rx()),
+        };
+
+        let mut spans = vec![Span::styled(format!("{} ", dir_char), dir_style)];
+
+        if self.config.show_timestamps {
+            let session_start = self.session_start.unwrap_or(chunk.timestamp);
+            let formatted = self.config.timestamp_format().format(chunk.timestamp, session_start);
+            let padded = format!("{:>width$} ", formatted, width = timestamp_width);
+            spans.push(Span::styled(padded, Theme::muted()));
+        }
+
+        let content = &chunk.encoded;
+        
+        // Calculate display bounds
+        let byte_end = if truncate && content.len() > content_width {
+            content_width.saturating_sub(3)
+        } else {
+            content.len()
+        };
+        
+        // Add highlighted content spans
+        let content_spans = self.create_highlighted_spans(content, 0, byte_end, matches, current_match);
+        spans.extend(content_spans);
+        
+        // Add ellipsis if truncated
+        if truncate && content.len() > content_width {
+            spans.push(Span::raw("...".to_string()));
+        }
+
+        Line::from(spans)
+    }
+
+    fn format_chunk_line_with_content_highlighted(
+        &self,
+        chunk: &serial_core::buffer::ChunkView,
+        timestamp_width: usize,
+        full_content: &str,
+        byte_start: usize,
+        byte_end: usize,
+        matches: &[SearchMatch],
+        current_match: Option<&SearchMatch>,
+    ) -> Line<'static> {
+        let (dir_char, dir_style) = match chunk.direction {
+            DataDirection::Tx => ("TX", Theme::tx()),
+            DataDirection::Rx => ("RX", Theme::rx()),
+        };
+
+        let mut spans = vec![Span::styled(format!("{} ", dir_char), dir_style)];
+
+        if self.config.show_timestamps {
+            let session_start = self.session_start.unwrap_or(chunk.timestamp);
+            let formatted = self.config.timestamp_format().format(chunk.timestamp, session_start);
+            let padded = format!("{:>width$} ", formatted, width = timestamp_width);
+            spans.push(Span::styled(padded, Theme::muted()));
+        }
+
+        let content_spans = self.create_highlighted_spans(full_content, byte_start, byte_end, matches, current_match);
+        spans.extend(content_spans);
+
+        Line::from(spans)
+    }
+
+    /// Create spans for content with search match highlighting.
+    ///
+    /// Takes the full content, byte range to display (for wrapped lines), and matches
+    /// that fall within this chunk. Returns spans with appropriate highlighting.
+    fn create_highlighted_spans(
+        &self,
+        content: &str,
+        byte_start: usize,
+        byte_end: usize,
+        matches: &[SearchMatch],
+        current_match: Option<&SearchMatch>,
+    ) -> Vec<Span<'static>> {
+        // Early return if no matches or empty content
+        if matches.is_empty() || byte_start >= byte_end {
+            let slice = if byte_start < content.len() {
+                &content[byte_start..byte_end.min(content.len())]
+            } else {
+                ""
+            };
+            return vec![Span::raw(slice.to_string())];
+        }
+
+        let mut spans = Vec::new();
+        let mut pos = byte_start;
+
+        // Filter and sort matches that overlap with our display range
+        let mut relevant_matches: Vec<_> = matches
+            .iter()
+            .filter(|m| m.byte_start < byte_end && m.byte_end > byte_start)
+            .collect();
+        relevant_matches.sort_by_key(|m| m.byte_start);
+
+        for m in relevant_matches {
+            // Clamp match bounds to our display range
+            let match_start = m.byte_start.max(byte_start);
+            let match_end = m.byte_end.min(byte_end);
+
+            // Add text before this match
+            if pos < match_start && pos < content.len() {
+                let text = &content[pos..match_start.min(content.len())];
+                spans.push(Span::raw(text.to_string()));
+            }
+
+            // Add the highlighted match
+            if match_start < content.len() {
+                let match_text = &content[match_start..match_end.min(content.len())];
+                let is_current = current_match.is_some_and(|c| c == m);
+                let style = if is_current {
+                    // Current match gets inverted/more prominent styling
+                    Theme::search_match_current()
+                } else {
+                    Theme::search_match()
+                };
+                spans.push(Span::styled(match_text.to_string(), style));
+            }
+
+            pos = match_end;
+        }
+
+        // Add remaining text after last match
+        if pos < byte_end && pos < content.len() {
+            let text = &content[pos..byte_end.min(content.len())];
+            spans.push(Span::raw(text.to_string()));
+        }
+
+        if spans.is_empty() {
+            let slice = if byte_start < content.len() {
+                &content[byte_start..byte_end.min(content.len())]
+            } else {
+                ""
+            };
+            spans.push(Span::raw(slice.to_string()));
+        }
+
+        spans
+    }
+
+    fn render_scrollbar(&self, area: Rect, buf: &mut Buffer, content_length: usize, position: usize) {
+        let mut scrollbar_state = ScrollbarState::new(content_length).position(position);
+        let scrollbar_area = Rect::new(
+            area.x + area.width - 1,
+            area.y + 1,
+            1,
+            area.height.saturating_sub(2),
+        );
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .render(scrollbar_area, buf, &mut scrollbar_state);
+    }
+
+    fn draw_input_bar(&self, area: Rect, buf: &mut Buffer, handle: &SessionHandle) {
+        let (title, input_state) = if self.search_focused {
+            // Get search status from buffer
+            let buffer = handle.buffer();
+            let status = buffer.search_status();
+            let title = if status.is_empty() {
+                "Search".to_string()
+            } else {
+                format!("Search [{}]", status)
+            };
+            (title, &self.search_input)
+        } else {
+            ("Send".to_string(), &self.send_input)
         };
 
         let block = Block::default()
@@ -539,7 +828,20 @@ impl TrafficView {
         let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let buffer = handle.buffer();
-        let total = buffer.len();
+        
+        // Calculate total scrollable items based on wrap mode
+        let total = if self.config.wrap_text {
+            // Count display lines (wrapped)
+            let content_width = self.last_content_width.max(1);
+            buffer.chunks().map(|chunk| {
+                let content_len = chunk.encoded.len();
+                ((content_len + content_width - 1) / content_width).max(1)
+            }).sum()
+        } else {
+            // Count chunks
+            buffer.len()
+        };
+        
         // Use the last known visible height for accurate scroll bounds
         let max_scroll = total.saturating_sub(self.last_visible_height);
 
@@ -577,18 +879,58 @@ impl TrafficView {
                 self.send_focused = true;
             }
             KeyCode::Char('n') => {
-                // Next search match
-                drop(buffer); // Release borrow before getting mutable reference
-                if let Some(chunk_idx) = handle.buffer_mut().goto_next_match() {
-                    self.scroll = chunk_idx;
+                // Next search match - need to calculate scroll position while we have buffer access
+                let scroll_pos = if self.config.wrap_text {
+                    let content_width = self.last_content_width.max(1);
+                    // Pre-calculate display line offsets for each chunk
+                    let display_offsets: Vec<usize> = buffer.chunks()
+                        .scan(0usize, |acc, chunk| {
+                            let offset = *acc;
+                            let content_len = chunk.encoded.len();
+                            let num_lines = ((content_len + content_width - 1) / content_width).max(1);
+                            *acc += num_lines;
+                            Some(offset)
+                        })
+                        .collect();
+                    drop(buffer);
+                    handle.buffer_mut().goto_next_match().map(|idx| {
+                        display_offsets.get(idx).copied().unwrap_or(0)
+                    })
+                } else {
+                    drop(buffer);
+                    handle.buffer_mut().goto_next_match()
+                };
+                
+                if let Some(pos) = scroll_pos {
+                    self.scroll = pos;
                     self.config.auto_scroll = false;
                 }
             }
             KeyCode::Char('N') => {
-                // Previous search match
-                drop(buffer); // Release borrow before getting mutable reference
-                if let Some(chunk_idx) = handle.buffer_mut().goto_prev_match() {
-                    self.scroll = chunk_idx;
+                // Previous search match - need to calculate scroll position while we have buffer access
+                let scroll_pos = if self.config.wrap_text {
+                    let content_width = self.last_content_width.max(1);
+                    // Pre-calculate display line offsets for each chunk
+                    let display_offsets: Vec<usize> = buffer.chunks()
+                        .scan(0usize, |acc, chunk| {
+                            let offset = *acc;
+                            let content_len = chunk.encoded.len();
+                            let num_lines = ((content_len + content_width - 1) / content_width).max(1);
+                            *acc += num_lines;
+                            Some(offset)
+                        })
+                        .collect();
+                    drop(buffer);
+                    handle.buffer_mut().goto_prev_match().map(|idx| {
+                        display_offsets.get(idx).copied().unwrap_or(0)
+                    })
+                } else {
+                    drop(buffer);
+                    handle.buffer_mut().goto_prev_match()
+                };
+                
+                if let Some(pos) = scroll_pos {
+                    self.scroll = pos;
                     self.config.auto_scroll = false;
                 }
             }
@@ -598,150 +940,56 @@ impl TrafficView {
     }
 
     fn handle_config_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
-        // Handle dropdown mode separately
-        if self.config_nav.is_dropdown_open() {
-            return self.handle_dropdown_key(key, handle);
-        }
+        let result = handle_config_key(
+            key,
+            &mut self.config_nav,
+            TRAFFIC_CONFIG_SECTIONS,
+            &mut self.config,
+        );
 
-        // Ignore j/k with CTRL modifier (let it be consumed without action)
-        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
-                self.config_nav
-                    .next_field(TRAFFIC_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
-                self.config_nav
-                    .prev_field(TRAFFIC_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if let Some(field) = self
-                    .config_nav
-                    .current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
-                {
-                    if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self
-                            .config_nav
-                            .toggle_current(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
-                        self.sync_config_to_buffer(handle);
-                        return Some(TrafficAction::RequestClear);
-                    } else if field.kind.is_select() {
-                        self.config_nav
-                            .dropdown_prev(TRAFFIC_CONFIG_SECTIONS, &self.config);
-                        let _ = self
-                            .config_nav
-                            .apply_dropdown_selection(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
-                        self.sync_config_to_buffer(handle);
-                        return Some(TrafficAction::RequestClear);
-                    }
-                }
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if let Some(field) = self
-                    .config_nav
-                    .current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
-                {
-                    if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self
-                            .config_nav
-                            .toggle_current(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
-                        self.sync_config_to_buffer(handle);
-                        return Some(TrafficAction::RequestClear);
-                    } else if field.kind.is_select() {
-                        self.config_nav
-                            .dropdown_next(TRAFFIC_CONFIG_SECTIONS, &self.config);
-                        let _ = self
-                            .config_nav
-                            .apply_dropdown_selection(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
-                        self.sync_config_to_buffer(handle);
-                        return Some(TrafficAction::RequestClear);
-                    }
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                if let Some(field) = self
-                    .config_nav
-                    .current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
-                {
-                    if field.kind.is_select() {
-                        self.config_nav
-                            .open_dropdown(TRAFFIC_CONFIG_SECTIONS, &self.config);
-                    } else if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self
-                            .config_nav
-                            .toggle_current(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
-                        self.sync_config_to_buffer(handle);
-                        return Some(TrafficAction::RequestClear);
-                    }
-                }
-            }
-            _ => {}
-        }
-        self.config_nav
-            .sync_dropdown_index(TRAFFIC_CONFIG_SECTIONS, &self.config);
-        None
-    }
-
-    fn handle_dropdown_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
-        // Ignore j/k with CTRL modifier (let it be consumed without action)
-        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
-                self.config_nav
-                    .dropdown_next(TRAFFIC_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
-                self.config_nav
-                    .dropdown_prev(TRAFFIC_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                let _ = self
-                    .config_nav
-                    .apply_dropdown_selection(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
-                self.config_nav.close_dropdown();
+        match result {
+            ConfigKeyResult::Changed => {
                 self.sync_config_to_buffer(handle);
-                return Some(TrafficAction::RequestClear);
+                Some(TrafficAction::RequestClear)
             }
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.config_nav.close_dropdown();
-                self.config_nav
-                    .sync_dropdown_index(TRAFFIC_CONFIG_SECTIONS, &self.config);
-                return Some(TrafficAction::RequestClear);
-            }
-            _ => {}
+            ConfigKeyResult::DropdownClosed => Some(TrafficAction::RequestClear),
+            _ => None,
         }
-        None
     }
 
     fn handle_search_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
         match key.code {
             KeyCode::Enter => {
-                let pattern = self.search_input.content.clone();
-                if !pattern.is_empty() {
-                    // Set search pattern on buffer
-                    let mode = if self.config.pattern_mode_index == 1 {
-                        PatternMode::Regex
-                    } else {
-                        PatternMode::Normal
-                    };
-                    if let Err(e) = handle.buffer_mut().set_search_pattern(&pattern, mode) {
-                        return Some(TrafficAction::Toast(crate::widget::Toast::error(e)));
-                    }
-                } else {
-                    // Clear search if empty
-                    handle.buffer_mut().clear_search();
-                }
+                // Confirm search and exit search mode
+                // Pattern is already set via incremental search
                 self.search_focused = false;
+                // Layout changed - request clear to avoid artifacts
+                return Some(TrafficAction::RequestClear);
             }
             KeyCode::Esc => {
                 self.search_focused = false;
                 self.search_input.clear();
                 handle.buffer_mut().clear_search();
+                // Layout changed - request clear to avoid artifacts
+                return Some(TrafficAction::RequestClear);
             }
             _ => {
+                // Handle the key input first
                 self.search_input.handle_key(key);
+                
+                // Then update search pattern incrementally
+                let pattern = &self.search_input.content;
+                if !pattern.is_empty() {
+                    let mode = if self.config.pattern_mode_index == 1 {
+                        PatternMode::Regex
+                    } else {
+                        PatternMode::Normal
+                    };
+                    // Ignore errors during incremental search (e.g., incomplete regex)
+                    let _ = handle.buffer_mut().set_search_pattern(pattern, mode);
+                } else {
+                    handle.buffer_mut().clear_search();
+                }
             }
         }
         None
@@ -762,6 +1010,8 @@ impl TrafficView {
             KeyCode::Esc => {
                 self.send_focused = false;
                 self.send_input.clear();
+                // Layout changed - request clear to avoid artifacts
+                return Some(TrafficAction::RequestClear);
             }
             _ => {
                 self.send_input.handle_key(key);

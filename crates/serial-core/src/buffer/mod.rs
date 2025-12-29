@@ -204,10 +204,19 @@ impl DataBuffer {
         self.encoded.push_back(encoded_str);
         self.current_size += size;
 
-        // Update filtered indices
+        // Update filtered indices and search
         if passes_filter {
+            // Calculate visible index for search (position in filtered view)
+            let visible_index = if self.is_filter_active() {
+                self.filtered_indices.len() // Will be the index after we push
+            } else {
+                chunk_index // Same as raw index when no filter
+            };
+            
             self.filtered_indices.push(chunk_index);
-            self.search.invalidate();
+            
+            // Incrementally add matches from this chunk instead of invalidating
+            self.search.add_chunk(visible_index, self.encoded.back().unwrap());
         }
 
         // Feed to graph if enabled
@@ -232,18 +241,26 @@ impl DataBuffer {
             self.current_size -= raw.data.len();
             self.encoded.pop_front();
 
+            // Check if the dropped chunk was in the filtered view
+            let was_in_filtered_view = if let Some(first) = self.filtered_indices.first() {
+                *first == 0
+            } else {
+                false
+            };
+
             // Adjust filtered indices
             // Remove index 0 if present, then subtract 1 from all remaining
-            if let Some(first) = self.filtered_indices.first()
-                && *first == 0
-            {
+            if was_in_filtered_view {
                 self.filtered_indices.remove(0);
             }
             for idx in &mut self.filtered_indices {
                 *idx -= 1;
             }
 
-            self.search.invalidate();
+            // Update search: if the dropped chunk was visible, adjust match indices
+            if was_in_filtered_view || !self.is_filter_active() {
+                self.search.drop_oldest_chunk();
+            }
 
             // Trim graph data to keep it in sync with buffer's time window
             if let Some(ref mut graph) = self.graph {
@@ -480,25 +497,33 @@ impl DataBuffer {
 
     /// Get all search matches (updates search if needed)
     pub fn matches(&mut self) -> &[SearchMatch] {
-        // Get the visible indices
-        let indices: &[usize] = if self.is_filter_active() {
-            &self.filtered_indices
-        } else {
-            // For unfiltered, we pass an empty slice and search uses 0..len
-            &[]
-        };
-        let encoded = &self.encoded;
-        self.search.update(indices, encoded)
+        self.ensure_search_updated();
+        &self.search.matches
     }
 
     /// Go to next match
     pub fn goto_next_match(&mut self) -> Option<usize> {
+        // Ensure matches are up-to-date before navigating
+        self.ensure_search_updated();
         self.search.goto_next()
     }
 
     /// Go to previous match
     pub fn goto_prev_match(&mut self) -> Option<usize> {
+        // Ensure matches are up-to-date before navigating
+        self.ensure_search_updated();
         self.search.goto_prev()
+    }
+    
+    /// Ensure search results are up-to-date (internal helper)
+    fn ensure_search_updated(&mut self) {
+        let indices: &[usize] = if self.is_filter_active() {
+            &self.filtered_indices
+        } else {
+            &[]
+        };
+        let encoded = &self.encoded;
+        self.search.update(indices, encoded);
     }
 
     /// Get current match index

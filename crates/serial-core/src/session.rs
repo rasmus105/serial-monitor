@@ -19,15 +19,9 @@ use crate::port::SerialConfig;
 #[derive(Debug, Clone)]
 pub enum SessionEvent {
     /// New data received from the device
-    DataReceived {
-        data: Vec<u8>,
-        direction: Direction,
-    },
+    DataReceived { data: Vec<u8>, direction: Direction },
     /// Data was sent to the device
-    DataSent {
-        data: Vec<u8>,
-        direction: Direction,
-    },
+    DataSent { data: Vec<u8>, direction: Direction },
     /// Connection established
     Connected,
     /// Connection closed (gracefully or due to error)
@@ -227,9 +221,8 @@ impl Session {
             .flow_control(serial_config.flow_control)
             .open_native_async()?;
 
-        // Clear any data buffered by the OS before we opened the port
-        // This ensures we only see data that arrives after connecting
-        port.clear(ClearBuffer::Input)?;
+        // Flush buffers to discard any stale data from before we connected.
+        port.clear(ClearBuffer::All)?;
 
         // Create shared buffer
         let mut buffer = DataBuffer::default();

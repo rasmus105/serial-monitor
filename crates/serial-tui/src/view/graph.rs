@@ -21,7 +21,7 @@ use serial_core::{
     },
 };
 
-use crate::{app::Focus, theme::Theme};
+use crate::{app::Focus, theme::Theme, widget::handle_config_key};
 
 /// Helper to convert SystemTime to seconds since reference.
 fn time_to_secs(time: SystemTime, reference: SystemTime) -> f64 {
@@ -46,6 +46,9 @@ pub struct GraphView {
     pub auto_scale_x: bool,
     /// Reference time for converting SystemTime to seconds.
     pub reference_time: Option<SystemTime>,
+    /// Cached graph data for rendering (avoids allocation per frame).
+    /// Vec of (series_name, data_points) pairs.
+    cached_graph_data: Vec<Vec<(f64, f64)>>,
 }
 
 /// Graph configuration.
@@ -110,11 +113,12 @@ impl GraphView {
             x_range: (0.0, 60.0),
             auto_scale_x: true,
             reference_time: None,
+            cached_graph_data: Vec::new(),
         }
     }
 
     pub fn draw(
-        &self,
+        &mut self,
         main_area: Rect,
         config_area: Option<Rect>,
         buf: &mut Buffer,
@@ -160,7 +164,7 @@ impl GraphView {
                     .min()
                     .unwrap_or_else(SystemTime::now);
 
-                // Build datasets
+                // Build datasets - reuse cached storage
                 let colors = [
                     Theme::PRIMARY,
                     Theme::SUCCESS,
@@ -169,24 +173,40 @@ impl GraphView {
                     Theme::ACCENT,
                 ];
 
-                let datasets: Vec<Dataset> = graph
+                // Collect visible series data into cache
+                let visible_series: Vec<_> = graph
                     .series
                     .iter()
                     .enumerate()
                     .filter(|(_, (_, series))| series.visible)
-                    .map(|(i, (name, series))| {
-                        let data: Vec<(f64, f64)> = series
+                    .collect();
+
+                // Resize cache to match number of visible series
+                self.cached_graph_data.resize(visible_series.len(), Vec::new());
+
+                // Fill cache with data points
+                for (cache_idx, (_, (_, series))) in visible_series.iter().enumerate() {
+                    let cache = &mut self.cached_graph_data[cache_idx];
+                    cache.clear();
+                    cache.extend(
+                        series
                             .points
                             .iter()
-                            .map(|p| (time_to_secs(p.timestamp, reference_time), p.value))
-                            .collect();
+                            .map(|p| (time_to_secs(p.timestamp, reference_time), p.value)),
+                    );
+                }
 
+                // Build datasets referencing cached data
+                let datasets: Vec<Dataset> = visible_series
+                    .iter()
+                    .enumerate()
+                    .map(|(cache_idx, (series_idx, (name, _)))| {
                         Dataset::default()
                             .name(name.as_str())
                             .marker(Marker::Braille)
                             .graph_type(GraphType::Line)
-                            .style(Style::default().fg(colors[i % colors.len()]))
-                            .data(Box::leak(data.into_boxed_slice()))
+                            .style(Style::default().fg(colors[*series_idx % colors.len()]))
+                            .data(&self.cached_graph_data[cache_idx])
                     })
                     .collect();
 
@@ -410,107 +430,13 @@ impl GraphView {
     }
 
     fn handle_config_key(&mut self, key: KeyEvent) {
-        // Handle dropdown mode separately
-        if self.config_nav.is_dropdown_open() {
-            self.handle_dropdown_key(key);
-            return;
-        }
-
-        // Ignore j/k with CTRL modifier (let it be consumed without action)
-        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
-                self.config_nav
-                    .next_field(GRAPH_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
-                self.config_nav
-                    .prev_field(GRAPH_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if let Some(field) = self
-                    .config_nav
-                    .current_field(GRAPH_CONFIG_SECTIONS, &self.config)
-                {
-                    if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self
-                            .config_nav
-                            .toggle_current(GRAPH_CONFIG_SECTIONS, &mut self.config);
-                    } else if field.kind.is_select() {
-                        self.config_nav
-                            .dropdown_prev(GRAPH_CONFIG_SECTIONS, &self.config);
-                        let _ = self
-                            .config_nav
-                            .apply_dropdown_selection(GRAPH_CONFIG_SECTIONS, &mut self.config);
-                    }
-                }
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if let Some(field) = self
-                    .config_nav
-                    .current_field(GRAPH_CONFIG_SECTIONS, &self.config)
-                {
-                    if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self
-                            .config_nav
-                            .toggle_current(GRAPH_CONFIG_SECTIONS, &mut self.config);
-                    } else if field.kind.is_select() {
-                        self.config_nav
-                            .dropdown_next(GRAPH_CONFIG_SECTIONS, &self.config);
-                        let _ = self
-                            .config_nav
-                            .apply_dropdown_selection(GRAPH_CONFIG_SECTIONS, &mut self.config);
-                    }
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                if let Some(field) = self
-                    .config_nav
-                    .current_field(GRAPH_CONFIG_SECTIONS, &self.config)
-                {
-                    if field.kind.is_select() {
-                        self.config_nav
-                            .open_dropdown(GRAPH_CONFIG_SECTIONS, &self.config);
-                    } else if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self
-                            .config_nav
-                            .toggle_current(GRAPH_CONFIG_SECTIONS, &mut self.config);
-                    }
-                }
-            }
-            _ => {}
-        }
-        self.config_nav
-            .sync_dropdown_index(GRAPH_CONFIG_SECTIONS, &self.config);
-    }
-
-    fn handle_dropdown_key(&mut self, key: KeyEvent) {
-        // Ignore j/k with CTRL modifier (let it be consumed without action)
-        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
-                self.config_nav
-                    .dropdown_next(GRAPH_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
-                self.config_nav
-                    .dropdown_prev(GRAPH_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                let _ = self
-                    .config_nav
-                    .apply_dropdown_selection(GRAPH_CONFIG_SECTIONS, &mut self.config);
-                self.config_nav.close_dropdown();
-            }
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.config_nav.close_dropdown();
-                self.config_nav
-                    .sync_dropdown_index(GRAPH_CONFIG_SECTIONS, &self.config);
-            }
-            _ => {}
-        }
+        let _ = handle_config_key(
+            key,
+            &mut self.config_nav,
+            GRAPH_CONFIG_SECTIONS,
+            &mut self.config,
+        );
+        // Graph view doesn't need to sync to buffer or request clear
     }
 }
 

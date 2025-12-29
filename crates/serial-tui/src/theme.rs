@@ -106,4 +106,11 @@ impl Theme {
     pub fn search_match() -> Style {
         Style::default().fg(Self::WARNING).add_modifier(Modifier::BOLD)
     }
+
+    pub fn search_match_current() -> Style {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Self::WARNING)
+            .add_modifier(Modifier::BOLD)
+    }
 }

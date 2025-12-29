@@ -146,6 +146,55 @@ impl SearchState {
         }
     }
 
+    /// Add matches from a single new chunk (incremental update)
+    ///
+    /// Called when new data arrives that passes the filter. Instead of
+    /// invalidating all results, we just search the new chunk and append.
+    /// `visible_index` is the index this chunk will have in the visible view.
+    pub fn add_chunk(&mut self, visible_index: usize, content: &str) {
+        if !self.pattern.has_pattern() || !self.valid {
+            return;
+        }
+        self.search_chunk(visible_index, content);
+        self.searched_count += 1;
+    }
+
+    /// Called when the oldest chunk is dropped from the buffer.
+    ///
+    /// Removes matches from chunk 0 and decrements visible_index for all
+    /// remaining matches. Also adjusts current_match if needed.
+    pub fn drop_oldest_chunk(&mut self) {
+        if !self.valid {
+            return;
+        }
+
+        // Count how many matches were in chunk 0
+        let removed_count = self.matches.iter().filter(|m| m.visible_index == 0).count();
+
+        // Remove matches from chunk 0
+        self.matches.retain(|m| m.visible_index != 0);
+
+        // Decrement visible_index for all remaining matches
+        for m in &mut self.matches {
+            m.visible_index -= 1;
+        }
+
+        // Adjust current_match index
+        if let Some(current) = self.current_match {
+            if current < removed_count {
+                // Current match was in the dropped chunk
+                self.current_match = None;
+            } else {
+                // Shift the index
+                self.current_match = Some(current - removed_count);
+            }
+        }
+
+        if self.searched_count > 0 {
+            self.searched_count -= 1;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Match access
     // -------------------------------------------------------------------------
@@ -283,5 +332,134 @@ mod tests {
         // Only one match - "hello again" at visible index 1
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].visible_index, 1);
+    }
+
+    #[test]
+    fn incremental_add_chunk() {
+        let mut search = SearchState::default();
+        search.set_pattern("hello", PatternMode::Normal).unwrap();
+
+        // Initial search
+        let encoded: VecDeque<String> = vec![
+            "hello world".to_string(),
+            "goodbye".to_string(),
+        ]
+        .into();
+        search.update(&[], &encoded);
+        assert_eq!(search.matches.len(), 1);
+        assert_eq!(search.matches[0].visible_index, 0);
+
+        // Navigate to first match
+        search.goto_next();
+        assert_eq!(search.current_match, Some(0));
+
+        // Add a new chunk with a match
+        search.add_chunk(2, "hello again");
+        assert_eq!(search.matches.len(), 2);
+        assert_eq!(search.matches[1].visible_index, 2);
+
+        // Current match should be preserved
+        assert_eq!(search.current_match, Some(0));
+    }
+
+    #[test]
+    fn incremental_drop_oldest() {
+        let mut search = SearchState::default();
+        search.set_pattern("hello", PatternMode::Normal).unwrap();
+
+        // Initial search with 3 matches
+        let encoded: VecDeque<String> = vec![
+            "hello one".to_string(),   // index 0, match at bytes 0-5
+            "goodbye".to_string(),     // index 1, no match
+            "hello two".to_string(),   // index 2, match at bytes 0-5
+            "hello three".to_string(), // index 3, match at bytes 0-5
+        ]
+        .into();
+        search.update(&[], &encoded);
+        assert_eq!(search.matches.len(), 3);
+        assert_eq!(search.matches[0].visible_index, 0);
+        assert_eq!(search.matches[1].visible_index, 2);
+        assert_eq!(search.matches[2].visible_index, 3);
+
+        // Navigate to second match (index 1 in matches vec)
+        search.goto_next(); // match 0
+        search.goto_next(); // match 1
+        assert_eq!(search.current_match, Some(1));
+        assert_eq!(search.matches[1].visible_index, 2);
+
+        // Drop oldest chunk (which had a match)
+        search.drop_oldest_chunk();
+        
+        // Should now have 2 matches with adjusted indices
+        assert_eq!(search.matches.len(), 2);
+        assert_eq!(search.matches[0].visible_index, 1); // was 2, now 1
+        assert_eq!(search.matches[1].visible_index, 2); // was 3, now 2
+
+        // Current match should be adjusted: was at index 1, but index 0 was removed
+        // So we lost one match, new current should be 0
+        assert_eq!(search.current_match, Some(0));
+    }
+
+    #[test]
+    fn drop_oldest_removes_current_match() {
+        let mut search = SearchState::default();
+        search.set_pattern("hello", PatternMode::Normal).unwrap();
+
+        let encoded: VecDeque<String> = vec![
+            "hello one".to_string(),
+            "hello two".to_string(),
+        ]
+        .into();
+        search.update(&[], &encoded);
+        
+        // Navigate to first match
+        search.goto_next();
+        assert_eq!(search.current_match, Some(0));
+        assert_eq!(search.matches[0].visible_index, 0);
+
+        // Drop oldest - this removes the current match
+        search.drop_oldest_chunk();
+        
+        // Current match should be None since it was in the dropped chunk
+        assert_eq!(search.current_match, None);
+        // One match remaining
+        assert_eq!(search.matches.len(), 1);
+        assert_eq!(search.matches[0].visible_index, 0); // was 1, now 0
+    }
+
+    #[test]
+    fn navigation_preserves_through_new_data() {
+        let mut search = SearchState::default();
+        search.set_pattern("test", PatternMode::Normal).unwrap();
+
+        // Initial 3 chunks with matches
+        let encoded: VecDeque<String> = vec![
+            "test 1".to_string(),
+            "test 2".to_string(),
+            "test 3".to_string(),
+        ]
+        .into();
+        search.update(&[], &encoded);
+        assert_eq!(search.matches.len(), 3);
+
+        // Navigate to match 2 (index 1)
+        search.goto_next(); // match 0
+        search.goto_next(); // match 1
+        assert_eq!(search.current_match, Some(1));
+
+        // Add new chunk with match
+        search.add_chunk(3, "test 4");
+        
+        // Navigation state preserved
+        assert_eq!(search.current_match, Some(1));
+        assert_eq!(search.matches.len(), 4);
+
+        // Can continue navigating
+        search.goto_next();
+        assert_eq!(search.current_match, Some(2));
+        search.goto_next();
+        assert_eq!(search.current_match, Some(3)); // New match!
+        search.goto_next(); // Wraps to beginning
+        assert_eq!(search.current_match, Some(0));
     }
 }

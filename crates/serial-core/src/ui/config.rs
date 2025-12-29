@@ -491,3 +491,32 @@ impl ConfigPanelNav {
         }
     }
 }
+
+// =============================================================================
+// Key handling helpers
+// =============================================================================
+
+/// Result of handling a config panel key event
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigKeyResult {
+    /// Key was not handled (should be passed to other handlers)
+    NotHandled,
+    /// Key was handled, no state change occurred
+    Handled,
+    /// Key was handled and config value changed (may need sync/clear)
+    Changed,
+    /// Dropdown was closed (may need clear for overlay removal)
+    DropdownClosed,
+}
+
+impl ConfigKeyResult {
+    /// Returns true if the config state changed
+    pub fn changed(self) -> bool {
+        self == ConfigKeyResult::Changed
+    }
+
+    /// Returns true if the key was handled
+    pub fn handled(self) -> bool {
+        self != ConfigKeyResult::NotHandled
+    }
+}

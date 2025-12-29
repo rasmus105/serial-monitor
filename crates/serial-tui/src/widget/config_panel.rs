@@ -1,5 +1,6 @@
 //! Config panel widget using serial-core's declarative config system.
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -10,6 +11,128 @@ use ratatui::{
 use serial_core::ui::config::{ConfigPanelNav, FieldKind, FieldValue, Section};
 
 use crate::theme::Theme;
+
+// Re-export ConfigKeyResult for convenience
+pub use serial_core::ui::config::ConfigKeyResult;
+
+/// Handle a key event for a config panel.
+///
+/// This is a helper function that handles the common config panel key bindings.
+/// Returns what action was taken so the caller can respond appropriately
+/// (e.g., sync to buffer, request screen clear).
+///
+/// # Example
+///
+/// ```ignore
+/// let result = handle_config_key(key, &mut self.config_nav, SECTIONS, &mut self.config);
+/// if result.changed() {
+///     self.sync_config_to_buffer(handle);
+/// }
+/// if result != ConfigKeyResult::NotHandled {
+///     return Some(TrafficAction::RequestClear);
+/// }
+/// ```
+pub fn handle_config_key<T: 'static>(
+    key: KeyEvent,
+    nav: &mut ConfigPanelNav,
+    sections: &[Section<T>],
+    config: &mut T,
+) -> ConfigKeyResult {
+    // Handle dropdown mode separately
+    if nav.is_dropdown_open() {
+        return handle_dropdown_key(key, nav, sections, config);
+    }
+
+    // Ignore j/k with CTRL modifier (let it be consumed without action)
+    let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
+            nav.next_field(sections, config);
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
+            nav.prev_field(sections, config);
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            if let Some(field) = nav.current_field(sections, config) {
+                if matches!(field.kind, FieldKind::Toggle) {
+                    let _ = nav.toggle_current(sections, config);
+                    return ConfigKeyResult::Changed;
+                } else if field.kind.is_select() {
+                    nav.dropdown_prev(sections, config);
+                    let _ = nav.apply_dropdown_selection(sections, config);
+                    return ConfigKeyResult::Changed;
+                }
+            }
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            if let Some(field) = nav.current_field(sections, config) {
+                if matches!(field.kind, FieldKind::Toggle) {
+                    let _ = nav.toggle_current(sections, config);
+                    return ConfigKeyResult::Changed;
+                } else if field.kind.is_select() {
+                    nav.dropdown_next(sections, config);
+                    let _ = nav.apply_dropdown_selection(sections, config);
+                    return ConfigKeyResult::Changed;
+                }
+            }
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            if let Some(field) = nav.current_field(sections, config) {
+                if field.kind.is_select() {
+                    nav.open_dropdown(sections, config);
+                    return ConfigKeyResult::Handled;
+                } else if matches!(field.kind, FieldKind::Toggle) {
+                    let _ = nav.toggle_current(sections, config);
+                    return ConfigKeyResult::Changed;
+                }
+            }
+            ConfigKeyResult::Handled
+        }
+        _ => {
+            // Sync dropdown index even if key wasn't handled
+            nav.sync_dropdown_index(sections, config);
+            ConfigKeyResult::NotHandled
+        }
+    }
+}
+
+/// Handle a key event when a dropdown is open.
+fn handle_dropdown_key<T: 'static>(
+    key: KeyEvent,
+    nav: &mut ConfigPanelNav,
+    sections: &[Section<T>],
+    config: &mut T,
+) -> ConfigKeyResult {
+    // Ignore j/k with CTRL modifier
+    let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
+            nav.dropdown_next(sections, config);
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
+            nav.dropdown_prev(sections, config);
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            let _ = nav.apply_dropdown_selection(sections, config);
+            nav.close_dropdown();
+            ConfigKeyResult::Changed
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            nav.close_dropdown();
+            nav.sync_dropdown_index(sections, config);
+            ConfigKeyResult::DropdownClosed
+        }
+        _ => ConfigKeyResult::NotHandled,
+    }
+}
 
 /// Config panel widget.
 pub struct ConfigPanel<'a, T: 'static> {

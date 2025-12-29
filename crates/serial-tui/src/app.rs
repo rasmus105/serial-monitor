@@ -127,7 +127,8 @@ impl App {
         }
 
         loop {
-            // Clear terminal if needed (e.g., after overlay closes)
+            // Force full terminal redraw if needed before drawing
+            // This handles clears requested from previous iterations (e.g., mode changes)
             if self.needs_clear {
                 terminal.clear()?;
                 self.needs_clear = false;
@@ -346,6 +347,7 @@ impl App {
                         if !self.is_input_mode() =>
                     {
                         self.show_config = !self.show_config;
+                        // Request clear to avoid rendering artifacts when layout changes
                         self.needs_clear = true;
                         return;
                     }
@@ -395,28 +397,28 @@ impl App {
 
                         if !is_input_mode {
                             match key.code {
-                                KeyCode::Char('1') => {
-                                    // Close any open dropdowns before switching
+                                KeyCode::Char('1') if state.tab != ConnectedTab::Traffic => {
                                     state.traffic.config_nav.close_dropdown();
                                     state.graph.config_nav.close_dropdown();
                                     state.file_sender.config_nav.close_dropdown();
                                     state.tab = ConnectedTab::Traffic;
+                                    self.needs_clear = true;
                                     return;
                                 }
-                                KeyCode::Char('2') => {
-                                    // Close any open dropdowns before switching
+                                KeyCode::Char('2') if state.tab != ConnectedTab::Graph => {
                                     state.traffic.config_nav.close_dropdown();
                                     state.graph.config_nav.close_dropdown();
                                     state.file_sender.config_nav.close_dropdown();
                                     state.tab = ConnectedTab::Graph;
+                                    self.needs_clear = true;
                                     return;
                                 }
-                                KeyCode::Char('3') => {
-                                    // Close any open dropdowns before switching
+                                KeyCode::Char('3') if state.tab != ConnectedTab::FileSender => {
                                     state.traffic.config_nav.close_dropdown();
                                     state.graph.config_nav.close_dropdown();
                                     state.file_sender.config_nav.close_dropdown();
                                     state.tab = ConnectedTab::FileSender;
+                                    self.needs_clear = true;
                                     return;
                                 }
                                 // 'd' disconnects only without modifiers (Ctrl+d is half-page scroll)
@@ -582,6 +584,8 @@ impl App {
                         self.toasts.error(format!("Send failed: {}", e));
                     }
                 }
+                // Layout changed (send bar closed) - request clear to avoid artifacts
+                self.needs_clear = true;
             }
             TrafficAction::Toast(toast) => {
                 self.toasts.push(toast);

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -21,7 +21,7 @@ use serial_core::{
 use crate::{
     app::{FileSenderAction, Focus},
     theme::Theme,
-    widget::{ConfigPanel, TextInput, Toast, text_input::TextInputState},
+    widget::{ConfigPanel, TextInput, Toast, handle_config_key, text_input::TextInputState},
 };
 
 /// File sender view state.
@@ -406,107 +406,13 @@ impl FileSenderView {
     }
 
     fn handle_config_key(&mut self, key: KeyEvent) -> Option<FileSenderAction> {
-        // Handle dropdown mode separately
-        if self.config_nav.is_dropdown_open() {
-            return self.handle_dropdown_key(key);
-        }
-
-        // Ignore j/k with CTRL modifier (let it be consumed without action)
-        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
-                self.config_nav
-                    .next_field(FILE_SENDER_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
-                self.config_nav
-                    .prev_field(FILE_SENDER_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if let Some(field) = self
-                    .config_nav
-                    .current_field(FILE_SENDER_CONFIG_SECTIONS, &self.config)
-                {
-                    if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self
-                            .config_nav
-                            .toggle_current(FILE_SENDER_CONFIG_SECTIONS, &mut self.config);
-                    } else if field.kind.is_select() {
-                        self.config_nav
-                            .dropdown_prev(FILE_SENDER_CONFIG_SECTIONS, &self.config);
-                        let _ = self
-                            .config_nav
-                            .apply_dropdown_selection(FILE_SENDER_CONFIG_SECTIONS, &mut self.config);
-                    }
-                }
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if let Some(field) = self
-                    .config_nav
-                    .current_field(FILE_SENDER_CONFIG_SECTIONS, &self.config)
-                {
-                    if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self
-                            .config_nav
-                            .toggle_current(FILE_SENDER_CONFIG_SECTIONS, &mut self.config);
-                    } else if field.kind.is_select() {
-                        self.config_nav
-                            .dropdown_next(FILE_SENDER_CONFIG_SECTIONS, &self.config);
-                        let _ = self
-                            .config_nav
-                            .apply_dropdown_selection(FILE_SENDER_CONFIG_SECTIONS, &mut self.config);
-                    }
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                if let Some(field) = self
-                    .config_nav
-                    .current_field(FILE_SENDER_CONFIG_SECTIONS, &self.config)
-                {
-                    if field.kind.is_select() {
-                        self.config_nav
-                            .open_dropdown(FILE_SENDER_CONFIG_SECTIONS, &self.config);
-                    } else if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self
-                            .config_nav
-                            .toggle_current(FILE_SENDER_CONFIG_SECTIONS, &mut self.config);
-                    }
-                }
-            }
-            _ => {}
-        }
-        self.config_nav
-            .sync_dropdown_index(FILE_SENDER_CONFIG_SECTIONS, &self.config);
-        None
-    }
-
-    fn handle_dropdown_key(&mut self, key: KeyEvent) -> Option<FileSenderAction> {
-        // Ignore j/k with CTRL modifier (let it be consumed without action)
-        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
-                self.config_nav
-                    .dropdown_next(FILE_SENDER_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
-                self.config_nav
-                    .dropdown_prev(FILE_SENDER_CONFIG_SECTIONS, &self.config);
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                let _ = self
-                    .config_nav
-                    .apply_dropdown_selection(FILE_SENDER_CONFIG_SECTIONS, &mut self.config);
-                self.config_nav.close_dropdown();
-            }
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.config_nav.close_dropdown();
-                self.config_nav
-                    .sync_dropdown_index(FILE_SENDER_CONFIG_SECTIONS, &self.config);
-            }
-            _ => {}
-        }
+        let _ = handle_config_key(
+            key,
+            &mut self.config_nav,
+            FILE_SENDER_CONFIG_SECTIONS,
+            &mut self.config,
+        );
+        // File sender doesn't need to sync to buffer or request clear
         None
     }
 
