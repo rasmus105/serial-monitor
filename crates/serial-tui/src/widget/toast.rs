@@ -132,9 +132,11 @@ impl Toasts {
         self.push(Toast::error(message));
     }
 
-    /// Remove expired toasts.
-    pub fn tick(&mut self) {
+    /// Remove expired toasts. Returns true if any toasts were removed.
+    pub fn tick(&mut self) -> bool {
+        let before = self.toasts.len();
         self.toasts.retain(|t| !t.is_expired());
+        self.toasts.len() < before
     }
 
     /// Check if there are any toasts to display.

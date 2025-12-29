@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -366,12 +366,23 @@ impl GraphView {
     }
 
     fn handle_main_key(&mut self, key: KeyEvent, handle: &SessionHandle) {
+        const HALF_PAGE: usize = 5; // Smaller since series list is typically short
+
+        // Ignore j/k with CTRL modifier (let it be consumed without action)
+        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
                 self.selected_series = self.selected_series.saturating_add(1);
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
                 self.selected_series = self.selected_series.saturating_sub(1);
+            }
+            KeyCode::Char('d') if has_ctrl => {
+                self.selected_series = self.selected_series.saturating_add(HALF_PAGE);
+            }
+            KeyCode::Char('u') if has_ctrl => {
+                self.selected_series = self.selected_series.saturating_sub(HALF_PAGE);
             }
             KeyCode::Char('t') | KeyCode::Enter | KeyCode::Char(' ') => {
                 // Toggle series visibility
@@ -399,12 +410,21 @@ impl GraphView {
     }
 
     fn handle_config_key(&mut self, key: KeyEvent) {
+        // Handle dropdown mode separately
+        if self.config_nav.is_dropdown_open() {
+            self.handle_dropdown_key(key);
+            return;
+        }
+
+        // Ignore j/k with CTRL modifier (let it be consumed without action)
+        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
                 self.config_nav
                     .next_field(GRAPH_CONFIG_SECTIONS, &self.config);
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
                 self.config_nav
                     .prev_field(GRAPH_CONFIG_SECTIONS, &self.config);
             }
@@ -417,7 +437,7 @@ impl GraphView {
                         let _ = self
                             .config_nav
                             .toggle_current(GRAPH_CONFIG_SECTIONS, &mut self.config);
-                    } else {
+                    } else if field.kind.is_select() {
                         self.config_nav
                             .dropdown_prev(GRAPH_CONFIG_SECTIONS, &self.config);
                         let _ = self
@@ -426,7 +446,7 @@ impl GraphView {
                     }
                 }
             }
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
+            KeyCode::Char('l') | KeyCode::Right => {
                 if let Some(field) = self
                     .config_nav
                     .current_field(GRAPH_CONFIG_SECTIONS, &self.config)
@@ -435,7 +455,7 @@ impl GraphView {
                         let _ = self
                             .config_nav
                             .toggle_current(GRAPH_CONFIG_SECTIONS, &mut self.config);
-                    } else {
+                    } else if field.kind.is_select() {
                         self.config_nav
                             .dropdown_next(GRAPH_CONFIG_SECTIONS, &self.config);
                         let _ = self
@@ -444,10 +464,53 @@ impl GraphView {
                     }
                 }
             }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(field) = self
+                    .config_nav
+                    .current_field(GRAPH_CONFIG_SECTIONS, &self.config)
+                {
+                    if field.kind.is_select() {
+                        self.config_nav
+                            .open_dropdown(GRAPH_CONFIG_SECTIONS, &self.config);
+                    } else if matches!(field.kind, FieldKind::Toggle) {
+                        let _ = self
+                            .config_nav
+                            .toggle_current(GRAPH_CONFIG_SECTIONS, &mut self.config);
+                    }
+                }
+            }
             _ => {}
         }
         self.config_nav
             .sync_dropdown_index(GRAPH_CONFIG_SECTIONS, &self.config);
+    }
+
+    fn handle_dropdown_key(&mut self, key: KeyEvent) {
+        // Ignore j/k with CTRL modifier (let it be consumed without action)
+        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
+                self.config_nav
+                    .dropdown_next(GRAPH_CONFIG_SECTIONS, &self.config);
+            }
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
+                self.config_nav
+                    .dropdown_prev(GRAPH_CONFIG_SECTIONS, &self.config);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let _ = self
+                    .config_nav
+                    .apply_dropdown_selection(GRAPH_CONFIG_SECTIONS, &mut self.config);
+                self.config_nav.close_dropdown();
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.config_nav.close_dropdown();
+                self.config_nav
+                    .sync_dropdown_index(GRAPH_CONFIG_SECTIONS, &self.config);
+            }
+            _ => {}
+        }
     }
 }
 

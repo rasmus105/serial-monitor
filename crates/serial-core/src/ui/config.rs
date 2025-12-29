@@ -344,6 +344,9 @@ pub struct ConfigPanelNav {
 
     /// Scroll offset (for panels that need scrolling)
     pub scroll_offset: usize,
+
+    /// Whether the dropdown is currently open (for Select fields)
+    pub dropdown_open: bool,
 }
 
 impl ConfigPanelNav {
@@ -399,6 +402,26 @@ impl ConfigPanelNav {
                 self.dropdown_index = idx;
             }
         }
+    }
+
+    /// Open the dropdown for the current Select field
+    pub fn open_dropdown<T: 'static>(&mut self, sections: &[Section<T>], state: &T) {
+        if let Some(field) = self.current_field(sections, state) {
+            if field.kind.is_select() {
+                self.sync_dropdown_index(sections, state);
+                self.dropdown_open = true;
+            }
+        }
+    }
+
+    /// Close the dropdown without applying changes
+    pub fn close_dropdown(&mut self) {
+        self.dropdown_open = false;
+    }
+
+    /// Check if dropdown is currently open
+    pub fn is_dropdown_open(&self) -> bool {
+        self.dropdown_open
     }
 
     /// Move dropdown selection down

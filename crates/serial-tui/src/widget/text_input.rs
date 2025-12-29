@@ -98,6 +98,11 @@ impl TextInputState {
         content
     }
 
+    /// Get the cursor position (display width from start).
+    pub fn cursor_display_pos(&self) -> usize {
+        self.content[..self.cursor].width()
+    }
+
     fn insert_char(&mut self, c: char) {
         self.content.insert(self.cursor, c);
         self.cursor += c.len_utf8();

@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -13,8 +13,9 @@ use serial_core::{
     Direction as DataDirection, SerialConfig, SessionHandle,
     buffer::PatternMode,
     ui::{
+        TimestampFormat,
         config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
-        encoding::ENCODING_DISPLAY_NAMES,
+        encoding::{ENCODING_DISPLAY_NAMES, ENCODING_VARIANTS},
     },
 };
 
@@ -28,8 +29,6 @@ use crate::{
 pub struct TrafficView {
     /// Current scroll position (visible chunk index).
     pub scroll: usize,
-    /// Whether auto-scroll is enabled.
-    pub auto_scroll: bool,
     /// Search input state.
     pub search_input: TextInputState,
     /// Whether search input is focused.
@@ -44,6 +43,8 @@ pub struct TrafficView {
     pub config_nav: ConfigPanelNav,
     /// Session start time for relative timestamps.
     pub session_start: Option<SystemTime>,
+    /// Last known visible height (for scroll bounds calculation).
+    last_visible_height: usize,
 }
 
 /// Traffic view configuration.
@@ -53,6 +54,8 @@ pub struct TrafficConfig {
     pub show_tx: bool,
     pub show_rx: bool,
     pub show_timestamps: bool,
+    pub timestamp_format_index: usize,
+    pub auto_scroll: bool,
     pub pattern_mode_index: usize,
 }
 
@@ -63,7 +66,21 @@ impl Default for TrafficConfig {
             show_tx: true,
             show_rx: true,
             show_timestamps: true,
+            timestamp_format_index: 0, // Relative
+            auto_scroll: true,
             pattern_mode_index: 0, // Normal
+        }
+    }
+}
+
+impl TrafficConfig {
+    /// Get the timestamp format from the index.
+    pub fn timestamp_format(&self) -> TimestampFormat {
+        match self.timestamp_format_index {
+            0 => TimestampFormat::Relative,
+            1 => TimestampFormat::AbsoluteMillis,
+            2 => TimestampFormat::Absolute,
+            _ => TimestampFormat::Relative,
         }
     }
 }
@@ -71,6 +88,7 @@ impl Default for TrafficConfig {
 // Config panel definitions
 const ENCODING_OPTIONS: &[&str] = ENCODING_DISPLAY_NAMES;
 const PATTERN_MODE_OPTIONS: &[&str] = &["Normal", "Regex"];
+const TIMESTAMP_FORMAT_OPTIONS: &[&str] = &["Relative", "HH:MM:SS.mmm", "HH:MM:SS"];
 
 static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
     Section {
@@ -99,6 +117,34 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                 set: |c, v| {
                     if let FieldValue::Bool(b) = v {
                         c.show_timestamps = b;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "timestamp_format",
+                label: "Time Format",
+                kind: FieldKind::Select {
+                    options: TIMESTAMP_FORMAT_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.timestamp_format_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.timestamp_format_index = i;
+                    }
+                },
+                visible: |c| c.show_timestamps,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "auto_scroll",
+                label: "Auto Scroll",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.auto_scroll),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.auto_scroll = b;
                     }
                 },
                 visible: always_visible,
@@ -165,7 +211,6 @@ impl TrafficView {
     pub fn new() -> Self {
         Self {
             scroll: 0,
-            auto_scroll: true,
             search_input: TextInputState::new().with_placeholder("Search pattern..."),
             search_focused: false,
             send_input: TextInputState::new().with_placeholder("Data to send..."),
@@ -173,6 +218,7 @@ impl TrafficView {
             config: TrafficConfig::default(),
             config_nav: ConfigPanelNav::new(),
             session_start: None,
+            last_visible_height: 20, // Conservative default
         }
     }
 
@@ -180,8 +226,21 @@ impl TrafficView {
         self.search_focused || self.send_focused
     }
 
+    /// Sync config changes to the session buffer
+    pub fn sync_config_to_buffer(&self, handle: &SessionHandle) {
+        let mut buffer = handle.buffer_mut();
+        
+        // Sync encoding
+        let encoding = ENCODING_VARIANTS[self.config.encoding_index];
+        buffer.set_encoding(encoding);
+        
+        // Sync show_tx/show_rx
+        buffer.set_show_tx(self.config.show_tx);
+        buffer.set_show_rx(self.config.show_rx);
+    }
+
     pub fn draw(
-        &self,
+        &mut self,
         main_area: Rect,
         config_area: Option<Rect>,
         buf: &mut Buffer,
@@ -217,14 +276,33 @@ impl TrafficView {
         }
     }
 
-    fn draw_traffic(&self, area: Rect, buf: &mut Buffer, handle: &SessionHandle, focus: Focus) {
+    fn draw_traffic(&mut self, area: Rect, buf: &mut Buffer, handle: &SessionHandle, focus: Focus) {
         let buffer = handle.buffer();
+
+        let inner_height = area.height.saturating_sub(2) as usize; // Account for borders
+        let total = buffer.len();
+        
+        // Update last visible height for key handler scroll bounds
+        if inner_height > 0 {
+            self.last_visible_height = inner_height;
+        }
+        
+        // Calculate scroll position with proper bounds
+        let max_scroll = total.saturating_sub(self.last_visible_height);
+        let scroll = if self.config.auto_scroll && total > 0 {
+            max_scroll
+        } else {
+            self.scroll.min(max_scroll)
+        };
+        
+        // Clamp stored scroll to valid range
+        self.scroll = scroll;
 
         let block = Block::default()
             .title(format!(
                 " Traffic [{}/{}] ",
-                self.scroll + 1,
-                buffer.len().max(1)
+                scroll + 1,
+                total.max(1)
             ))
             .borders(Borders::ALL)
             .border_style(if focus == Focus::Main && !self.is_input_mode() {
@@ -240,15 +318,33 @@ impl TrafficView {
             return;
         }
 
-        // Calculate visible range
         let visible_height = inner.height as usize;
-        let total = buffer.len();
 
-        // Auto-scroll logic
-        let scroll = if self.auto_scroll && total > 0 {
-            total.saturating_sub(visible_height)
+        // For relative timestamps, calculate the max width needed for alignment
+        // by looking at the last visible chunk's timestamp
+        let timestamp_width = if self.config.show_timestamps {
+            match self.config.timestamp_format() {
+                TimestampFormat::Relative => {
+                    // Find the maximum timestamp width in visible chunks
+                    let session_start = self.session_start.unwrap_or_else(SystemTime::now);
+                    buffer
+                        .chunks()
+                        .skip(scroll)
+                        .take(visible_height)
+                        .map(|chunk| {
+                            let elapsed = chunk.timestamp.duration_since(session_start).unwrap_or_default();
+                            let secs = elapsed.as_secs_f64();
+                            // "+{secs:.3}s" - calculate width
+                            format!("+{:.3}s", secs).len()
+                        })
+                        .max()
+                        .unwrap_or(7) // Default "+0.000s" = 7 chars
+                }
+                TimestampFormat::AbsoluteMillis => 12, // "12:34:56.789" = 12 chars
+                TimestampFormat::Absolute => 8,       // "12:34:56" = 8 chars
+            }
         } else {
-            self.scroll.min(total.saturating_sub(visible_height))
+            0
         };
 
         // Render chunks
@@ -264,31 +360,25 @@ impl TrafficView {
                 DataDirection::Rx => ("RX", Theme::rx()),
             };
 
-            // Timestamp - show as relative to session start or absolute time
-            let timestamp_str = if self.config.show_timestamps {
-                let session_start = self.session_start.unwrap_or(chunk.timestamp);
-                if let Ok(duration) = chunk.timestamp.duration_since(session_start) {
-                    format!("{:>8.3}s ", duration.as_secs_f64())
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
-
             // Build line
             let mut spans = vec![
                 Span::styled(format!("{} ", dir_char), dir_style),
             ];
 
+            // Timestamp - format according to config with alignment
             if self.config.show_timestamps {
-                spans.push(Span::styled(timestamp_str, Theme::muted()));
+                let session_start = self.session_start.unwrap_or(chunk.timestamp);
+                let formatted = self.config.timestamp_format().format(chunk.timestamp, session_start);
+                // Right-align timestamp within the calculated width
+                let padded = format!("{:>width$} ", formatted, width = timestamp_width);
+                spans.push(Span::styled(padded, Theme::muted()));
             }
 
             // Content (with search highlighting if matches exist)
             let content = &chunk.encoded;
-            // Truncate if too long
-            let max_content_len = inner.width.saturating_sub(12) as usize;
+            // Calculate prefix width: "TX " or "RX " = 3 chars, timestamp + space
+            let prefix_width = 3 + if self.config.show_timestamps { timestamp_width + 1 } else { 0 };
+            let max_content_len = (inner.width as usize).saturating_sub(prefix_width);
             let display_content: String = if content.len() > max_content_len {
                 format!("{}...", &content[..max_content_len.saturating_sub(3)])
             } else {
@@ -311,11 +401,24 @@ impl TrafficView {
                 .render(Rect::new(inner.x + 1, inner.y, inner.width - 2, 1), buf);
         }
 
-        // Scrollbar
+        // Scrollbar - render on the border itself (not inside content area)
         if total > visible_height {
-            let mut scrollbar_state = ScrollbarState::new(total).position(scroll);
+            // ScrollbarState expects:
+            // - content_length: the number of scrollable positions (max_scroll + 1)
+            // - position: current scroll position (0 to max_scroll)
+            let max_scroll = total.saturating_sub(visible_height);
+            let mut scrollbar_state = ScrollbarState::new(max_scroll + 1).position(scroll);
+            // Position scrollbar on the right border, between the corners
+            let scrollbar_area = Rect::new(
+                area.x + area.width - 1,  // Right border column
+                area.y + 1,               // Start below top border
+                1,
+                area.height.saturating_sub(2), // Exclude top and bottom borders
+            );
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .render(area, buf, &mut scrollbar_state);
+                .begin_symbol(None)  // No arrow at top
+                .end_symbol(None)    // No arrow at bottom
+                .render(scrollbar_area, buf, &mut scrollbar_state);
         }
     }
 
@@ -429,23 +532,43 @@ impl TrafficView {
     }
 
     fn handle_main_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
+        // Half-page scroll amount based on actual visible height
+        let half_page = self.last_visible_height / 2;
+
+        // Ignore j/k with CTRL modifier (let it be consumed without action)
+        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        let buffer = handle.buffer();
+        let total = buffer.len();
+        // Use the last known visible height for accurate scroll bounds
+        let max_scroll = total.saturating_sub(self.last_visible_height);
+
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.scroll = self.scroll.saturating_add(1);
-                self.auto_scroll = false;
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
+                self.scroll = self.scroll.saturating_add(1).min(max_scroll);
+                self.config.auto_scroll = false;
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
                 self.scroll = self.scroll.saturating_sub(1);
-                self.auto_scroll = false;
+                self.config.auto_scroll = false;
+            }
+            KeyCode::Char('d') if has_ctrl => {
+                // Half-page down
+                self.scroll = self.scroll.saturating_add(half_page).min(max_scroll);
+                self.config.auto_scroll = false;
+            }
+            KeyCode::Char('u') if has_ctrl => {
+                // Half-page up
+                self.scroll = self.scroll.saturating_sub(half_page);
+                self.config.auto_scroll = false;
             }
             KeyCode::Char('g') => {
                 self.scroll = 0;
-                self.auto_scroll = false;
+                self.config.auto_scroll = false;
             }
             KeyCode::Char('G') => {
-                let buffer = handle.buffer();
-                self.scroll = buffer.len().saturating_sub(1);
-                self.auto_scroll = true;
+                self.scroll = max_scroll;
+                self.config.auto_scroll = true;
             }
             KeyCode::Char('/') => {
                 self.search_focused = true;
@@ -455,16 +578,18 @@ impl TrafficView {
             }
             KeyCode::Char('n') => {
                 // Next search match
+                drop(buffer); // Release borrow before getting mutable reference
                 if let Some(chunk_idx) = handle.buffer_mut().goto_next_match() {
                     self.scroll = chunk_idx;
-                    self.auto_scroll = false;
+                    self.config.auto_scroll = false;
                 }
             }
             KeyCode::Char('N') => {
                 // Previous search match
+                drop(buffer); // Release borrow before getting mutable reference
                 if let Some(chunk_idx) = handle.buffer_mut().goto_prev_match() {
                     self.scroll = chunk_idx;
-                    self.auto_scroll = false;
+                    self.config.auto_scroll = false;
                 }
             }
             _ => {}
@@ -472,13 +597,21 @@ impl TrafficView {
         None
     }
 
-    fn handle_config_key(&mut self, key: KeyEvent, _handle: &SessionHandle) -> Option<TrafficAction> {
+    fn handle_config_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
+        // Handle dropdown mode separately
+        if self.config_nav.is_dropdown_open() {
+            return self.handle_dropdown_key(key, handle);
+        }
+
+        // Ignore j/k with CTRL modifier (let it be consumed without action)
+        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
                 self.config_nav
                     .next_field(TRAFFIC_CONFIG_SECTIONS, &self.config);
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
                 self.config_nav
                     .prev_field(TRAFFIC_CONFIG_SECTIONS, &self.config);
             }
@@ -491,16 +624,20 @@ impl TrafficView {
                         let _ = self
                             .config_nav
                             .toggle_current(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
-                    } else {
+                        self.sync_config_to_buffer(handle);
+                        return Some(TrafficAction::RequestClear);
+                    } else if field.kind.is_select() {
                         self.config_nav
                             .dropdown_prev(TRAFFIC_CONFIG_SECTIONS, &self.config);
                         let _ = self
                             .config_nav
                             .apply_dropdown_selection(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
+                        self.sync_config_to_buffer(handle);
+                        return Some(TrafficAction::RequestClear);
                     }
                 }
             }
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
+            KeyCode::Char('l') | KeyCode::Right => {
                 if let Some(field) = self
                     .config_nav
                     .current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
@@ -509,12 +646,33 @@ impl TrafficView {
                         let _ = self
                             .config_nav
                             .toggle_current(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
-                    } else {
+                        self.sync_config_to_buffer(handle);
+                        return Some(TrafficAction::RequestClear);
+                    } else if field.kind.is_select() {
                         self.config_nav
                             .dropdown_next(TRAFFIC_CONFIG_SECTIONS, &self.config);
                         let _ = self
                             .config_nav
                             .apply_dropdown_selection(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
+                        self.sync_config_to_buffer(handle);
+                        return Some(TrafficAction::RequestClear);
+                    }
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(field) = self
+                    .config_nav
+                    .current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
+                {
+                    if field.kind.is_select() {
+                        self.config_nav
+                            .open_dropdown(TRAFFIC_CONFIG_SECTIONS, &self.config);
+                    } else if matches!(field.kind, FieldKind::Toggle) {
+                        let _ = self
+                            .config_nav
+                            .toggle_current(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
+                        self.sync_config_to_buffer(handle);
+                        return Some(TrafficAction::RequestClear);
                     }
                 }
             }
@@ -522,6 +680,38 @@ impl TrafficView {
         }
         self.config_nav
             .sync_dropdown_index(TRAFFIC_CONFIG_SECTIONS, &self.config);
+        None
+    }
+
+    fn handle_dropdown_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
+        // Ignore j/k with CTRL modifier (let it be consumed without action)
+        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
+                self.config_nav
+                    .dropdown_next(TRAFFIC_CONFIG_SECTIONS, &self.config);
+            }
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
+                self.config_nav
+                    .dropdown_prev(TRAFFIC_CONFIG_SECTIONS, &self.config);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let _ = self
+                    .config_nav
+                    .apply_dropdown_selection(TRAFFIC_CONFIG_SECTIONS, &mut self.config);
+                self.config_nav.close_dropdown();
+                self.sync_config_to_buffer(handle);
+                return Some(TrafficAction::RequestClear);
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.config_nav.close_dropdown();
+                self.config_nav
+                    .sync_dropdown_index(TRAFFIC_CONFIG_SECTIONS, &self.config);
+                return Some(TrafficAction::RequestClear);
+            }
+            _ => {}
+        }
         None
     }
 

@@ -1,15 +1,18 @@
 //! Help overlay widget.
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Rect},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Tabs, Widget},
 };
+use serial_core::ui::config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible};
 
 use crate::{
     keybind::{KeyContext, Keybind, all_keybinds},
     theme::Theme,
+    widget::ConfigPanel,
 };
 
 /// Tab in the help overlay.
@@ -17,25 +20,25 @@ use crate::{
 pub enum HelpTab {
     #[default]
     Shortcuts,
-    Options,
+    Settings,
     About,
 }
 
 impl HelpTab {
-    pub const ALL: [HelpTab; 3] = [HelpTab::Shortcuts, HelpTab::Options, HelpTab::About];
+    pub const ALL: [HelpTab; 3] = [HelpTab::Shortcuts, HelpTab::Settings, HelpTab::About];
 
     pub fn title(self) -> &'static str {
         match self {
             HelpTab::Shortcuts => "Shortcuts",
-            HelpTab::Options => "Options",
+            HelpTab::Settings => "Settings",
             HelpTab::About => "About",
         }
     }
 
     pub fn next(self) -> Self {
         match self {
-            HelpTab::Shortcuts => HelpTab::Options,
-            HelpTab::Options => HelpTab::About,
+            HelpTab::Shortcuts => HelpTab::Settings,
+            HelpTab::Settings => HelpTab::About,
             HelpTab::About => HelpTab::Shortcuts,
         }
     }
@@ -43,11 +46,73 @@ impl HelpTab {
     pub fn prev(self) -> Self {
         match self {
             HelpTab::Shortcuts => HelpTab::About,
-            HelpTab::Options => HelpTab::Shortcuts,
-            HelpTab::About => HelpTab::Options,
+            HelpTab::Settings => HelpTab::Shortcuts,
+            HelpTab::About => HelpTab::Settings,
         }
     }
 }
+
+/// Global application settings.
+#[derive(Debug, Clone)]
+pub struct AppSettings {
+    /// Default timestamp format index.
+    pub timestamp_format_index: usize,
+    /// Whether to show tips on startup.
+    pub show_tips: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            timestamp_format_index: 0, // Relative
+            show_tips: true,
+        }
+    }
+}
+
+// Settings panel definitions
+const TIMESTAMP_FORMAT_OPTIONS: &[&str] = &["Relative", "HH:MM:SS.mmm", "HH:MM:SS"];
+
+static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
+    Section {
+        header: Some("Display"),
+        fields: &[
+            FieldDef {
+                id: "timestamp_format",
+                label: "Timestamp Format",
+                kind: FieldKind::Select {
+                    options: TIMESTAMP_FORMAT_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.timestamp_format_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.timestamp_format_index = i;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+        ],
+    },
+    Section {
+        header: Some("Behavior"),
+        fields: &[
+            FieldDef {
+                id: "show_tips",
+                label: "Show Tips",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.show_tips),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.show_tips = b;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+        ],
+    },
+];
 
 /// State for the help overlay.
 #[derive(Debug, Default)]
@@ -55,18 +120,29 @@ pub struct HelpOverlayState {
     pub visible: bool,
     pub tab: HelpTab,
     pub scroll: usize,
+    /// Global app settings.
+    pub settings: AppSettings,
+    /// Config panel navigation for settings tab.
+    pub settings_nav: ConfigPanelNav,
 }
 
 impl HelpOverlayState {
-    pub fn toggle(&mut self) {
+    /// Toggle visibility. Returns true if a full redraw is needed (overlay just closed).
+    pub fn toggle(&mut self) -> bool {
+        let was_visible = self.visible;
         self.visible = !self.visible;
         if self.visible {
             self.scroll = 0;
         }
+        // Need redraw when closing (was visible, now hidden)
+        was_visible && !self.visible
     }
 
-    pub fn hide(&mut self) {
+    /// Hide the overlay. Returns true if a full redraw is needed.
+    pub fn hide(&mut self) -> bool {
+        let was_visible = self.visible;
         self.visible = false;
+        was_visible
     }
 
     pub fn next_tab(&mut self) {
@@ -77,6 +153,143 @@ impl HelpOverlayState {
     pub fn prev_tab(&mut self) {
         self.tab = self.tab.prev();
         self.scroll = 0;
+    }
+
+    /// Handle key input. Returns true if a full redraw is needed.
+    pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        const HALF_PAGE: usize = 15;
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
+                return self.hide();
+            }
+            KeyCode::Tab | KeyCode::Char('l') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Don't switch tab if in dropdown
+                if self.tab != HelpTab::Settings || !self.settings_nav.dropdown_open {
+                    self.next_tab();
+                }
+            }
+            KeyCode::BackTab | KeyCode::Char('h') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Don't switch tab if in dropdown
+                if self.tab != HelpTab::Settings || !self.settings_nav.dropdown_open {
+                    self.prev_tab();
+                }
+            }
+            _ => {}
+        }
+
+        // Tab-specific handling
+        match self.tab {
+            HelpTab::Shortcuts | HelpTab::About => {
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        self.scroll = self.scroll.saturating_add(1);
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.scroll = self.scroll.saturating_sub(1);
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll = self.scroll.saturating_add(HALF_PAGE);
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll = self.scroll.saturating_sub(HALF_PAGE);
+                    }
+                    KeyCode::Char('g') => {
+                        self.scroll = 0;
+                    }
+                    KeyCode::Char('G') => {
+                        self.scroll = 1000; // Will be clamped
+                    }
+                    _ => {}
+                }
+            }
+            HelpTab::Settings => {
+                return self.handle_settings_key(key);
+            }
+        }
+        false
+    }
+
+    fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
+        // Handle dropdown mode
+        if self.settings_nav.dropdown_open {
+            return self.handle_settings_dropdown_key(key);
+        }
+
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.settings_nav.next_field(SETTINGS_SECTIONS, &self.settings);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.settings_nav.prev_field(SETTINGS_SECTIONS, &self.settings);
+            }
+            KeyCode::Char('h') | KeyCode::Left if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(field) = self.settings_nav.current_field(SETTINGS_SECTIONS, &self.settings) {
+                    if matches!(field.kind, FieldKind::Toggle) {
+                        let _ = self.settings_nav.toggle_current(SETTINGS_SECTIONS, &mut self.settings);
+                    } else if field.kind.is_select() {
+                        self.settings_nav.dropdown_prev(SETTINGS_SECTIONS, &self.settings);
+                        let _ = self.settings_nav.apply_dropdown_selection(SETTINGS_SECTIONS, &mut self.settings);
+                    }
+                }
+            }
+            KeyCode::Char('l') | KeyCode::Right if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(field) = self.settings_nav.current_field(SETTINGS_SECTIONS, &self.settings) {
+                    if matches!(field.kind, FieldKind::Toggle) {
+                        let _ = self.settings_nav.toggle_current(SETTINGS_SECTIONS, &mut self.settings);
+                    } else if field.kind.is_select() {
+                        self.settings_nav.dropdown_next(SETTINGS_SECTIONS, &self.settings);
+                        let _ = self.settings_nav.apply_dropdown_selection(SETTINGS_SECTIONS, &mut self.settings);
+                    }
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(field) = self.settings_nav.current_field(SETTINGS_SECTIONS, &self.settings) {
+                    if field.kind.is_select() {
+                        self.settings_nav.open_dropdown(SETTINGS_SECTIONS, &self.settings);
+                    } else if matches!(field.kind, FieldKind::Toggle) {
+                        let _ = self.settings_nav.toggle_current(SETTINGS_SECTIONS, &mut self.settings);
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.settings_nav.sync_dropdown_index(SETTINGS_SECTIONS, &self.settings);
+        false
+    }
+
+    fn handle_settings_dropdown_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.settings_nav.dropdown_next(SETTINGS_SECTIONS, &self.settings);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.settings_nav.dropdown_prev(SETTINGS_SECTIONS, &self.settings);
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let _ = self.settings_nav.apply_dropdown_selection(SETTINGS_SECTIONS, &mut self.settings);
+                self.settings_nav.close_dropdown();
+                return true; // Need redraw for dropdown close
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.settings_nav.close_dropdown();
+                self.settings_nav.sync_dropdown_index(SETTINGS_SECTIONS, &self.settings);
+                return true; // Need redraw for dropdown close
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Get the selected timestamp format.
+    pub fn timestamp_format(&self) -> serial_core::ui::TimestampFormat {
+        use serial_core::ui::TimestampFormat;
+        match self.settings.timestamp_format_index {
+            0 => TimestampFormat::Relative,
+            1 => TimestampFormat::AbsoluteMillis,
+            2 => TimestampFormat::Absolute,
+            _ => TimestampFormat::Relative,
+        }
     }
 }
 
@@ -138,7 +351,7 @@ impl Widget for HelpOverlay<'_> {
 
         match self.state.tab {
             HelpTab::Shortcuts => render_shortcuts(content_area, buf, self.state.scroll),
-            HelpTab::Options => render_options(content_area, buf),
+            HelpTab::Settings => render_settings(content_area, buf, &self.state.settings, &self.state.settings_nav),
             HelpTab::About => render_about(content_area, buf),
         }
     }
@@ -188,28 +401,32 @@ fn render_shortcuts(area: Rect, buf: &mut Buffer, scroll: usize) {
     Paragraph::new(visible_lines).render(area, buf);
 }
 
-fn render_options(area: Rect, buf: &mut Buffer) {
-    let lines = vec![
-        Line::from(vec![Span::styled("Pattern Mode", Theme::title())]),
+fn render_settings(area: Rect, buf: &mut Buffer, settings: &AppSettings, nav: &ConfigPanelNav) {
+    // Instructions at top
+    let help_lines = vec![
+        Line::from(vec![
+            Span::styled("j/k", Theme::keybind()),
+            Span::raw(" Navigate  "),
+            Span::styled("h/l", Theme::keybind()),
+            Span::raw(" Change value  "),
+            Span::styled("Enter", Theme::keybind()),
+            Span::raw(" Select"),
+        ]),
         Line::from(""),
-        Line::from("  Normal: Literal text matching"),
-        Line::from("  Regex:  Regular expression matching"),
-        Line::from(""),
-        Line::from(vec![Span::styled("Auto-Save", Theme::title())]),
-        Line::from(""),
-        Line::from("  Auto-save writes data to a temporary file"),
-        Line::from("  for crash recovery. Configure location and"),
-        Line::from("  format in the config panel."),
-        Line::from(""),
-        Line::from(vec![Span::styled("Encoding", Theme::title())]),
-        Line::from(""),
-        Line::from("  UTF-8:   Unicode text"),
-        Line::from("  ASCII:   7-bit ASCII (invalid bytes shown as dots)"),
-        Line::from("  Hex:     Hexadecimal byte values"),
-        Line::from("  Binary:  Binary byte values"),
     ];
 
-    Paragraph::new(lines).render(area, buf);
+    let help_height = help_lines.len() as u16;
+    Paragraph::new(help_lines).render(
+        Rect::new(area.x, area.y, area.width, help_height),
+        buf,
+    );
+
+    // Settings panel below
+    let panel_area = Rect::new(area.x, area.y + help_height, area.width, area.height.saturating_sub(help_height));
+
+    ConfigPanel::new(SETTINGS_SECTIONS, settings, nav)
+        .focused(true)
+        .render(panel_area, buf);
 }
 
 fn render_about(area: Rect, buf: &mut Buffer) {

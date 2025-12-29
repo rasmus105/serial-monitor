@@ -6,8 +6,10 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     Terminal,
     backend::Backend,
+    buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
-    widgets::Widget,
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Widget},
 };
 use serial_core::{
     SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle,
@@ -15,10 +17,12 @@ use serial_core::{
 
 use crate::{
     event::{AppEvent, poll_event},
+    theme::Theme,
     view::{file_sender::FileSenderView, graph::GraphView, pre_connect::PreConnectView, traffic::TrafficView},
     widget::{
         HelpOverlay, Toasts,
         help_overlay::HelpOverlayState,
+        text_input::TextInputState,
         toast::render_toasts,
     },
 };
@@ -37,6 +41,12 @@ pub struct App {
     pub show_config: bool,
     /// Current focus area.
     pub focus: Focus,
+    /// Command input state (vim-like ':' command mode).
+    pub command_input: TextInputState,
+    /// Whether command mode is active.
+    pub command_mode: bool,
+    /// Whether the terminal needs a full clear on next draw.
+    pub needs_clear: bool,
 }
 
 /// Current view mode.
@@ -103,6 +113,9 @@ impl App {
             mode: AppMode::PreConnect(PreConnectView::new()),
             show_config: true,
             focus: Focus::Main,
+            command_input: TextInputState::new().with_placeholder("Enter command..."),
+            command_mode: false,
+            needs_clear: false,
         }
     }
 
@@ -114,6 +127,12 @@ impl App {
         }
 
         loop {
+            // Clear terminal if needed (e.g., after overlay closes)
+            if self.needs_clear {
+                terminal.clear()?;
+                self.needs_clear = false;
+            }
+
             // Draw UI
             terminal.draw(|f| self.draw(f.area(), f.buffer_mut()))?;
 
@@ -125,8 +144,10 @@ impl App {
             // Handle session events if connected
             self.process_session_events();
 
-            // Tick toasts
-            self.toasts.tick();
+            // Tick toasts - request clear if any expired (they use Clear which leaves artifacts)
+            if self.toasts.tick() {
+                self.needs_clear = true;
+            }
 
             if self.should_quit {
                 // Cleanup
@@ -143,18 +164,29 @@ impl App {
         Ok(())
     }
 
-    fn draw(&self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+    fn draw(&mut self, area: Rect, buf: &mut Buffer) {
+        // Reserve space at the bottom for command bar if in command mode
+        let (content_area, command_area) = if self.command_mode {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(3), Constraint::Length(3)])
+                .split(area);
+            (chunks[0], Some(chunks[1]))
+        } else {
+            (area, None)
+        };
+
         // Main layout: main view + optional config panel
         let chunks = if self.show_config {
             Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-                .split(area)
+                .split(content_area)
         } else {
             Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(100)])
-                .split(area)
+                .split(content_area)
         };
 
         let main_area = chunks[0];
@@ -165,13 +197,18 @@ impl App {
         };
 
         // Draw based on mode
-        match &self.mode {
+        match &mut self.mode {
             AppMode::PreConnect(view) => {
                 view.draw(main_area, config_area, buf, self.focus);
             }
             AppMode::Connected(state) => {
-                self.draw_connected(state, main_area, config_area, buf);
+                Self::draw_connected(state, main_area, config_area, buf, self.focus);
             }
+        }
+
+        // Draw command bar if in command mode
+        if let Some(cmd_area) = command_area {
+            self.draw_command_bar(cmd_area, buf);
         }
 
         // Draw toasts overlay
@@ -179,6 +216,32 @@ impl App {
 
         // Draw help overlay
         HelpOverlay::new(&self.help).render(area, buf);
+    }
+
+    fn draw_command_bar(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .title(" Command ")
+            .borders(Borders::ALL)
+            .border_style(Theme::border_focused());
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        // Draw the ":" prefix and input
+        let prefix = Span::styled(":", Theme::keybind());
+        let content = Span::raw(&self.command_input.content);
+        let line = Line::from(vec![prefix, content]);
+
+        Paragraph::new(line).render(inner, buf);
+
+        // Draw cursor
+        let cursor_x = inner.x + 1 + self.command_input.cursor_display_pos() as u16;
+        if cursor_x < inner.x + inner.width {
+            if let Some(cell) = buf.cell_mut((cursor_x, inner.y)) {
+                cell.set_bg(Theme::PRIMARY);
+                cell.set_fg(Theme::BG);
+            }
+        }
     }
 
     fn process_session_events(&mut self) {
@@ -198,11 +261,11 @@ impl App {
     }
 
     fn draw_connected(
-        &self,
-        state: &ConnectedState,
+        state: &mut ConnectedState,
         main_area: Rect,
         config_area: Option<Rect>,
-        buf: &mut ratatui::buffer::Buffer,
+        buf: &mut Buffer,
+        focus: Focus,
     ) {
         match state.tab {
             ConnectedTab::Traffic => {
@@ -212,7 +275,7 @@ impl App {
                     buf,
                     &state.handle,
                     &state.serial_config,
-                    self.focus,
+                    focus,
                 );
             }
             ConnectedTab::Graph => {
@@ -222,7 +285,7 @@ impl App {
                     buf,
                     &state.handle,
                     &state.serial_config,
-                    self.focus,
+                    focus,
                 );
             }
             ConnectedTab::FileSender => {
@@ -231,7 +294,7 @@ impl App {
                     config_area,
                     buf,
                     &state.serial_config,
-                    self.focus,
+                    focus,
                 );
             }
         }
@@ -240,21 +303,29 @@ impl App {
     async fn handle_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::Key(key) => {
-                // Handle help overlay first (it captures all input when visible)
-                if self.help.visible {
+                // Handle command mode first
+                if self.command_mode {
                     match key.code {
-                        KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
-                            self.help.hide();
+                        KeyCode::Enter => {
+                            let cmd = self.command_input.take();
+                            self.command_mode = false;
+                            self.execute_command(&cmd).await;
                         }
-                        KeyCode::Tab | KeyCode::Char('l') => self.help.next_tab(),
-                        KeyCode::BackTab | KeyCode::Char('h') => self.help.prev_tab(),
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            self.help.scroll = self.help.scroll.saturating_add(1);
+                        KeyCode::Esc => {
+                            self.command_mode = false;
+                            self.command_input.clear();
                         }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            self.help.scroll = self.help.scroll.saturating_sub(1);
+                        _ => {
+                            self.command_input.handle_key(key);
                         }
-                        _ => {}
+                    }
+                    return;
+                }
+
+                // Handle help overlay (it captures all input when visible)
+                if self.help.visible {
+                    if self.help.handle_key(key) {
+                        self.needs_clear = true;
                     }
                     return;
                 }
@@ -266,17 +337,34 @@ impl App {
                         return;
                     }
                     KeyCode::Char('?') => {
-                        self.help.toggle();
+                        if self.help.toggle() {
+                            self.needs_clear = true;
+                        }
                         return;
                     }
                     KeyCode::Char('c')
-                        if !matches!(self.mode, AppMode::PreConnect(ref v) if v.is_input_mode()) =>
+                        if !self.is_input_mode() =>
                     {
                         self.show_config = !self.show_config;
+                        self.needs_clear = true;
+                        return;
+                    }
+                    // ':' opens command mode (vim-style)
+                    KeyCode::Char(':') if !self.is_input_mode() => {
+                        self.command_mode = true;
+                        self.command_input.clear();
                         return;
                     }
                     // Ctrl+h moves focus left (to Main panel)
                     KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.is_input_mode() => {
+                        // Close dropdowns when switching focus
+                        if let AppMode::Connected(ref mut state) = self.mode {
+                            state.traffic.config_nav.close_dropdown();
+                            state.graph.config_nav.close_dropdown();
+                            state.file_sender.config_nav.close_dropdown();
+                        } else if let AppMode::PreConnect(ref mut view) = self.mode {
+                            view.config_nav.close_dropdown();
+                        }
                         self.focus = Focus::Main;
                         return;
                     }
@@ -308,18 +396,31 @@ impl App {
                         if !is_input_mode {
                             match key.code {
                                 KeyCode::Char('1') => {
+                                    // Close any open dropdowns before switching
+                                    state.traffic.config_nav.close_dropdown();
+                                    state.graph.config_nav.close_dropdown();
+                                    state.file_sender.config_nav.close_dropdown();
                                     state.tab = ConnectedTab::Traffic;
                                     return;
                                 }
                                 KeyCode::Char('2') => {
+                                    // Close any open dropdowns before switching
+                                    state.traffic.config_nav.close_dropdown();
+                                    state.graph.config_nav.close_dropdown();
+                                    state.file_sender.config_nav.close_dropdown();
                                     state.tab = ConnectedTab::Graph;
                                     return;
                                 }
                                 KeyCode::Char('3') => {
+                                    // Close any open dropdowns before switching
+                                    state.traffic.config_nav.close_dropdown();
+                                    state.graph.config_nav.close_dropdown();
+                                    state.file_sender.config_nav.close_dropdown();
                                     state.tab = ConnectedTab::FileSender;
                                     return;
                                 }
-                                KeyCode::Char('d') => {
+                                // 'd' disconnects only without modifiers (Ctrl+d is half-page scroll)
+                                KeyCode::Char('d') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                                     self.disconnect().await;
                                     return;
                                 }
@@ -346,8 +447,8 @@ impl App {
                     }
                 }
             }
-            AppEvent::Mouse(_mouse) => {
-                // TODO: Mouse support
+            AppEvent::Mouse(_) => {
+                // Mouse events are ignored - native terminal selection works
             }
             AppEvent::Resize(_, _) => {
                 // Terminal will redraw automatically
@@ -358,6 +459,77 @@ impl App {
                     state.file_sender.tick();
                 }
             }
+        }
+    }
+
+    async fn execute_command(&mut self, cmd: &str) {
+        let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
+        if parts.is_empty() {
+            return;
+        }
+
+        match parts[0] {
+            "connect" | "c" => {
+                if parts.len() < 2 {
+                    self.toasts.error("Usage: :connect <port_path>");
+                    return;
+                }
+                let port_path = parts[1];
+                // Get configs from pre-connect view if available, or use defaults
+                let (serial_config, session_config) = match &self.mode {
+                    AppMode::PreConnect(view) => {
+                        (view.config.to_serial_config(), view.config.to_session_config())
+                    }
+                    AppMode::Connected(state) => {
+                        (state.serial_config.clone(), SessionConfig::default())
+                    }
+                };
+                self.connect(port_path, serial_config, session_config).await;
+            }
+            "disconnect" | "d" => {
+                self.disconnect().await;
+            }
+            "quit" | "q" => {
+                self.should_quit = true;
+            }
+            "save" | "w" => {
+                if parts.len() < 2 {
+                    self.toasts.error("Usage: :save <file_path>");
+                    return;
+                }
+                let path = parts[1];
+                self.save_buffer(path).await;
+            }
+            "help" | "h" => {
+                self.toasts.info("Commands: :connect <path>, :disconnect, :save <path>, :quit");
+            }
+            _ => {
+                self.toasts.error(format!("Unknown command: {}", parts[0]));
+            }
+        }
+    }
+
+    async fn save_buffer(&mut self, path: &str) {
+        if let AppMode::Connected(ref state) = self.mode {
+            let buffer = state.handle.buffer();
+            let mut content = String::new();
+            for chunk in buffer.chunks() {
+                let dir = match chunk.direction {
+                    serial_core::Direction::Tx => "TX",
+                    serial_core::Direction::Rx => "RX",
+                };
+                content.push_str(&format!("[{}] {}\n", dir, chunk.encoded));
+            }
+            match std::fs::write(path, &content) {
+                Ok(()) => {
+                    self.toasts.success(format!("Saved {} bytes to {}", content.len(), path));
+                }
+                Err(e) => {
+                    self.toasts.error(format!("Failed to save: {}", e));
+                }
+            }
+        } else {
+            self.toasts.error("Not connected - nothing to save");
         }
     }
 
@@ -389,8 +561,12 @@ impl App {
 
     async fn handle_preconnect_action(&mut self, action: PreConnectAction) {
         match action {
-            PreConnectAction::Connect { port, config } => {
-                self.connect(&port, config).await;
+            PreConnectAction::Connect {
+                port,
+                serial_config,
+                session_config,
+            } => {
+                self.connect(&port, serial_config, session_config).await;
             }
             PreConnectAction::Toast(toast) => {
                 self.toasts.push(toast);
@@ -409,6 +585,9 @@ impl App {
             }
             TrafficAction::Toast(toast) => {
                 self.toasts.push(toast);
+            }
+            TrafficAction::RequestClear => {
+                self.needs_clear = true;
             }
         }
     }
@@ -436,10 +615,13 @@ impl App {
         }
     }
 
-    async fn connect(&mut self, port: &str, serial_config: SerialConfig) {
+    async fn connect(
+        &mut self,
+        port: &str,
+        serial_config: SerialConfig,
+        session_config: SessionConfig,
+    ) {
         self.toasts.info(format!("Connecting to {}...", port));
-
-        let session_config = SessionConfig::default().line_delimited();
 
         match Session::connect_with_config(port, serial_config.clone(), session_config).await {
             Ok(handle) => {
@@ -455,6 +637,7 @@ impl App {
                     serial_config,
                 };
                 self.mode = AppMode::Connected(state);
+                self.needs_clear = true;
             }
             Err(e) => {
                 self.toasts.error(format!("Connection failed: {}", e));
@@ -476,6 +659,9 @@ impl App {
     }
 
     fn is_input_mode(&self) -> bool {
+        if self.command_mode {
+            return true;
+        }
         match &self.mode {
             AppMode::PreConnect(view) => view.is_input_mode(),
             AppMode::Connected(state) => match state.tab {
@@ -495,7 +681,11 @@ impl Default for App {
 
 /// Actions from pre-connect view.
 pub enum PreConnectAction {
-    Connect { port: String, config: SerialConfig },
+    Connect {
+        port: String,
+        serial_config: SerialConfig,
+        session_config: SessionConfig,
+    },
     Toast(crate::widget::Toast),
 }
 
@@ -503,6 +693,8 @@ pub enum PreConnectAction {
 pub enum TrafficAction {
     Send(Vec<u8>),
     Toast(crate::widget::Toast),
+    /// Request a full terminal clear (for layout changes).
+    RequestClear,
 }
 
 /// Actions from file sender view.
