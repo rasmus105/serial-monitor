@@ -42,6 +42,68 @@ impl TextInputState {
 
     /// Handle a key event. Returns true if the event was handled.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        // Handle Ctrl+<key> sequences
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return match key.code {
+                KeyCode::Char('a') => {
+                    self.move_start();
+                    true
+                }
+                KeyCode::Char('e') => {
+                    self.move_end();
+                    true
+                }
+                KeyCode::Char('b') => {
+                    self.move_left();
+                    true
+                }
+                KeyCode::Char('f') => {
+                    self.move_right();
+                    true
+                }
+                KeyCode::Char('h') => {
+                    self.delete_char_before();
+                    true
+                }
+                KeyCode::Char('w') => {
+                    self.delete_word_before();
+                    true
+                }
+                KeyCode::Char('u') => {
+                    self.delete_to_start();
+                    true
+                }
+                KeyCode::Char('k') => {
+                    self.delete_to_end();
+                    true
+                }
+                KeyCode::Left => {
+                    self.move_word_left();
+                    true
+                }
+                KeyCode::Right => {
+                    self.move_word_right();
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        // Handle Alt+<key> sequences
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            return match key.code {
+                KeyCode::Char('b') => {
+                    self.move_word_left();
+                    true
+                }
+                KeyCode::Char('f') => {
+                    self.move_word_right();
+                    true
+                }
+                _ => false,
+            };
+        }
+
         match key.code {
             KeyCode::Char(c) => {
                 self.insert_char(c);
@@ -56,19 +118,11 @@ impl TextInputState {
                 true
             }
             KeyCode::Left => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.move_word_left();
-                } else {
-                    self.move_left();
-                }
+                self.move_left();
                 true
             }
             KeyCode::Right => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.move_word_right();
-                } else {
-                    self.move_right();
-                }
+                self.move_right();
                 true
             }
             KeyCode::Home => {
@@ -160,6 +214,27 @@ impl TextInputState {
                 break;
             }
             self.cursor = prev;
+        }
+    }
+
+    fn delete_word_before(&mut self) {
+        let end = self.cursor;
+        self.move_word_left();
+        if self.cursor < end {
+            self.content.drain(self.cursor..end);
+        }
+    }
+
+    fn delete_to_start(&mut self) {
+        if self.cursor > 0 {
+            self.content.drain(..self.cursor);
+            self.cursor = 0;
+        }
+    }
+
+    fn delete_to_end(&mut self) {
+        if self.cursor < self.content.len() {
+            self.content.truncate(self.cursor);
         }
     }
 

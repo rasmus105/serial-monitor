@@ -7,6 +7,7 @@
 //! - Search and filter utilities for encoded data
 //! - File saving with configurable formats and scopes
 //! - Auto-save for crash recovery
+//! - Keep-awake to prevent system sleep during active sessions
 //!
 //! # Design Principles
 //!
@@ -17,6 +18,7 @@
 mod chunking;
 mod error;
 mod file_sender;
+pub mod keep_awake;
 mod port;
 mod session;
 
@@ -34,5 +36,6 @@ pub use buffer::{
 pub use chunking::{Chunker, ChunkingStrategy, LineDelimiter};
 pub use error::{Error, Result};
 pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
+pub use keep_awake::KeepAwake;
 pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
 pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};

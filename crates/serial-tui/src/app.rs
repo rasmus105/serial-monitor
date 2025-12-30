@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 use serial_core::{
-    SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle,
+    ChunkingStrategy, KeepAwake, SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle,
 };
 
 use crate::{
@@ -71,6 +71,8 @@ pub struct ConnectedState {
     pub file_sender: FileSenderView,
     /// Connection config (read-only display).
     pub serial_config: SerialConfig,
+    /// Keep-awake handle (prevents system sleep while enabled).
+    pub keep_awake: KeepAwake,
 }
 
 /// Tabs when connected.
@@ -477,16 +479,24 @@ impl App {
                     return;
                 }
                 let port_path = parts[1];
-                // Get configs from pre-connect view if available, or use defaults
-                let (serial_config, session_config) = match &self.mode {
+                // Get serial config from pre-connect view if available, or use defaults
+                let (serial_config, rx_chunking) = match &self.mode {
                     AppMode::PreConnect(view) => {
-                        (view.config.to_serial_config(), view.config.to_session_config())
+                        (view.config.to_serial_config(), view.config.rx_chunking())
                     }
                     AppMode::Connected(state) => {
-                        (state.serial_config.clone(), SessionConfig::default())
+                        (state.serial_config.clone(), ChunkingStrategy::Raw)
                     }
                 };
-                self.connect(port_path, serial_config, session_config).await;
+                // Build session config from global settings
+                let settings = &self.help.settings;
+                let session_config = SessionConfig {
+                    rx_chunking,
+                    tx_chunking: ChunkingStrategy::Raw,
+                    buffer_size: settings.buffer_size(),
+                    auto_save: settings.to_auto_save_config(),
+                };
+                self.connect(port_path, serial_config, session_config, settings.keep_awake).await;
             }
             "disconnect" | "d" => {
                 self.disconnect().await;
@@ -566,9 +576,17 @@ impl App {
             PreConnectAction::Connect {
                 port,
                 serial_config,
-                session_config,
+                rx_chunking,
             } => {
-                self.connect(&port, serial_config, session_config).await;
+                // Build session config from global settings
+                let settings = &self.help.settings;
+                let session_config = SessionConfig {
+                    rx_chunking,
+                    tx_chunking: ChunkingStrategy::Raw,
+                    buffer_size: settings.buffer_size(),
+                    auto_save: settings.to_auto_save_config(),
+                };
+                self.connect(&port, serial_config, session_config, settings.keep_awake).await;
             }
             PreConnectAction::Toast(toast) => {
                 self.toasts.push(toast);
@@ -624,6 +642,7 @@ impl App {
         port: &str,
         serial_config: SerialConfig,
         session_config: SessionConfig,
+        keep_awake: bool,
     ) {
         self.toasts.info(format!("Connecting to {}...", port));
 
@@ -632,6 +651,15 @@ impl App {
                 let mut traffic = TrafficView::new();
                 traffic.session_start = Some(SystemTime::now());
                 
+                // Create keep-awake handle and enable if setting is on
+                let mut keep_awake_handle = KeepAwake::new();
+                if keep_awake {
+                    keep_awake_handle.enable();
+                    if !keep_awake_handle.is_active() {
+                        self.toasts.info("Keep-awake not available on this system");
+                    }
+                }
+                
                 let state = ConnectedState {
                     handle,
                     tab: ConnectedTab::Traffic,
@@ -639,6 +667,7 @@ impl App {
                     graph: GraphView::new(),
                     file_sender: FileSenderView::new(),
                     serial_config,
+                    keep_awake: keep_awake_handle,
                 };
                 self.mode = AppMode::Connected(state);
                 self.needs_clear = true;
@@ -688,7 +717,8 @@ pub enum PreConnectAction {
     Connect {
         port: String,
         serial_config: SerialConfig,
-        session_config: SessionConfig,
+        /// RX chunking strategy (from pre-connect config).
+        rx_chunking: ChunkingStrategy,
     },
     Toast(crate::widget::Toast),
 }

@@ -17,3 +17,6 @@ serde_json = { workspace = true }
 strum = { workspace = true }
 enum_dispatch = { workspace = true }
 dirs = { workspace = true }
+chrono = { workspace = true }
+
+keepawake = { workspace = true }

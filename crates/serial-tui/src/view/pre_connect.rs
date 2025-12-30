@@ -8,8 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, StatefulWidget, Widget},
 };
 use serial_core::{
-    ChunkingStrategy, DataBits, LineDelimiter, SerialConfig, SessionConfig, list_ports,
-    buffer::AutoSaveConfig,
+    ChunkingStrategy, DataBits, LineDelimiter, SerialConfig, list_ports,
     ui::{
         config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
         serial_config::{
@@ -55,13 +54,6 @@ pub struct PreConnectConfig {
     pub flow_control_index: usize,
     // Session settings
     pub line_ending_index: usize,
-    pub buffer_size_index: usize,
-    // Auto-save settings
-    pub auto_save: bool,
-    pub auto_save_tx: bool,
-    pub auto_save_rx: bool,
-    pub auto_save_timestamps: bool,
-    pub auto_save_direction: bool,
 }
 
 impl Default for PreConnectConfig {
@@ -85,14 +77,6 @@ impl Default for PreConnectConfig {
             flow_control_index: 0,
             // Default to LF line endings
             line_ending_index: 1, // LF
-            // Default to 10MB buffer
-            buffer_size_index: 2, // 10 MB
-            // Default auto-save settings
-            auto_save: true,
-            auto_save_tx: false, // TX not saved by default
-            auto_save_rx: true,  // RX saved by default
-            auto_save_timestamps: true,
-            auto_save_direction: false,
         }
     }
 }
@@ -108,53 +92,15 @@ impl PreConnectConfig {
         }
     }
 
-    pub fn to_session_config(&self) -> SessionConfig {
-        use serial_core::buffer::{DirectionFilter, SaveFormat, Encoding};
-        
-        // Map line ending index to chunking strategy
-        let rx_chunking = match self.line_ending_index {
+    /// Get the RX chunking strategy based on line ending selection.
+    pub fn rx_chunking(&self) -> ChunkingStrategy {
+        match self.line_ending_index {
             0 => ChunkingStrategy::Raw, // None (Raw)
             1 => ChunkingStrategy::with_delimiter(LineDelimiter::Newline), // LF
             2 => ChunkingStrategy::with_delimiter(LineDelimiter::Cr), // CR
             3 => ChunkingStrategy::with_delimiter(LineDelimiter::CrLf), // CRLF
             _ => ChunkingStrategy::Raw,
-        };
-
-        // Get buffer size
-        let buffer_size = BUFFER_SIZES
-            .get(self.buffer_size_index)
-            .copied()
-            .flatten();
-
-        // Build auto-save config
-        let auto_save = AutoSaveConfig {
-            enabled: self.auto_save,
-            directions: DirectionFilter {
-                tx: self.auto_save_tx,
-                rx: self.auto_save_rx,
-            },
-            format: SaveFormat::Encoded {
-                encoding: Encoding::Ascii,
-                include_timestamps: self.auto_save_timestamps,
-                include_direction: self.auto_save_direction,
-            },
-            ..Default::default()
-        };
-
-        // Build session config
-        let mut config = SessionConfig {
-            rx_chunking,
-            tx_chunking: ChunkingStrategy::Raw, // TX is always raw
-            buffer_size,
-            auto_save,
-        };
-
-        // If buffer size is set, apply it
-        if let Some(size) = buffer_size {
-            config = config.with_buffer_size(size);
         }
-
-        config
     }
 }
 
@@ -170,17 +116,6 @@ const FLOW_CONTROL_OPTIONS: &[&str] = &["None", "Software (XON/XOFF)", "Hardware
 
 // Session settings options
 const LINE_ENDING_OPTIONS: &[&str] = &["None (Raw)", "LF (\\n)", "CR (\\r)", "CRLF (\\r\\n)"];
-const BUFFER_SIZE_OPTIONS: &[&str] = &["1 MB", "5 MB", "10 MB", "50 MB", "100 MB", "Unlimited"];
-
-/// Buffer sizes in bytes corresponding to BUFFER_SIZE_OPTIONS
-const BUFFER_SIZES: &[Option<usize>] = &[
-    Some(1 * 1024 * 1024),
-    Some(5 * 1024 * 1024),
-    Some(10 * 1024 * 1024),
-    Some(50 * 1024 * 1024),
-    Some(100 * 1024 * 1024),
-    None, // Unlimited
-];
 
 static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
     Section {
@@ -279,91 +214,6 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                     }
                 },
                 visible: always_visible,
-                validate: always_valid,
-            },
-            FieldDef {
-                id: "buffer_size",
-                label: "Buffer Size",
-                kind: FieldKind::Select {
-                    options: BUFFER_SIZE_OPTIONS,
-                },
-                get: |c| FieldValue::OptionIndex(c.buffer_size_index),
-                set: |c, v| {
-                    if let FieldValue::OptionIndex(i) = v {
-                        c.buffer_size_index = i;
-                    }
-                },
-                visible: always_visible,
-                validate: always_valid,
-            },
-        ],
-    },
-    Section {
-        header: Some("Auto-Save"),
-        fields: &[
-            FieldDef {
-                id: "auto_save",
-                label: "Enabled",
-                kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.auto_save),
-                set: |c, v| {
-                    if let FieldValue::Bool(b) = v {
-                        c.auto_save = b;
-                    }
-                },
-                visible: always_visible,
-                validate: always_valid,
-            },
-            FieldDef {
-                id: "auto_save_rx",
-                label: "Save RX",
-                kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.auto_save_rx),
-                set: |c, v| {
-                    if let FieldValue::Bool(b) = v {
-                        c.auto_save_rx = b;
-                    }
-                },
-                visible: |c| c.auto_save,
-                validate: always_valid,
-            },
-            FieldDef {
-                id: "auto_save_tx",
-                label: "Save TX",
-                kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.auto_save_tx),
-                set: |c, v| {
-                    if let FieldValue::Bool(b) = v {
-                        c.auto_save_tx = b;
-                    }
-                },
-                visible: |c| c.auto_save,
-                validate: always_valid,
-            },
-            FieldDef {
-                id: "auto_save_timestamps",
-                label: "Timestamps",
-                kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.auto_save_timestamps),
-                set: |c, v| {
-                    if let FieldValue::Bool(b) = v {
-                        c.auto_save_timestamps = b;
-                    }
-                },
-                visible: |c| c.auto_save,
-                validate: always_valid,
-            },
-            FieldDef {
-                id: "auto_save_direction",
-                label: "Direction",
-                kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.auto_save_direction),
-                set: |c, v| {
-                    if let FieldValue::Bool(b) = v {
-                        c.auto_save_direction = b;
-                    }
-                },
-                visible: |c| c.auto_save,
                 validate: always_valid,
             },
         ],
@@ -574,7 +424,7 @@ impl PreConnectView {
                     return Some(PreConnectAction::Connect {
                         port: port.to_string(),
                         serial_config: self.config.to_serial_config(),
-                        session_config: self.config.to_session_config(),
+                        rx_chunking: self.config.rx_chunking(),
                     });
                 }
             }

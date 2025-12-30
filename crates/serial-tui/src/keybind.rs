@@ -184,6 +184,11 @@ pub fn all_keybinds() -> Vec<Keybind> {
         Keybind::new(key(KeyCode::Char('n')), "Next match", KeyContext::Traffic),
         Keybind::new(key(KeyCode::Char('N')), "Previous match", KeyContext::Traffic),
         Keybind::new(key(KeyCode::Char('f')), "Filter", KeyContext::Traffic),
+        Keybind::new(
+            ctrl(KeyCode::Char('b')),
+            "Toggle lock to bottom",
+            KeyContext::Traffic,
+        ),
         // Graph view
         Keybind::new(
             key(KeyCode::Char('g')),

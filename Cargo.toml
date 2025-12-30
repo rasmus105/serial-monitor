@@ -40,6 +40,12 @@ serde_json = "1"
 # Directories
 dirs = "6"
 
+# Date/time
+chrono = "0.4"
+
+# Keep awake (prevent system sleep)
+keepawake = "0.6"
+
 # Internal crates
 serial-core = { path = "crates/serial-core" }
 serial-tui = { path = "crates/serial-tui" }

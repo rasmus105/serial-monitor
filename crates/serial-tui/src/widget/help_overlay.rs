@@ -55,38 +55,277 @@ impl HelpTab {
 /// Global application settings.
 #[derive(Debug, Clone)]
 pub struct AppSettings {
-    /// Default timestamp format index.
-    pub timestamp_format_index: usize,
-    /// Whether to show tips on startup.
-    pub show_tips: bool,
+    // === Auto-save (crash recovery) settings ===
+    /// Whether auto-save is enabled.
+    pub auto_save_enabled: bool,
+    /// Maximum number of session files to keep.
+    pub auto_save_max_sessions: usize,
+    /// Format index: 0=Raw, 1=Encoded
+    pub auto_save_format_index: usize,
+    /// Encoding index (when format=Encoded): 0=UTF-8, 1=ASCII, 2=Hex, 3=Binary
+    pub auto_save_encoding_index: usize,
+    /// Include timestamps in auto-save (when format=Encoded)
+    pub auto_save_timestamps: bool,
+    /// Include direction markers in auto-save (when format=Encoded)
+    pub auto_save_direction: bool,
+    /// Save RX data
+    pub auto_save_rx: bool,
+    /// Save TX data
+    pub auto_save_tx: bool,
+
+    // === Pattern matching defaults ===
+    /// Default pattern mode for search: 0=Normal, 1=Regex
+    pub search_mode_index: usize,
+    /// Default pattern mode for filter: 0=Normal, 1=Regex
+    pub filter_mode_index: usize,
+
+    // === Buffer settings ===
+    /// Buffer size index (maps to BUFFER_SIZES)
+    pub buffer_size_index: usize,
+
+    // === System settings ===
+    /// Whether to keep the system awake while connected.
+    pub keep_awake: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            timestamp_format_index: 0, // Relative
-            show_tips: true,
+            // Auto-save defaults
+            auto_save_enabled: true,
+            auto_save_max_sessions: 10,
+            auto_save_format_index: 1, // Encoded
+            auto_save_encoding_index: 1, // ASCII
+            auto_save_timestamps: true,
+            auto_save_direction: false,
+            auto_save_rx: true,
+            auto_save_tx: false,
+
+            // Pattern matching defaults
+            search_mode_index: 0, // Normal
+            filter_mode_index: 0, // Normal
+
+            // Buffer defaults
+            buffer_size_index: 2, // 10 MB
+
+            // System defaults
+            keep_awake: true,
         }
     }
 }
 
+impl AppSettings {
+    /// Convert auto-save settings to AutoSaveConfig for the core.
+    pub fn to_auto_save_config(&self) -> serial_core::buffer::AutoSaveConfig {
+        use serial_core::buffer::{AutoSaveConfig, DirectionFilter, Encoding, SaveFormat};
+
+        // Map encoding index to Encoding enum
+        let encoding = match self.auto_save_encoding_index {
+            0 => Encoding::Utf8,
+            1 => Encoding::Ascii,
+            2 => Encoding::Hex(Default::default()),
+            3 => Encoding::Binary(Default::default()),
+            _ => Encoding::Ascii,
+        };
+
+        // Build save format based on format index
+        let format = match self.auto_save_format_index {
+            0 => SaveFormat::Raw,
+            _ => SaveFormat::Encoded {
+                encoding,
+                include_timestamps: self.auto_save_timestamps,
+                include_direction: self.auto_save_direction,
+            },
+        };
+
+        AutoSaveConfig {
+            enabled: self.auto_save_enabled,
+            max_sessions: self.auto_save_max_sessions,
+            directions: DirectionFilter {
+                tx: self.auto_save_tx,
+                rx: self.auto_save_rx,
+            },
+            format,
+            ..Default::default()
+        }
+    }
+
+    /// Get the buffer size in bytes (or None for unlimited).
+    pub fn buffer_size(&self) -> Option<usize> {
+        BUFFER_SIZES.get(self.buffer_size_index).copied().flatten()
+    }
+}
+
 // Settings panel definitions
-const TIMESTAMP_FORMAT_OPTIONS: &[&str] = &["Relative", "HH:MM:SS.mmm", "HH:MM:SS"];
+const AUTO_SAVE_FORMAT_OPTIONS: &[&str] = &["Raw Binary", "Encoded Text"];
+const AUTO_SAVE_ENCODING_OPTIONS: &[&str] = &["UTF-8", "ASCII", "Hex", "Binary"];
+const PATTERN_MODE_OPTIONS: &[&str] = &["Normal", "Regex"];
+const BUFFER_SIZE_OPTIONS: &[&str] = &["1 MB", "5 MB", "10 MB", "50 MB", "100 MB", "Unlimited"];
+const MAX_SESSIONS_OPTIONS: &[&str] = &["5", "10", "20", "50", "100"];
+
+/// Buffer sizes in bytes corresponding to BUFFER_SIZE_OPTIONS
+pub const BUFFER_SIZES: &[Option<usize>] = &[
+    Some(1 * 1024 * 1024),
+    Some(5 * 1024 * 1024),
+    Some(10 * 1024 * 1024),
+    Some(50 * 1024 * 1024),
+    Some(100 * 1024 * 1024),
+    None, // Unlimited
+];
+
+/// Max sessions values corresponding to MAX_SESSIONS_OPTIONS
+const MAX_SESSIONS_VALUES: &[usize] = &[5, 10, 20, 50, 100];
 
 static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
     Section {
-        header: Some("Display"),
+        header: Some("Auto-Save (Crash Recovery)"),
         fields: &[
             FieldDef {
-                id: "timestamp_format",
-                label: "Timestamp Format",
-                kind: FieldKind::Select {
-                    options: TIMESTAMP_FORMAT_OPTIONS,
+                id: "auto_save_enabled",
+                label: "Enabled",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.auto_save_enabled),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.auto_save_enabled = b;
+                    }
                 },
-                get: |c| FieldValue::OptionIndex(c.timestamp_format_index),
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "auto_save_max_sessions",
+                label: "Max Sessions",
+                kind: FieldKind::Select {
+                    options: MAX_SESSIONS_OPTIONS,
+                },
+                get: |c| {
+                    let idx = MAX_SESSIONS_VALUES.iter().position(|&v| v == c.auto_save_max_sessions).unwrap_or(1);
+                    FieldValue::OptionIndex(idx)
+                },
                 set: |c, v| {
                     if let FieldValue::OptionIndex(i) = v {
-                        c.timestamp_format_index = i;
+                        c.auto_save_max_sessions = MAX_SESSIONS_VALUES.get(i).copied().unwrap_or(10);
+                    }
+                },
+                visible: |c| c.auto_save_enabled,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "auto_save_rx",
+                label: "Save RX",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.auto_save_rx),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.auto_save_rx = b;
+                    }
+                },
+                visible: |c| c.auto_save_enabled,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "auto_save_tx",
+                label: "Save TX",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.auto_save_tx),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.auto_save_tx = b;
+                    }
+                },
+                visible: |c| c.auto_save_enabled,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "auto_save_format",
+                label: "Format",
+                kind: FieldKind::Select {
+                    options: AUTO_SAVE_FORMAT_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.auto_save_format_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.auto_save_format_index = i;
+                    }
+                },
+                visible: |c| c.auto_save_enabled,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "auto_save_encoding",
+                label: "Encoding",
+                kind: FieldKind::Select {
+                    options: AUTO_SAVE_ENCODING_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.auto_save_encoding_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.auto_save_encoding_index = i;
+                    }
+                },
+                // Only visible when auto_save enabled AND format is Encoded (index 1)
+                visible: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "auto_save_timestamps",
+                label: "Timestamps",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.auto_save_timestamps),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.auto_save_timestamps = b;
+                    }
+                },
+                // Only visible when auto_save enabled AND format is Encoded (index 1)
+                visible: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "auto_save_direction",
+                label: "Direction Markers",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.auto_save_direction),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.auto_save_direction = b;
+                    }
+                },
+                // Only visible when auto_save enabled AND format is Encoded (index 1)
+                visible: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                validate: always_valid,
+            },
+        ],
+    },
+    Section {
+        header: Some("Pattern Matching"),
+        fields: &[
+            FieldDef {
+                id: "search_mode",
+                label: "Search Mode",
+                kind: FieldKind::Select {
+                    options: PATTERN_MODE_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.search_mode_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.search_mode_index = i;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "filter_mode",
+                label: "Filter Mode",
+                kind: FieldKind::Select {
+                    options: PATTERN_MODE_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.filter_mode_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.filter_mode_index = i;
                     }
                 },
                 visible: always_visible,
@@ -95,16 +334,36 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
         ],
     },
     Section {
-        header: Some("Behavior"),
+        header: Some("Buffer"),
         fields: &[
             FieldDef {
-                id: "show_tips",
-                label: "Show Tips",
+                id: "buffer_size",
+                label: "Buffer Size",
+                kind: FieldKind::Select {
+                    options: BUFFER_SIZE_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.buffer_size_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.buffer_size_index = i;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+        ],
+    },
+    Section {
+        header: Some("System"),
+        fields: &[
+            FieldDef {
+                id: "keep_awake",
+                label: "Keep Awake",
                 kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.show_tips),
+                get: |c| FieldValue::Bool(c.keep_awake),
                 set: |c, v| {
                     if let FieldValue::Bool(b) = v {
-                        c.show_tips = b;
+                        c.keep_awake = b;
                     }
                 },
                 visible: always_visible,
@@ -281,16 +540,6 @@ impl HelpOverlayState {
         false
     }
 
-    /// Get the selected timestamp format.
-    pub fn timestamp_format(&self) -> serial_core::ui::TimestampFormat {
-        use serial_core::ui::TimestampFormat;
-        match self.settings.timestamp_format_index {
-            0 => TimestampFormat::Relative,
-            1 => TimestampFormat::AbsoluteMillis,
-            2 => TimestampFormat::Absolute,
-            _ => TimestampFormat::Relative,
-        }
-    }
 }
 
 /// Help overlay widget.

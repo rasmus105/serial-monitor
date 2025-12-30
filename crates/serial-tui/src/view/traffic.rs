@@ -62,6 +62,7 @@ pub struct TrafficConfig {
     pub show_timestamps: bool,
     pub timestamp_format_index: usize,
     pub auto_scroll: bool,
+    pub lock_to_bottom: bool,
     pub pattern_mode_index: usize,
     pub wrap_text: bool,
 }
@@ -75,6 +76,7 @@ impl Default for TrafficConfig {
             show_timestamps: true,
             timestamp_format_index: 0, // Relative
             auto_scroll: true,
+            lock_to_bottom: false,
             pattern_mode_index: 0, // Normal
             wrap_text: true, // Wrap by default
         }
@@ -153,6 +155,19 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                 set: |c, v| {
                     if let FieldValue::Bool(b) = v {
                         c.auto_scroll = b;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "lock_to_bottom",
+                label: "Lock to Bottom",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.lock_to_bottom),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.lock_to_bottom = b;
                     }
                 },
                 visible: always_visible,
@@ -408,11 +423,17 @@ impl TrafficView {
         } else {
             String::new()
         };
+        let lock_indicator = if self.config.lock_to_bottom {
+            " [LOCKED]"
+        } else {
+            ""
+        };
         let block = block.title(format!(
-            " Traffic [{}/{}]{} ",
+            " Traffic [{}/{}]{}{} ",
             scroll + 1,
             total.max(1),
             filter_info,
+            lock_indicator,
         ));
         block.render(area, buf);
 
@@ -500,11 +521,17 @@ impl TrafficView {
         } else {
             String::new()
         };
+        let lock_indicator = if self.config.lock_to_bottom {
+            " [LOCKED]"
+        } else {
+            ""
+        };
         let block = block.title(format!(
-            " Traffic [{}/{}]{} ",
+            " Traffic [{}/{}]{}{} ",
             scroll + 1,
             total_display_lines.max(1),
             filter_info,
+            lock_indicator,
         ));
         block.render(area, buf);
 
@@ -881,29 +908,62 @@ impl TrafficView {
         let max_scroll = total.saturating_sub(self.last_visible_height);
 
         match key.code {
+            // Toggle lock_to_bottom with Ctrl+b
+            KeyCode::Char('b') if has_ctrl => {
+                self.config.lock_to_bottom = !self.config.lock_to_bottom;
+                // When enabling lock, also enable auto_scroll and go to bottom
+                if self.config.lock_to_bottom {
+                    self.config.auto_scroll = true;
+                    self.scroll = max_scroll;
+                }
+            }
             KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
-                self.scroll = self.scroll.saturating_add(1).min(max_scroll);
-                self.config.auto_scroll = false;
+                // Lock mode: ignore scroll down (we're already at bottom)
+                if !self.config.lock_to_bottom {
+                    self.scroll = self.scroll.saturating_add(1).min(max_scroll);
+                    // Re-enable auto_scroll if we reached the bottom
+                    if self.scroll >= max_scroll {
+                        self.config.auto_scroll = true;
+                    } else {
+                        self.config.auto_scroll = false;
+                    }
+                }
             }
             KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
-                self.scroll = self.scroll.saturating_sub(1);
-                self.config.auto_scroll = false;
+                // Lock mode: ignore scroll up
+                if !self.config.lock_to_bottom {
+                    self.scroll = self.scroll.saturating_sub(1);
+                    self.config.auto_scroll = false;
+                }
             }
             KeyCode::Char('d') if has_ctrl => {
-                // Half-page down
-                self.scroll = self.scroll.saturating_add(half_page).min(max_scroll);
-                self.config.auto_scroll = false;
+                // Half-page down - lock mode ignores this
+                if !self.config.lock_to_bottom {
+                    self.scroll = self.scroll.saturating_add(half_page).min(max_scroll);
+                    // Re-enable auto_scroll if we reached the bottom
+                    if self.scroll >= max_scroll {
+                        self.config.auto_scroll = true;
+                    } else {
+                        self.config.auto_scroll = false;
+                    }
+                }
             }
             KeyCode::Char('u') if has_ctrl => {
-                // Half-page up
-                self.scroll = self.scroll.saturating_sub(half_page);
-                self.config.auto_scroll = false;
+                // Half-page up - lock mode ignores this
+                if !self.config.lock_to_bottom {
+                    self.scroll = self.scroll.saturating_sub(half_page);
+                    self.config.auto_scroll = false;
+                }
             }
             KeyCode::Char('g') => {
-                self.scroll = 0;
-                self.config.auto_scroll = false;
+                // Go to top - lock mode ignores this
+                if !self.config.lock_to_bottom {
+                    self.scroll = 0;
+                    self.config.auto_scroll = false;
+                }
             }
             KeyCode::Char('G') => {
+                // Go to bottom - always works, re-enables auto_scroll
                 self.scroll = max_scroll;
                 self.config.auto_scroll = true;
             }
@@ -918,6 +978,7 @@ impl TrafficView {
             }
             KeyCode::Char('n') => {
                 // Next search match - need to calculate scroll position while we have buffer access
+                // Lock mode still allows navigating to search matches
                 let scroll_pos = if self.config.wrap_text {
                     let content_width = self.last_content_width.max(1);
                     // Pre-calculate display line offsets for each chunk
@@ -940,8 +1001,11 @@ impl TrafficView {
                 };
                 
                 if let Some(pos) = scroll_pos {
-                    self.scroll = pos;
-                    self.config.auto_scroll = false;
+                    // Only navigate if not in lock mode, or if match is visible from bottom
+                    if !self.config.lock_to_bottom {
+                        self.scroll = pos;
+                        self.config.auto_scroll = false;
+                    }
                 }
             }
             KeyCode::Char('N') => {
@@ -968,8 +1032,11 @@ impl TrafficView {
                 };
                 
                 if let Some(pos) = scroll_pos {
-                    self.scroll = pos;
-                    self.config.auto_scroll = false;
+                    // Only navigate if not in lock mode
+                    if !self.config.lock_to_bottom {
+                        self.scroll = pos;
+                        self.config.auto_scroll = false;
+                    }
                 }
             }
             _ => {}

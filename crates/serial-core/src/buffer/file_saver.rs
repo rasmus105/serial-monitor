@@ -19,6 +19,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
 use super::chunk::{Direction, RawChunk};
@@ -435,8 +436,9 @@ fn write_chunk<W: Write>(
             let mut line = String::new();
 
             if *include_timestamps {
+                let dt: DateTime<Utc> = chunk.timestamp.into();
                 line.push('[');
-                line.push_str(&format_iso8601_timestamp(chunk.timestamp));
+                line.push_str(&dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
                 line.push_str("] ");
             }
 
@@ -685,53 +687,11 @@ fn generate_session_filename(port_name: &str, format: &SaveFormat) -> String {
         .trim_start_matches("_dev_")
         .to_string();
 
-    let timestamp = format_iso8601_timestamp(SystemTime::now());
+    let dt: DateTime<Utc> = SystemTime::now().into();
+    let timestamp = dt.format("%Y-%m-%dT%H-%M-%S");
     let extension = format.file_extension();
 
     format!("{}-{}.{}", clean_port_name, timestamp, extension)
-}
-
-// ============================================================================
-// Timestamp Formatting
-// ============================================================================
-
-/// Format a SystemTime as ISO 8601 timestamp.
-/// Format: YYYY-MM-DDTHH:mm:ss.sssZ
-pub fn format_iso8601_timestamp(time: SystemTime) -> String {
-    use std::time::UNIX_EPOCH;
-
-    let duration = time.duration_since(UNIX_EPOCH).unwrap_or_default();
-    let secs = duration.as_secs();
-    let millis = duration.subsec_millis();
-
-    let days_since_epoch = secs / 86400;
-    let time_of_day = secs % 86400;
-
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    let (year, month, day) = days_to_ymd(days_since_epoch as i64);
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        year, month, day, hours, minutes, seconds, millis
-    )
-}
-
-/// Convert days since Unix epoch to year, month, day (Howard Hinnant's algorithm).
-fn days_to_ymd(days: i64) -> (i32, u32, u32) {
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
 }
 
 // ============================================================================
@@ -777,16 +737,6 @@ mod tests {
         assert!(filename.starts_with("ttyUSB0-"));
         assert!(filename.ends_with(".txt"));
         assert!(filename.contains("T")); // ISO 8601 format
-    }
-
-    #[test]
-    fn iso8601_timestamp_format() {
-        use std::time::UNIX_EPOCH;
-        let time = UNIX_EPOCH + std::time::Duration::from_millis(1703071852123);
-        let formatted = format_iso8601_timestamp(time);
-        assert!(formatted.ends_with("Z"));
-        assert!(formatted.contains("T"));
-        assert_eq!(formatted.len(), 24);
     }
 
     #[test]
