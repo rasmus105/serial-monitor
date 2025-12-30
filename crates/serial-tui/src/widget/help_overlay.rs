@@ -73,6 +73,18 @@ pub struct AppSettings {
     /// Save TX data
     pub auto_save_tx: bool,
 
+    // === File saving (user-initiated) settings ===
+    /// Save scope index: 0=ExistingOnly, 1=NewOnly, 2=ExistingAndContinue
+    pub file_save_scope_index: usize,
+    /// Save RX data in user-initiated saves
+    pub file_save_rx: bool,
+    /// Save TX data in user-initiated saves
+    pub file_save_tx: bool,
+    /// Include timestamps in user-initiated saves
+    pub file_save_timestamps: bool,
+    /// Include direction markers in user-initiated saves
+    pub file_save_direction: bool,
+
     // === Pattern matching defaults ===
     /// Default pattern mode for search: 0=Normal, 1=Regex
     pub search_mode_index: usize,
@@ -100,6 +112,13 @@ impl Default for AppSettings {
             auto_save_direction: false,
             auto_save_rx: true,
             auto_save_tx: false,
+
+            // File saving (user-initiated) defaults
+            file_save_scope_index: 2, // ExistingAndContinue
+            file_save_rx: true,
+            file_save_tx: true,
+            file_save_timestamps: true,
+            file_save_direction: true,
 
             // Pattern matching defaults
             search_mode_index: 0, // Normal
@@ -162,6 +181,7 @@ const AUTO_SAVE_ENCODING_OPTIONS: &[&str] = &["UTF-8", "ASCII", "Hex", "Binary"]
 const PATTERN_MODE_OPTIONS: &[&str] = &["Normal", "Regex"];
 const BUFFER_SIZE_OPTIONS: &[&str] = &["1 MB", "5 MB", "10 MB", "50 MB", "100 MB", "Unlimited"];
 const MAX_SESSIONS_OPTIONS: &[&str] = &["5", "10", "20", "50", "100"];
+const FILE_SAVE_SCOPE_OPTIONS: &[&str] = &["Existing Only", "New Only", "Existing + Continue"];
 
 /// Buffer sizes in bytes corresponding to BUFFER_SIZE_OPTIONS
 pub const BUFFER_SIZES: &[Option<usize>] = &[
@@ -294,6 +314,78 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                 },
                 // Only visible when auto_save enabled AND format is Encoded (index 1)
                 visible: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                validate: always_valid,
+            },
+        ],
+    },
+    Section {
+        header: Some("File Saving (User)"),
+        fields: &[
+            FieldDef {
+                id: "file_save_scope",
+                label: "Save Scope",
+                kind: FieldKind::Select {
+                    options: FILE_SAVE_SCOPE_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.file_save_scope_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.file_save_scope_index = i;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_rx",
+                label: "Save RX",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.file_save_rx),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.file_save_rx = b;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_tx",
+                label: "Save TX",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.file_save_tx),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.file_save_tx = b;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_timestamps",
+                label: "Timestamps",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.file_save_timestamps),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.file_save_timestamps = b;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_direction",
+                label: "Direction Markers",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.file_save_direction),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.file_save_direction = b;
+                    }
+                },
+                visible: always_visible,
                 validate: always_valid,
             },
         ],

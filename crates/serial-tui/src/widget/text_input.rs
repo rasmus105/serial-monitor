@@ -144,6 +144,13 @@ impl TextInputState {
         self.scroll = 0;
     }
 
+    /// Set the content and move cursor to end.
+    pub fn set_content(&mut self, content: impl Into<String>) {
+        self.content = content.into();
+        self.cursor = self.content.len();
+        self.scroll = 0;
+    }
+
     /// Take the content and clear the input.
     pub fn take(&mut self) -> String {
         let content = std::mem::take(&mut self.content);
