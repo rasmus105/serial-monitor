@@ -108,10 +108,10 @@ pub enum SaveScope {
     ExistingOnly,
 
     /// Stream new data going forward
-    #[default]
     NewOnly,
 
     /// Snapshot existing buffer, then continue streaming new data
+    #[default]
     ExistingAndContinue,
 }
 

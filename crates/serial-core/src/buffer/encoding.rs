@@ -54,10 +54,10 @@ pub enum Encoding {
     #[strum(serialize = "UTF-8", message = "Display as UTF-8 text")]
     Utf8,
 
-    /// ASCII with dots for non-printable characters
+    /// ASCII with escape sequences for non-printable characters
     #[strum(
         serialize = "ASCII",
-        message = "Display as ASCII (non-printable as dots)"
+        message = "Display as ASCII (non-printable as escapes)"
     )]
     Ascii,
 
@@ -80,15 +80,40 @@ pub fn encode(data: &[u8], encoding: Encoding) -> String {
     }
 }
 
-/// Encode bytes as UTF-8, replacing invalid sequences with replacement character
+/// Encode bytes as UTF-8, replacing invalid sequences with replacement character.
+///
+/// Control characters are shown as escape sequences (e.g., `\n`, `\r`, `\t`)
+/// to prevent them from affecting terminal rendering.
 pub fn encode_utf8(data: &[u8]) -> String {
-    String::from_utf8_lossy(data).into_owned()
+    let lossy = String::from_utf8_lossy(data);
+
+    let mut result = String::with_capacity(lossy.len());
+    for c in lossy.chars() {
+        match c {
+            // Allow printable ASCII and all non-ASCII Unicode (multi-byte UTF-8)
+            ' '..='~' => result.push(c),
+            // Common control characters as named escapes
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            '\0' => result.push_str("\\0"),
+            // Other C0 control characters (0x01-0x1F except \t, \n, \r)
+            '\x01'..='\x08' | '\x0B'..='\x0C' | '\x0E'..='\x1F' => {
+                let _ = write!(result, "\\x{:02X}", c as u8);
+            }
+            // DEL character
+            '\x7F' => result.push_str("\\x7F"),
+            // All other Unicode characters (emojis, CJK, etc.) - pass through
+            _ => result.push(c),
+        }
+    }
+    result
 }
 
 /// Encode bytes as ASCII, replacing non-printable characters with escape sequences
 ///
 /// Printable ASCII range: 32-126 (space through tilde)
-/// Common control characters (\n, \r, \t, \0) use their escape sequences.
+/// Common control characters use named escapes (`\n`, `\r`, `\t`, `\0`).
 /// Everything else (0-31, 127, 128-255) becomes hex escapes like `\xFF`.
 pub fn encode_ascii(data: &[u8]) -> String {
     if data.is_empty() {
@@ -103,7 +128,7 @@ pub fn encode_ascii(data: &[u8]) -> String {
         match b {
             // Printable ASCII
             0x20..=0x7E => result.push(b as char),
-            // Common control characters
+            // Common control characters as named escapes
             b'\n' => result.push_str("\\n"),
             b'\r' => result.push_str("\\r"),
             b'\t' => result.push_str("\\t"),
@@ -248,6 +273,27 @@ mod tests {
     }
 
     #[test]
+    fn utf8_control_chars_escaped() {
+        // All control chars shown as escape sequences
+        assert_eq!(encode_utf8(b"Hello\r\n"), "Hello\\r\\n");
+        // Null byte
+        assert_eq!(encode_utf8(b"Hello\0World"), "Hello\\0World");
+        // Tab
+        assert_eq!(encode_utf8(b"Hello\tWorld"), "Hello\\tWorld");
+        // Other control chars
+        assert_eq!(encode_utf8(&[b'H', 0x01, b'i']), "H\\x01i");
+        // DEL character
+        assert_eq!(encode_utf8(&[b'H', 0x7F, b'i']), "H\\x7Fi");
+    }
+
+    #[test]
+    fn utf8_unicode_preserved() {
+        // Emojis and other Unicode should pass through
+        assert_eq!(encode_utf8("Hello 🌍".as_bytes()), "Hello 🌍");
+        assert_eq!(encode_utf8("日本語".as_bytes()), "日本語");
+    }
+
+    #[test]
     fn ascii_printable() {
         assert_eq!(encode_ascii(b"Hello World!"), "Hello World!");
         // Boundary: space (32) and tilde (126)
@@ -255,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn ascii_non_printable_replaced() {
+    fn ascii_control_chars_escaped() {
         // Control characters - shown as escape sequences
         assert_eq!(encode_ascii(&[0, 31, 127]), "\\0\\x1F\\x7F");
         // High bytes - shown as hex escapes
