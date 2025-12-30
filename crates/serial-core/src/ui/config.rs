@@ -158,7 +158,7 @@ pub type ValidationResult = Result<(), Cow<'static, str>>;
 /// This is the core building block. Each field defines:
 /// - How to display it (label, kind)
 /// - How to get/set its value from state
-/// - When it should be visible
+/// - When it should be visible and/or enabled
 /// - How to validate input
 pub struct FieldDef<T> {
     /// Unique identifier for this field (used for focus tracking, etc.)
@@ -177,8 +177,17 @@ pub struct FieldDef<T> {
     pub set: fn(&mut T, FieldValue),
 
     /// Check if field should be visible given current state
-    /// Return false to hide the field (e.g., "Custom Delimiter" only shown when mode is Custom)
+    /// Return false to hide the field completely
     pub visible: fn(&T) -> bool,
+
+    /// Check if field should be enabled (interactive) given current state
+    /// Return false to show the field as grayed out and non-interactive
+    /// (used for sub-options that depend on a parent being enabled)
+    pub enabled: fn(&T) -> bool,
+
+    /// Parent field id for tree-style indentation
+    /// If set, this field will be rendered with tree-style indent under its parent
+    pub parent_id: Option<&'static str>,
 
     /// Validate a value before setting
     /// Return Err with message if invalid
@@ -199,6 +208,16 @@ impl<T> FieldDef<T> {
     /// Check if this field is currently visible
     pub fn is_visible(&self, state: &T) -> bool {
         (self.visible)(state)
+    }
+
+    /// Check if this field is currently enabled (interactive)
+    pub fn is_enabled(&self, state: &T) -> bool {
+        (self.enabled)(state)
+    }
+
+    /// Check if this is a sub-option (has a parent)
+    pub fn is_sub_option(&self) -> bool {
+        self.parent_id.is_some()
     }
 
     /// Get the current value from state
@@ -321,6 +340,11 @@ pub fn always_visible<T>(_: &T) -> bool {
     true
 }
 
+/// Always-true enabled function (for fields that are always interactive)
+pub fn always_enabled<T>(_: &T) -> bool {
+    true
+}
+
 /// Always-valid validation function (for fields with no validation)
 pub fn always_valid(_: &FieldValue) -> ValidationResult {
     Ok(())
@@ -347,6 +371,12 @@ pub struct ConfigPanelNav {
 
     /// Whether the dropdown is currently open (for Select fields)
     pub dropdown_open: bool,
+
+    /// Whether we're currently editing a text field
+    pub text_editing: bool,
+
+    /// Current text edit buffer (used during text editing)
+    pub text_buffer: String,
 }
 
 impl ConfigPanelNav {
@@ -355,23 +385,55 @@ impl ConfigPanelNav {
         Self::default()
     }
 
-    /// Move to next visible field
+    /// Move to next visible and enabled field
     pub fn next_field<T: 'static>(&mut self, sections: &[Section<T>], state: &T) {
         let total = sections.total_visible_fields(state);
-        if total > 0 {
+        if total == 0 {
+            return;
+        }
+        
+        // Try to find next enabled field, wrapping around if needed
+        let start = self.selected;
+        loop {
             self.selected = (self.selected + 1) % total;
+            // Check if this field is enabled
+            if let Some(field) = sections.nth_visible_field(state, self.selected) {
+                if field.is_enabled(state) {
+                    break;
+                }
+            }
+            // If we wrapped all the way around, stay on current (all disabled)
+            if self.selected == start {
+                break;
+            }
         }
     }
 
-    /// Move to previous visible field
+    /// Move to previous visible and enabled field
     pub fn prev_field<T: 'static>(&mut self, sections: &[Section<T>], state: &T) {
         let total = sections.total_visible_fields(state);
-        if total > 0 {
+        if total == 0 {
+            return;
+        }
+        
+        // Try to find previous enabled field, wrapping around if needed
+        let start = self.selected;
+        loop {
             self.selected = if self.selected == 0 {
                 total - 1
             } else {
                 self.selected - 1
             };
+            // Check if this field is enabled
+            if let Some(field) = sections.nth_visible_field(state, self.selected) {
+                if field.is_enabled(state) {
+                    break;
+                }
+            }
+            // If we wrapped all the way around, stay on current (all disabled)
+            if self.selected == start {
+                break;
+            }
         }
     }
 
@@ -422,6 +484,64 @@ impl ConfigPanelNav {
     /// Check if dropdown is currently open
     pub fn is_dropdown_open(&self) -> bool {
         self.dropdown_open
+    }
+
+    /// Check if currently editing text
+    pub fn is_text_editing(&self) -> bool {
+        self.text_editing
+    }
+
+    /// Start text editing mode for the current field
+    ///
+    /// Initializes the text buffer with the current field value
+    pub fn start_text_edit<T: 'static>(&mut self, sections: &[Section<T>], state: &T) {
+        if let Some(field) = self.current_field(sections, state) {
+            if field.kind.is_text_input() {
+                if let FieldValue::String(s) = field.get_value(state) {
+                    self.text_buffer = s.to_string();
+                    self.text_editing = true;
+                }
+            }
+        }
+    }
+
+    /// Apply the current text buffer to the state and exit edit mode
+    ///
+    /// Returns Ok(()) if successful, Err with validation message if failed
+    pub fn apply_text_edit<T: 'static>(
+        &mut self,
+        sections: &[Section<T>],
+        state: &mut T,
+    ) -> ValidationResult {
+        if !self.text_editing {
+            return Ok(());
+        }
+
+        let result = if let Some(field) = sections.nth_visible_field(state, self.selected) {
+            field.set_value(state, FieldValue::string(std::mem::take(&mut self.text_buffer)))
+        } else {
+            Ok(())
+        };
+
+        self.text_editing = false;
+        self.text_buffer.clear();
+        result
+    }
+
+    /// Cancel text editing and discard changes
+    pub fn cancel_text_edit(&mut self) {
+        self.text_editing = false;
+        self.text_buffer.clear();
+    }
+
+    /// Get the current text buffer (for rendering)
+    pub fn text_buffer(&self) -> &str {
+        &self.text_buffer
+    }
+
+    /// Get mutable access to the text buffer (for editing)
+    pub fn text_buffer_mut(&mut self) -> &mut String {
+        &mut self.text_buffer
     }
 
     /// Move dropdown selection down
@@ -481,13 +601,31 @@ impl ConfigPanelNav {
         Ok(())
     }
 
-    /// Ensure selected index is valid after fields may have changed visibility
+    /// Ensure selected index is valid and on an enabled field after fields may have changed visibility/enabled state
     pub fn clamp_selection<T: 'static>(&mut self, sections: &[Section<T>], state: &T) {
         let total = sections.total_visible_fields(state);
         if total == 0 {
             self.selected = 0;
-        } else if self.selected >= total {
+            return;
+        }
+        
+        if self.selected >= total {
             self.selected = total - 1;
+        }
+        
+        // If current field is disabled, find an enabled one
+        if let Some(field) = sections.nth_visible_field(state, self.selected) {
+            if !field.is_enabled(state) {
+                // Try to find first enabled field
+                for i in 0..total {
+                    if let Some(f) = sections.nth_visible_field(state, i) {
+                        if f.is_enabled(state) {
+                            self.selected = i;
+                            return;
+                        }
+                    }
+                }
+            }
         }
     }
 }

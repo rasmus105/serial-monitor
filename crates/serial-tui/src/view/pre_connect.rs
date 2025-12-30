@@ -10,7 +10,7 @@ use ratatui::{
 use serial_core::{
     ChunkingStrategy, DataBits, LineDelimiter, SerialConfig, list_ports,
     ui::{
-        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
+        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
         serial_config::{
             COMMON_BAUD_RATES, DATA_BITS_VARIANTS, FLOW_CONTROL_VARIANTS, PARITY_VARIANTS,
             STOP_BITS_VARIANTS,
@@ -154,6 +154,8 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -169,6 +171,8 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -184,6 +188,8 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -199,6 +205,8 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -214,6 +222,8 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
         ],
@@ -234,6 +244,8 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
         ],
@@ -252,6 +264,8 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -266,7 +280,9 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                         c.file_save_format_index = i;
                     }
                 },
-                visible: |c| c.file_save_enabled,
+                visible: always_visible,
+                enabled: |c| c.file_save_enabled,
+                parent_id: Some("file_save_enabled"),
                 validate: always_valid,
             },
             FieldDef {
@@ -281,8 +297,10 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                         c.file_save_encoding_index = i;
                     }
                 },
-                // Only visible when save enabled AND format is Encoded (index 1)
-                visible: |c| c.file_save_enabled && c.file_save_format_index == 1,
+                // Only visible when format is Encoded (index 1)
+                visible: |c| c.file_save_format_index == 1,
+                enabled: |c| c.file_save_enabled,
+                parent_id: Some("file_save_format"),
                 validate: always_valid,
             },
             FieldDef {
@@ -297,8 +315,9 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                         c.file_save_directory = s.into_owned();
                     }
                 },
-                // Always visible in pre-connect (file saving only starts on connect)
                 visible: always_visible,
+                enabled: |c| c.file_save_enabled,
+                parent_id: Some("file_save_enabled"),
                 validate: always_valid,
             },
         ],

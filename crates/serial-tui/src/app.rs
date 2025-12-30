@@ -350,6 +350,10 @@ impl App {
                         if !self.is_input_mode() =>
                     {
                         self.show_config = !self.show_config;
+                        // If hiding config panel and focus was on Config, move focus to Main
+                        if !self.show_config && self.focus == Focus::Config {
+                            self.focus = Focus::Main;
+                        }
                         // Request clear to avoid rendering artifacts when layout changes
                         self.needs_clear = true;
                         return;

@@ -38,6 +38,11 @@ pub fn handle_config_key<T: 'static>(
     sections: &[Section<T>],
     config: &mut T,
 ) -> ConfigKeyResult {
+    // Handle text editing mode
+    if nav.is_text_editing() {
+        return handle_text_edit_key(key, nav, sections, config);
+    }
+
     // Handle dropdown mode separately
     if nav.is_dropdown_open() {
         return handle_dropdown_key(key, nav, sections, config);
@@ -86,6 +91,9 @@ pub fn handle_config_key<T: 'static>(
                 if field.kind.is_select() {
                     nav.open_dropdown(sections, config);
                     return ConfigKeyResult::Handled;
+                } else if field.kind.is_text_input() {
+                    nav.start_text_edit(sections, config);
+                    return ConfigKeyResult::Handled;
                 } else if matches!(field.kind, FieldKind::Toggle) {
                     let _ = nav.toggle_current(sections, config);
                     return ConfigKeyResult::Changed;
@@ -131,6 +139,70 @@ fn handle_dropdown_key<T: 'static>(
             ConfigKeyResult::DropdownClosed
         }
         _ => ConfigKeyResult::NotHandled,
+    }
+}
+
+/// Handle a key event when editing text.
+fn handle_text_edit_key<T: 'static>(
+    key: KeyEvent,
+    nav: &mut ConfigPanelNav,
+    sections: &[Section<T>],
+    config: &mut T,
+) -> ConfigKeyResult {
+    match key.code {
+        KeyCode::Enter => {
+            let _ = nav.apply_text_edit(sections, config);
+            ConfigKeyResult::Changed
+        }
+        KeyCode::Esc => {
+            nav.cancel_text_edit();
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Char(c) => {
+            // Handle Ctrl+<key> sequences
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                match c {
+                    'a' => {
+                        // Ctrl+A: not implemented (would need cursor tracking in ConfigPanelNav)
+                        ConfigKeyResult::Handled
+                    }
+                    'e' => {
+                        // Ctrl+E: not implemented
+                        ConfigKeyResult::Handled
+                    }
+                    'u' => {
+                        // Ctrl+U: clear line
+                        nav.text_buffer_mut().clear();
+                        ConfigKeyResult::Handled
+                    }
+                    'w' => {
+                        // Ctrl+W: delete word backward
+                        let buf = nav.text_buffer_mut();
+                        let trimmed = buf.trim_end();
+                        if let Some(last_space) = trimmed.rfind(' ') {
+                            buf.truncate(last_space + 1);
+                        } else {
+                            buf.clear();
+                        }
+                        ConfigKeyResult::Handled
+                    }
+                    _ => ConfigKeyResult::Handled,
+                }
+            } else {
+                nav.text_buffer_mut().push(c);
+                ConfigKeyResult::Handled
+            }
+        }
+        KeyCode::Backspace => {
+            nav.text_buffer_mut().pop();
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Delete => {
+            // For simplicity, same as backspace (we don't track cursor position)
+            nav.text_buffer_mut().pop();
+            ConfigKeyResult::Handled
+        }
+        _ => ConfigKeyResult::Handled, // Consume all other keys when editing
     }
 }
 
@@ -238,7 +310,20 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
         let mut y = inner.y;
         let mut field_index = 0;
 
+        // Track which fields have visible children (for tree connector rendering)
+        let mut fields_with_children: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for section in self.sections {
+            for field in section.fields {
+                if !(field.visible)(self.data) {
+                    continue;
+                }
+                if let Some(parent_id) = field.parent_id {
+                    fields_with_children.insert(parent_id);
+                }
+            }
+        }
+
+        for (section_idx, section) in self.sections.iter().enumerate() {
             if y >= inner.y + inner.height {
                 break;
             }
@@ -265,21 +350,36 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 }
             }
 
+            // Collect visible fields for this section to determine last child
+            let visible_fields: Vec<_> = section.fields.iter()
+                .filter(|f| (f.visible)(self.data))
+                .collect();
+
             // Render fields
-            for field in section.fields {
+            for (field_in_section_idx, field) in visible_fields.iter().enumerate() {
                 if y >= inner.y + inner.height {
                     break;
                 }
 
-                if !(field.visible)(self.data) {
-                    continue;
-                }
-
                 let is_selected = self.focused && self.nav.selected == field_index;
                 let is_dropdown_open = is_selected && self.nav.dropdown_open;
+                let is_text_editing = is_selected && self.nav.text_editing;
+                let is_enabled = (field.enabled)(self.data);
+                let is_sub_option = field.parent_id.is_some();
                 let value = (field.get)(self.data);
 
-                let (label_style, value_style) = if self.read_only {
+                // Determine if this is the last sibling with the same parent
+                let is_last_sibling = if let Some(parent_id) = field.parent_id {
+                    // Check if there are any more visible fields with the same parent after this one
+                    !visible_fields.iter()
+                        .skip(field_in_section_idx + 1)
+                        .any(|f| f.parent_id == Some(parent_id))
+                } else {
+                    false
+                };
+
+                // Calculate styles based on enabled state
+                let (label_style, value_style) = if self.read_only || !is_enabled {
                     (Theme::muted(), Theme::muted())
                 } else if is_selected {
                     (
@@ -304,18 +404,39 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                             format!("[{}]", option)
                         }
                     }
-                    (FieldKind::TextInput { .. }, FieldValue::String(s)) => s.to_string(),
+                    (FieldKind::TextInput { placeholder }, FieldValue::String(s)) => {
+                        if is_text_editing {
+                            // Show edit buffer with cursor indicator
+                            format!("{}▏", self.nav.text_buffer())
+                        } else if s.is_empty() {
+                            format!("[{}]", placeholder)
+                        } else {
+                            s.to_string()
+                        }
+                    }
                     (FieldKind::NumericInput { .. }, FieldValue::Usize(n)) => n.to_string(),
                     (FieldKind::NumericInput { .. }, FieldValue::Isize(n)) => n.to_string(),
                     (FieldKind::NumericInput { .. }, FieldValue::Float(f)) => format!("{:.2}", f),
                     _ => "?".to_string(),
                 };
 
-                // Calculate layout: label on left, value on right
+                // Calculate tree prefix for sub-options
+                let tree_prefix = if is_sub_option {
+                    if is_last_sibling {
+                        "└ "  // Last item uses corner
+                    } else {
+                        "├ "  // Middle items use tee
+                    }
+                } else {
+                    ""
+                };
+                let tree_prefix_width = if is_sub_option { 2 } else { 0 };
+
+                // Calculate layout: tree_prefix + label on left, value on right
                 let label = &field.label;
                 let available = inner.width as usize;
                 let value_width = value_str.len().min(available / 2);
-                let label_width = available.saturating_sub(value_width + 1);
+                let label_width = available.saturating_sub(value_width + 1 + tree_prefix_width);
 
                 let label_display: String = if label.len() > label_width {
                     format!("{}...", &label[..label_width.saturating_sub(3)])
@@ -323,15 +444,19 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     (*label).to_string()
                 };
 
-                let padding = available.saturating_sub(label_display.len() + value_str.len());
+                let padding = available.saturating_sub(tree_prefix_width + label_display.len() + value_str.len());
 
+                // Build line with tree prefix
+                let tree_prefix_style = if is_enabled { Theme::muted() } else { Theme::muted() };
                 let line = Line::from(vec![
+                    Span::styled(tree_prefix.to_string(), tree_prefix_style),
                     Span::styled(label_display, label_style),
                     Span::raw(" ".repeat(padding)),
                     Span::styled(value_str, value_style),
                 ]);
 
-                if is_selected {
+                // Only highlight if selected AND enabled
+                if is_selected && is_enabled {
                     // Highlight the entire row
                     let highlight_area = Rect::new(inner.x, y, inner.width, 1);
                     for x in highlight_area.x..highlight_area.x + highlight_area.width {
@@ -349,8 +474,10 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 field_index += 1;
             }
 
-            // Add spacing between sections
-            y += 1;
+            // Add spacing between sections (but not after last section)
+            if section_idx < self.sections.len() - 1 {
+                y += 1;
+            }
         }
 
         // Render dropdown overlay if open

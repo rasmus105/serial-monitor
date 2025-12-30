@@ -7,7 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Tabs, Widget},
 };
-use serial_core::ui::config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible};
+use serial_core::ui::config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled};
 
 use crate::{
     keybind::{KeyContext, Keybind, all_keybinds},
@@ -211,6 +211,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -228,7 +230,9 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                         c.auto_save_max_sessions = MAX_SESSIONS_VALUES.get(i).copied().unwrap_or(10);
                     }
                 },
-                visible: |c| c.auto_save_enabled,
+                visible: always_visible,
+                enabled: |c| c.auto_save_enabled,
+                parent_id: Some("auto_save_enabled"),
                 validate: always_valid,
             },
             FieldDef {
@@ -241,7 +245,9 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                         c.auto_save_rx = b;
                     }
                 },
-                visible: |c| c.auto_save_enabled,
+                visible: always_visible,
+                enabled: |c| c.auto_save_enabled,
+                parent_id: Some("auto_save_enabled"),
                 validate: always_valid,
             },
             FieldDef {
@@ -254,7 +260,9 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                         c.auto_save_tx = b;
                     }
                 },
-                visible: |c| c.auto_save_enabled,
+                visible: always_visible,
+                enabled: |c| c.auto_save_enabled,
+                parent_id: Some("auto_save_enabled"),
                 validate: always_valid,
             },
             FieldDef {
@@ -269,7 +277,9 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                         c.auto_save_format_index = i;
                     }
                 },
-                visible: |c| c.auto_save_enabled,
+                visible: always_visible,
+                enabled: |c| c.auto_save_enabled,
+                parent_id: Some("auto_save_enabled"),
                 validate: always_valid,
             },
             FieldDef {
@@ -284,8 +294,9 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                         c.auto_save_encoding_index = i;
                     }
                 },
-                // Only visible when auto_save enabled AND format is Encoded (index 1)
-                visible: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                visible: always_visible,
+                enabled: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                parent_id: Some("auto_save_format"),
                 validate: always_valid,
             },
             FieldDef {
@@ -298,8 +309,9 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                         c.auto_save_timestamps = b;
                     }
                 },
-                // Only visible when auto_save enabled AND format is Encoded (index 1)
-                visible: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                visible: always_visible,
+                enabled: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                parent_id: Some("auto_save_format"),
                 validate: always_valid,
             },
             FieldDef {
@@ -312,8 +324,9 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                         c.auto_save_direction = b;
                     }
                 },
-                // Only visible when auto_save enabled AND format is Encoded (index 1)
-                visible: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                visible: always_visible,
+                enabled: |c| c.auto_save_enabled && c.auto_save_format_index == 1,
+                parent_id: Some("auto_save_format"),
                 validate: always_valid,
             },
         ],
@@ -334,6 +347,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -347,6 +362,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -360,6 +377,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -373,6 +392,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -386,6 +407,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
         ],
@@ -406,6 +429,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -421,6 +446,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
         ],
@@ -441,6 +468,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
         ],
@@ -459,6 +488,8 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
         ],

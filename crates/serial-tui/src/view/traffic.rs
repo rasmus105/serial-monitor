@@ -14,7 +14,7 @@ use serial_core::{
     buffer::{PatternMode, SearchMatch},
     ui::{
         TimestampFormat,
-        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
+        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
         encoding::{ENCODING_DISPLAY_NAMES, ENCODING_VARIANTS},
     },
 };
@@ -139,6 +139,8 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -152,6 +154,8 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -166,7 +170,9 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                         c.timestamp_format_index = i;
                     }
                 },
-                visible: |c| c.show_timestamps,
+                visible: always_visible,
+                enabled: |c| c.show_timestamps,
+                parent_id: Some("show_timestamps"),
                 validate: always_valid,
             },
             FieldDef {
@@ -180,6 +186,8 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -193,6 +201,8 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -206,6 +216,8 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
         ],
@@ -224,6 +236,8 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -237,6 +251,8 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -252,6 +268,8 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
         ],
@@ -270,6 +288,8 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                     }
                 },
                 visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
                 validate: always_valid,
             },
             FieldDef {
@@ -284,7 +304,10 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                         c.file_save_format_index = i;
                     }
                 },
-                visible: |c| c.file_save_enabled,
+                visible: always_visible,
+                // Only enabled when file saving is NOT active (can't change format while saving)
+                enabled: |c| !c.file_save_enabled,
+                parent_id: Some("file_save_enabled"),
                 validate: always_valid,
             },
             FieldDef {
@@ -299,8 +322,11 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                         c.file_save_encoding_index = i;
                     }
                 },
-                // Only visible when save enabled AND format is Encoded (index 1)
-                visible: |c| c.file_save_enabled && c.file_save_format_index == 1,
+                // Only visible when format is Encoded (index 1)
+                visible: |c| c.file_save_format_index == 1,
+                // Only enabled when file saving is NOT active
+                enabled: |c| !c.file_save_enabled,
+                parent_id: Some("file_save_format"),
                 validate: always_valid,
             },
             FieldDef {
@@ -315,8 +341,10 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                         c.file_save_directory = s.into_owned();
                     }
                 },
-                // Only editable when NOT actively saving (hide when enabled)
-                visible: |c| !c.file_save_enabled,
+                visible: always_visible,
+                // Only enabled when file saving is NOT active
+                enabled: |c| !c.file_save_enabled,
+                parent_id: Some("file_save_enabled"),
                 validate: always_valid,
             },
         ],

@@ -14,7 +14,7 @@ use ratatui::{
 use serial_core::{
     FileSendConfig, FileSendHandle, FileSendProgress, SerialConfig, SessionHandle, send_file,
     ui::{
-        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
+        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
     },
 };
 
@@ -99,6 +99,8 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[Section {
                 }
             },
             visible: always_visible,
+            enabled: always_enabled,
+            parent_id: None,
             validate: always_valid,
         },
         FieldDef {
@@ -124,6 +126,8 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[Section {
                 }
             },
             visible: always_visible,
+            enabled: always_enabled,
+            parent_id: None,
             validate: always_valid,
         },
         FieldDef {
@@ -137,6 +141,8 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[Section {
                 }
             },
             visible: always_visible,
+            enabled: always_enabled,
+            parent_id: None,
             validate: always_valid,
         },
     ],
