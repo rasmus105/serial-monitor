@@ -38,4 +38,4 @@ pub use error::{Error, Result};
 pub use file_sender::{send_file, FileSendConfig, FileSendHandle, FileSendProgress};
 pub use keep_awake::KeepAwake;
 pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
-pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle};
+pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle, Statistics};

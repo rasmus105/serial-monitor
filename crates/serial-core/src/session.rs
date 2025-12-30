@@ -3,7 +3,9 @@
 //! A Session represents a single serial port connection with its data buffer.
 //! It handles async I/O internally and communicates via channels.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -14,6 +16,98 @@ use crate::buffer::{AutoSaveConfig, DataBuffer, Direction};
 use crate::chunking::{Chunker, ChunkingStrategy};
 use crate::error::{Error, Result};
 use crate::port::SerialConfig;
+
+/// Connection statistics tracked during a session
+///
+/// All counters are cumulative and never decrease, even when the buffer
+/// truncates old data.
+#[derive(Debug)]
+pub struct Statistics {
+    /// Total bytes received from the device
+    bytes_rx: AtomicU64,
+    /// Total bytes sent to the device
+    bytes_tx: AtomicU64,
+    /// Number of received packets/chunks
+    packets_rx: AtomicU64,
+    /// Number of sent packets/chunks
+    packets_tx: AtomicU64,
+    /// When the connection was established
+    connected_at: Instant,
+}
+
+impl Statistics {
+    fn new() -> Self {
+        Self {
+            bytes_rx: AtomicU64::new(0),
+            bytes_tx: AtomicU64::new(0),
+            packets_rx: AtomicU64::new(0),
+            packets_tx: AtomicU64::new(0),
+            connected_at: Instant::now(),
+        }
+    }
+
+    /// Record received data
+    fn record_rx(&self, bytes: usize) {
+        self.bytes_rx.fetch_add(bytes as u64, Ordering::Relaxed);
+        self.packets_rx.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record sent data
+    fn record_tx(&self, bytes: usize) {
+        self.bytes_tx.fetch_add(bytes as u64, Ordering::Relaxed);
+        self.packets_tx.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Total bytes received
+    pub fn bytes_rx(&self) -> u64 {
+        self.bytes_rx.load(Ordering::Relaxed)
+    }
+
+    /// Total bytes sent
+    pub fn bytes_tx(&self) -> u64 {
+        self.bytes_tx.load(Ordering::Relaxed)
+    }
+
+    /// Number of received packets/chunks
+    pub fn packets_rx(&self) -> u64 {
+        self.packets_rx.load(Ordering::Relaxed)
+    }
+
+    /// Number of sent packets/chunks
+    pub fn packets_tx(&self) -> u64 {
+        self.packets_tx.load(Ordering::Relaxed)
+    }
+
+    /// When the connection was established
+    pub fn connected_at(&self) -> Instant {
+        self.connected_at
+    }
+
+    /// Duration since connection was established
+    pub fn duration(&self) -> std::time::Duration {
+        self.connected_at.elapsed()
+    }
+
+    /// Average bytes received per second (returns 0.0 if duration is 0)
+    pub fn avg_bytes_rx_per_sec(&self) -> f64 {
+        let secs = self.duration().as_secs_f64();
+        if secs > 0.0 {
+            self.bytes_rx() as f64 / secs
+        } else {
+            0.0
+        }
+    }
+
+    /// Average bytes sent per second (returns 0.0 if duration is 0)
+    pub fn avg_bytes_tx_per_sec(&self) -> f64 {
+        let secs = self.duration().as_secs_f64();
+        if secs > 0.0 {
+            self.bytes_tx() as f64 / secs
+        } else {
+            0.0
+        }
+    }
+}
 
 /// Events emitted by a session
 #[derive(Debug, Clone)]
@@ -105,6 +199,8 @@ pub struct SessionHandle {
     port_name: String,
     /// Auto-save handle (if enabled)
     auto_save: Option<FileSaverHandle>,
+    /// Connection statistics
+    statistics: Arc<Statistics>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -179,6 +275,11 @@ impl SessionHandle {
     /// Clone the command sender (for use by file sender)
     pub(crate) fn clone_sender(&self) -> mpsc::Sender<SessionCommand> {
         self.command_tx.clone()
+    }
+
+    /// Get the connection statistics
+    pub fn statistics(&self) -> &Statistics {
+        &self.statistics
     }
 }
 
@@ -261,6 +362,10 @@ impl Session {
         // Clone auto-save sender for the I/O task
         let auto_save_tx = auto_save.as_ref().map(|h| h.clone_sender());
 
+        // Create statistics
+        let statistics = Arc::new(Statistics::new());
+        let statistics_clone = Arc::clone(&statistics);
+
         // Spawn the I/O task
         tokio::spawn(async move {
             io_task(
@@ -271,6 +376,7 @@ impl Session {
                 rx_chunker,
                 tx_chunker,
                 auto_save_tx,
+                statistics_clone,
             )
             .await;
         });
@@ -281,6 +387,7 @@ impl Session {
             command_tx,
             port_name: port_name_owned,
             auto_save,
+            statistics,
         })
     }
 }
@@ -294,6 +401,7 @@ async fn io_task(
     mut rx_chunker: Chunker,
     mut tx_chunker: Chunker,
     auto_save: Option<AutoSaveSender>,
+    statistics: Arc<Statistics>,
 ) {
     let (mut reader, mut writer) = tokio::io::split(port);
     let mut read_buf = [0u8; 1024];
@@ -324,6 +432,9 @@ async fn io_task(
                         break;
                     }
                     Ok(n) => {
+                        // Record raw bytes received before chunking
+                        statistics.record_rx(n);
+                        
                         // Process through chunker - may produce 0, 1, or many chunks
                         let chunks = rx_chunker.process(&read_buf[..n]);
                         let direction = rx_chunker.direction();
@@ -368,6 +479,9 @@ async fn io_task(
                     Some(SessionCommand::Send(data)) => {
                         match writer.write_all(&data).await {
                             Ok(()) => {
+                                // Record bytes sent
+                                statistics.record_tx(data.len());
+                                
                                 // Process through TX chunker
                                 let chunks = tx_chunker.process(&data);
                                 let direction = tx_chunker.direction();
