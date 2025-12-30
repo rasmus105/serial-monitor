@@ -12,3 +12,4 @@ tokio = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true, features = ["event-stream"] }
 unicode-width = { workspace = true }
+chrono = { workspace = true }

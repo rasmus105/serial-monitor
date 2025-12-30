@@ -22,7 +22,7 @@ use serial_core::{
 use crate::{
     app::{Focus, TrafficAction},
     theme::Theme,
-    widget::{ConfigKeyResult, ConfigPanel, TextInput, handle_config_key, text_input::TextInputState},
+    widget::{ConfigKeyResult, ConfigPanel, ConnectionPanel, TextInput, handle_config_key, text_input::TextInputState},
 };
 
 /// Traffic view state.
@@ -41,6 +41,10 @@ pub struct TrafficView {
     pub send_input: TextInputState,
     /// Whether send input is focused.
     pub send_focused: bool,
+    /// Directory path input state.
+    pub dir_path_input: TextInputState,
+    /// Whether directory path input is focused.
+    pub dir_path_focused: bool,
     /// Traffic config.
     pub config: TrafficConfig,
     /// Config panel navigation.
@@ -51,6 +55,8 @@ pub struct TrafficView {
     last_visible_height: usize,
     /// Last known content width (for wrap calculation in key handler).
     last_content_width: usize,
+    /// Whether the view is currently scrolled to the bottom.
+    at_bottom: bool,
 }
 
 /// Traffic view configuration.
@@ -65,6 +71,11 @@ pub struct TrafficConfig {
     pub lock_to_bottom: bool,
     pub pattern_mode_index: usize,
     pub wrap_text: bool,
+    // File saving settings (can be toggled while connected)
+    pub file_save_enabled: bool,
+    pub file_save_format_index: usize,
+    pub file_save_encoding_index: usize,
+    pub file_save_directory: String,
 }
 
 impl Default for TrafficConfig {
@@ -79,6 +90,13 @@ impl Default for TrafficConfig {
             lock_to_bottom: false,
             pattern_mode_index: 0, // Normal
             wrap_text: true, // Wrap by default
+            // File saving defaults
+            file_save_enabled: false,
+            file_save_format_index: 1, // Encoded
+            file_save_encoding_index: 1, // ASCII
+            file_save_directory: serial_core::buffer::default_cache_directory()
+                .to_string_lossy()
+                .into_owned(),
         }
     }
 }
@@ -99,6 +117,10 @@ impl TrafficConfig {
 const ENCODING_OPTIONS: &[&str] = ENCODING_DISPLAY_NAMES;
 const PATTERN_MODE_OPTIONS: &[&str] = &["Normal", "Regex"];
 const TIMESTAMP_FORMAT_OPTIONS: &[&str] = &["Relative", "HH:MM:SS.mmm", "HH:MM:SS"];
+
+// File saving options
+const FILE_SAVE_FORMAT_OPTIONS: &[&str] = &["Raw Binary", "Encoded Text"];
+const FILE_SAVE_ENCODING_OPTIONS: &[&str] = &["UTF-8", "ASCII", "Hex", "Binary"];
 
 static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
     Section {
@@ -234,6 +256,71 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
             },
         ],
     },
+    Section {
+        header: Some("File Saving"),
+        fields: &[
+            FieldDef {
+                id: "file_save_enabled",
+                label: "Save to File",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.file_save_enabled),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.file_save_enabled = b;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_format",
+                label: "Format",
+                kind: FieldKind::Select {
+                    options: FILE_SAVE_FORMAT_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.file_save_format_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.file_save_format_index = i;
+                    }
+                },
+                visible: |c| c.file_save_enabled,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_encoding",
+                label: "Encoding",
+                kind: FieldKind::Select {
+                    options: FILE_SAVE_ENCODING_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.file_save_encoding_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.file_save_encoding_index = i;
+                    }
+                },
+                // Only visible when save enabled AND format is Encoded (index 1)
+                visible: |c| c.file_save_enabled && c.file_save_format_index == 1,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_directory",
+                label: "Directory",
+                kind: FieldKind::TextInput {
+                    placeholder: "Enter directory path...",
+                },
+                get: |c| FieldValue::string(c.file_save_directory.clone()),
+                set: |c, v| {
+                    if let FieldValue::String(s) = v {
+                        c.file_save_directory = s.into_owned();
+                    }
+                },
+                // Only editable when NOT actively saving (hide when enabled)
+                visible: |c| !c.file_save_enabled,
+                validate: always_valid,
+            },
+        ],
+    },
 ];
 
 // Connection info section (read-only) - common baud rates for display
@@ -253,16 +340,19 @@ impl TrafficView {
             filter_focused: false,
             send_input: TextInputState::new().with_placeholder("Data to send..."),
             send_focused: false,
+            dir_path_input: TextInputState::new().with_placeholder("Enter directory path..."),
+            dir_path_focused: false,
             config: TrafficConfig::default(),
             config_nav: ConfigPanelNav::new(),
             session_start: None,
             last_visible_height: 20, // Conservative default
             last_content_width: 80,  // Conservative default
+            at_bottom: true,         // Start at bottom
         }
     }
 
     pub fn is_input_mode(&self) -> bool {
-        self.search_focused || self.filter_focused || self.send_focused
+        self.search_focused || self.filter_focused || self.send_focused || self.dir_path_focused
     }
 
     /// Sync config changes to the session buffer
@@ -287,8 +377,8 @@ impl TrafficView {
         serial_config: &SerialConfig,
         focus: Focus,
     ) {
-        // Main area layout: traffic + optional search/filter/send bar
-        let show_input_bar = self.search_focused || self.filter_focused || self.send_focused;
+        // Main area layout: traffic + optional search/filter/send/dir bar
+        let show_input_bar = self.search_focused || self.filter_focused || self.send_focused || self.dir_path_focused;
         let main_chunks = if show_input_bar {
             Layout::default()
                 .direction(Direction::Vertical)
@@ -311,7 +401,7 @@ impl TrafficView {
 
         // Draw config panel
         if let Some(config_area) = config_area {
-            self.draw_config(config_area, buf, serial_config, focus);
+            self.draw_config(config_area, buf, handle, serial_config, focus);
         }
     }
 
@@ -336,6 +426,17 @@ impl TrafficView {
         if inner.height == 0 || inner.width == 0 {
             block.render(area, buf);
             return;
+        }
+
+        // Clear the entire inner area BEFORE rendering any content.
+        // This is critical because:
+        // 1. Timestamp width can change as time progresses (+9.999s -> +10.000s), causing
+        //    content_width to change and all wrap positions to shift
+        // 2. Different amounts of content may be rendered each frame
+        // 3. Paragraph::render() only writes actual content, not trailing spaces
+        // Without this, old content bleeds through when lines get shorter or positions shift.
+        for y in inner.y..inner.y + inner.height {
+            buf.set_string(inner.x, y, " ".repeat(inner.width as usize), ratatui::style::Style::default());
         }
 
         let visible_height = inner.height as usize;
@@ -408,13 +509,20 @@ impl TrafficView {
         self.last_visible_height = visible_height;
         
         // Calculate scroll position with proper bounds
-        let max_scroll = total.saturating_sub(visible_height);
-        let scroll = if self.config.auto_scroll && total > 0 {
+        // Add 10% bottom padding so user can clearly see when they've hit the bottom
+        // Only apply padding when there's actually scrollable content
+        let max_scroll_content = total.saturating_sub(visible_height);
+        let bottom_padding = if max_scroll_content > 0 { visible_height / 10 } else { 0 };
+        let max_scroll = max_scroll_content + bottom_padding;
+        let should_auto_scroll = self.config.lock_to_bottom || (self.config.auto_scroll && self.at_bottom);
+        let scroll = if should_auto_scroll && total > 0 {
             max_scroll
         } else {
             self.scroll.min(max_scroll)
         };
         self.scroll = scroll;
+        // Update at_bottom based on final scroll position (using padded max)
+        self.at_bottom = total == 0 || scroll >= max_scroll;
 
         // Render block with title
         let filter_info = if buffer.filter_pattern().is_some() {
@@ -428,12 +536,20 @@ impl TrafficView {
         } else {
             ""
         };
+        let save_indicator = if buffer.is_saving() {
+            " [SAVING]"
+        } else {
+            ""
+        };
+        // Cap displayed scroll position at content max (don't show padding in title)
+        let display_scroll = scroll.min(max_scroll_content);
         let block = block.title(format!(
-            " Traffic [{}/{}]{}{} ",
-            scroll + 1,
+            " Traffic [{}/{}]{}{}{} ",
+            display_scroll + 1,
             total.max(1),
             filter_info,
             lock_indicator,
+            save_indicator,
         ));
         block.render(area, buf);
 
@@ -450,7 +566,8 @@ impl TrafficView {
                 &chunk, timestamp_width, content_width, prefix_width, true,
                 &matches, current_match,
             );
-            Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
+            let line_area = Rect::new(inner.x, y, inner.width, 1);
+            Paragraph::new(line).render(line_area, buf);
             y += 1;
         }
 
@@ -462,9 +579,9 @@ impl TrafficView {
                 .render(Rect::new(inner.x + 1, inner.y, inner.width - 2, 1), buf);
         }
 
-        // Scrollbar
+        // Scrollbar (use content max, not padded max, so it shows "at bottom" when content ends)
         if total > visible_height {
-            self.render_scrollbar(area, buf, max_scroll + 1, scroll);
+            self.render_scrollbar(area, buf, max_scroll_content + 1, display_scroll);
         }
     }
 
@@ -505,15 +622,24 @@ impl TrafficView {
         self.last_visible_height = visible_height;
         
         // Calculate scroll position with proper bounds (in display lines)
-        let max_scroll = total_display_lines.saturating_sub(visible_height);
-        let scroll = if self.config.auto_scroll && total_display_lines > 0 {
+        // Add 10% bottom padding so user can clearly see when they've hit the bottom
+        // Only apply padding when there's actually scrollable content
+        let max_scroll_content = total_display_lines.saturating_sub(visible_height);
+        let bottom_padding = if max_scroll_content > 0 { visible_height / 10 } else { 0 };
+        let max_scroll = max_scroll_content + bottom_padding;
+        let should_auto_scroll = self.config.lock_to_bottom || (self.config.auto_scroll && self.at_bottom);
+        let scroll = if should_auto_scroll && total_display_lines > 0 {
             max_scroll
         } else {
             self.scroll.min(max_scroll)
         };
         self.scroll = scroll;
+        // Update at_bottom based on final scroll position (using padded max)
+        self.at_bottom = total_display_lines == 0 || scroll >= max_scroll;
 
         // Render block with title showing display line position
+        // Cap displayed scroll position at content max (don't show padding in title)
+        let display_scroll = scroll.min(max_scroll_content);
         let filter_info = if buffer.filter_pattern().is_some() {
             let total_unfiltered = buffer.total_len();
             let filtered_chunks = buffer.len();
@@ -526,12 +652,18 @@ impl TrafficView {
         } else {
             ""
         };
+        let save_indicator = if buffer.is_saving() {
+            " [SAVING]"
+        } else {
+            ""
+        };
         let block = block.title(format!(
-            " Traffic [{}/{}]{}{} ",
-            scroll + 1,
+            " Traffic [{}/{}]{}{}{} ",
+            display_scroll + 1,
             total_display_lines.max(1),
             filter_info,
             lock_indicator,
+            save_indicator,
         ));
         block.render(area, buf);
 
@@ -552,12 +684,14 @@ impl TrafficView {
             let start = line_within_chunk * content_width;
             let end = (start + content_width).min(content.len());
 
+            let line_area = Rect::new(inner.x, y, inner.width, 1);
+
             // Only show prefix on first line of chunk
             if line_within_chunk == 0 {
                 let line = self.format_chunk_line_with_content_highlighted(
                     chunk, timestamp_width, content, start, end, &matches, current_match
                 );
-                Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
+                Paragraph::new(line).render(line_area, buf);
             } else {
                 // Continuation line - indent to align with content
                 let indent = " ".repeat(prefix_width);
@@ -565,7 +699,7 @@ impl TrafficView {
                 let mut spans = vec![Span::raw(indent)];
                 spans.extend(content_spans);
                 let line = Line::from(spans);
-                Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
+                Paragraph::new(line).render(line_area, buf);
             }
             
             y += 1;
@@ -579,9 +713,9 @@ impl TrafficView {
                 .render(Rect::new(inner.x + 1, inner.y, inner.width - 2, 1), buf);
         }
 
-        // Scrollbar
+        // Scrollbar (use content max, not padded max, so it shows "at bottom" when content ends)
         if total_display_lines > visible_height {
-            self.render_scrollbar(area, buf, max_scroll + 1, scroll);
+            self.render_scrollbar(area, buf, max_scroll_content + 1, display_scroll);
         }
     }
 
@@ -773,6 +907,8 @@ impl TrafficView {
                 format!("Filter [{}/{}]", visible_chunks, total_chunks)
             };
             (title, &self.filter_input)
+        } else if self.dir_path_focused {
+            ("Save Directory".to_string(), &self.dir_path_input)
         } else {
             ("Send".to_string(), &self.send_input)
         };
@@ -793,6 +929,7 @@ impl TrafficView {
         &self,
         area: Rect,
         buf: &mut Buffer,
+        handle: &SessionHandle,
         serial_config: &SerialConfig,
         focus: Focus,
     ) {
@@ -801,47 +938,15 @@ impl TrafficView {
             .constraints([Constraint::Length(8), Constraint::Min(5)])
             .split(area);
 
-        // Connection info (read-only)
+        // Connection info with statistics
         let conn_block = Block::default()
             .title(" Connection ")
             .borders(Borders::ALL)
             .border_style(Theme::border());
 
-        let conn_inner = conn_block.inner(chunks[0]);
-        conn_block.render(chunks[0], buf);
-
-        let conn_lines = vec![
-            Line::from(vec![
-                Span::styled("Baud:  ", Theme::muted()),
-                Span::raw(serial_config.baud_rate.to_string()),
-            ]),
-            Line::from(vec![
-                Span::styled("Data:  ", Theme::muted()),
-                Span::raw(format!("{:?}", serial_config.data_bits)),
-            ]),
-            Line::from(vec![
-                Span::styled("Parity:", Theme::muted()),
-                Span::raw(format!(" {:?}", serial_config.parity)),
-            ]),
-            Line::from(vec![
-                Span::styled("Stop:  ", Theme::muted()),
-                Span::raw(format!("{:?}", serial_config.stop_bits)),
-            ]),
-            Line::from(vec![
-                Span::styled("Flow:  ", Theme::muted()),
-                Span::raw(format!("{:?}", serial_config.flow_control)),
-            ]),
-        ];
-
-        for (i, line) in conn_lines.into_iter().enumerate() {
-            if i >= conn_inner.height as usize {
-                break;
-            }
-            Paragraph::new(line).render(
-                Rect::new(conn_inner.x, conn_inner.y + i as u16, conn_inner.width, 1),
-                buf,
-            );
-        }
+        ConnectionPanel::new(handle.port_name(), serial_config, handle.statistics())
+            .block(conn_block)
+            .render(chunks[0], buf);
 
         // Traffic config
         let config_block = Block::default()
@@ -875,6 +980,9 @@ impl TrafficView {
         if self.send_focused {
             return self.handle_send_key(key);
         }
+        if self.dir_path_focused {
+            return self.handle_dir_path_key(key);
+        }
 
         match focus {
             Focus::Main => self.handle_main_key(key, handle),
@@ -905,7 +1013,11 @@ impl TrafficView {
         };
         
         // Use the last known visible height for accurate scroll bounds
-        let max_scroll = total.saturating_sub(self.last_visible_height);
+        // Add 10% bottom padding to clearly show when at the very bottom
+        // Only apply padding when there's actually scrollable content
+        let max_scroll_content = total.saturating_sub(self.last_visible_height);
+        let bottom_padding = if max_scroll_content > 0 { self.last_visible_height / 10 } else { 0 };
+        let max_scroll = max_scroll_content + bottom_padding;
 
         match key.code {
             // Toggle lock_to_bottom with Ctrl+b
@@ -915,57 +1027,49 @@ impl TrafficView {
                 if self.config.lock_to_bottom {
                     self.config.auto_scroll = true;
                     self.scroll = max_scroll;
+                    self.at_bottom = true;
                 }
             }
             KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
                 // Lock mode: ignore scroll down (we're already at bottom)
                 if !self.config.lock_to_bottom {
                     self.scroll = self.scroll.saturating_add(1).min(max_scroll);
-                    // Re-enable auto_scroll if we reached the bottom
-                    if self.scroll >= max_scroll {
-                        self.config.auto_scroll = true;
-                    } else {
-                        self.config.auto_scroll = false;
-                    }
+                    self.at_bottom = self.scroll >= max_scroll;
                 }
             }
             KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
                 // Lock mode: ignore scroll up
                 if !self.config.lock_to_bottom {
                     self.scroll = self.scroll.saturating_sub(1);
-                    self.config.auto_scroll = false;
+                    self.at_bottom = self.scroll >= max_scroll;
                 }
             }
             KeyCode::Char('d') if has_ctrl => {
                 // Half-page down - lock mode ignores this
                 if !self.config.lock_to_bottom {
                     self.scroll = self.scroll.saturating_add(half_page).min(max_scroll);
-                    // Re-enable auto_scroll if we reached the bottom
-                    if self.scroll >= max_scroll {
-                        self.config.auto_scroll = true;
-                    } else {
-                        self.config.auto_scroll = false;
-                    }
+                    self.at_bottom = self.scroll >= max_scroll;
                 }
             }
             KeyCode::Char('u') if has_ctrl => {
                 // Half-page up - lock mode ignores this
                 if !self.config.lock_to_bottom {
                     self.scroll = self.scroll.saturating_sub(half_page);
-                    self.config.auto_scroll = false;
+                    self.at_bottom = self.scroll >= max_scroll;
                 }
             }
             KeyCode::Char('g') => {
                 // Go to top - lock mode ignores this
                 if !self.config.lock_to_bottom {
                     self.scroll = 0;
-                    self.config.auto_scroll = false;
+                    self.at_bottom = false;
                 }
             }
             KeyCode::Char('G') => {
                 // Go to bottom - always works, re-enables auto_scroll
                 self.scroll = max_scroll;
                 self.config.auto_scroll = true;
+                self.at_bottom = true;
             }
             KeyCode::Char('/') => {
                 self.search_focused = true;
@@ -1003,8 +1107,10 @@ impl TrafficView {
                 if let Some(pos) = scroll_pos {
                     // Only navigate if not in lock mode, or if match is visible from bottom
                     if !self.config.lock_to_bottom {
-                        self.scroll = pos;
-                        self.config.auto_scroll = false;
+                        // Position match with 20% of visible height above it (like vim scrolloff)
+                        let offset = self.last_visible_height / 5;
+                        self.scroll = pos.saturating_sub(offset);
+                        self.at_bottom = self.scroll >= max_scroll;
                     }
                 }
             }
@@ -1034,8 +1140,10 @@ impl TrafficView {
                 if let Some(pos) = scroll_pos {
                     // Only navigate if not in lock mode
                     if !self.config.lock_to_bottom {
-                        self.scroll = pos;
-                        self.config.auto_scroll = false;
+                        // Position match with 20% of visible height above it (like vim scrolloff)
+                        let offset = self.last_visible_height / 5;
+                        self.scroll = pos.saturating_sub(offset);
+                        self.at_bottom = self.scroll >= max_scroll;
                     }
                 }
             }
@@ -1045,6 +1153,41 @@ impl TrafficView {
     }
 
     fn handle_config_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
+        // Keys that can trigger a toggle: Enter, Space, h, l, Left, Right
+        let is_toggle_key = matches!(
+            key.code,
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('h') | KeyCode::Char('l') 
+            | KeyCode::Left | KeyCode::Right
+        );
+        
+        // Track if we're about to toggle file_save_enabled
+        let mut toggling_file_save = false;
+        let file_save_was_enabled = self.config.file_save_enabled;
+        
+        if is_toggle_key && !self.config_nav.is_dropdown_open() {
+            if let Some(field) = self.config_nav.current_field(TRAFFIC_CONFIG_SECTIONS, &self.config) {
+                // Handle text input field (directory)
+                if field.kind.is_text_input() && field.id == "file_save_directory" {
+                    if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
+                        self.dir_path_input.set_content(&self.config.file_save_directory);
+                        self.dir_path_focused = true;
+                        return Some(TrafficAction::RequestClear);
+                    }
+                }
+                
+                // Intercept file_save_enabled toggle
+                if field.id == "file_save_enabled" && matches!(field.kind, FieldKind::Toggle) {
+                    if !self.config.file_save_enabled {
+                        // About to enable - validate directory first
+                        if let Some(error) = self.validate_save_directory() {
+                            return Some(TrafficAction::Toast(crate::widget::Toast::error(error)));
+                        }
+                    }
+                    toggling_file_save = true;
+                }
+            }
+        }
+
         let result = handle_config_key(
             key,
             &mut self.config_nav,
@@ -1055,11 +1198,54 @@ impl TrafficView {
         match result {
             ConfigKeyResult::Changed => {
                 self.sync_config_to_buffer(handle);
+                
+                // Check if file_save_enabled was toggled
+                if toggling_file_save && self.config.file_save_enabled != file_save_was_enabled {
+                    if self.config.file_save_enabled {
+                        // Just enabled - start file saving
+                        return Some(TrafficAction::StartFileSaving);
+                    } else {
+                        // Just disabled - stop file saving
+                        return Some(TrafficAction::StopFileSaving);
+                    }
+                }
+                
                 Some(TrafficAction::RequestClear)
             }
             ConfigKeyResult::DropdownClosed => Some(TrafficAction::RequestClear),
             _ => None,
         }
+    }
+    
+    /// Validate the save directory. Returns Some(error_message) if invalid, None if valid.
+    fn validate_save_directory(&self) -> Option<String> {
+        let path = std::path::Path::new(&self.config.file_save_directory);
+        
+        // Check if directory exists
+        if !path.exists() {
+            // Try to create it
+            if let Err(e) = std::fs::create_dir_all(path) {
+                return Some(format!("Cannot create directory: {}", e));
+            }
+        }
+        
+        // Check if it's actually a directory
+        if !path.is_dir() {
+            return Some("Path is not a directory".to_string());
+        }
+        
+        // Check if writable by trying to create a temp file
+        let test_file = path.join(".serial-monitor-test");
+        match std::fs::File::create(&test_file) {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&test_file);
+            }
+            Err(e) => {
+                return Some(format!("Directory not writable: {}", e));
+            }
+        }
+        
+        None // Valid
     }
 
     fn handle_search_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
@@ -1158,6 +1344,29 @@ impl TrafficView {
             }
             _ => {
                 self.send_input.handle_key(key);
+            }
+        }
+        None
+    }
+
+    fn handle_dir_path_key(&mut self, key: KeyEvent) -> Option<TrafficAction> {
+        match key.code {
+            KeyCode::Enter => {
+                // Apply directory path and exit input mode
+                self.config.file_save_directory = self.dir_path_input.content.clone();
+                self.dir_path_focused = false;
+                // Layout changed - request clear to avoid artifacts
+                return Some(TrafficAction::RequestClear);
+            }
+            KeyCode::Esc => {
+                // Cancel and exit without saving
+                self.dir_path_focused = false;
+                self.dir_path_input.clear();
+                // Layout changed - request clear to avoid artifacts
+                return Some(TrafficAction::RequestClear);
+            }
+            _ => {
+                self.dir_path_input.handle_key(key);
             }
         }
         None

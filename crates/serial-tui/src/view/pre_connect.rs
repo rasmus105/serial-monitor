@@ -40,6 +40,10 @@ pub struct PreConnectView {
     pub search_input: TextInputState,
     /// Whether search input is focused.
     pub search_focused: bool,
+    /// Directory path input state.
+    pub dir_path_input: TextInputState,
+    /// Whether directory path input is focused.
+    pub dir_path_focused: bool,
     /// Last visible height for port list (for half-page scroll).
     last_visible_height: usize,
 }
@@ -54,6 +58,11 @@ pub struct PreConnectConfig {
     pub flow_control_index: usize,
     // Session settings
     pub line_ending_index: usize,
+    // File saving settings
+    pub file_save_enabled: bool,
+    pub file_save_format_index: usize,
+    pub file_save_encoding_index: usize,
+    pub file_save_directory: String,
 }
 
 impl Default for PreConnectConfig {
@@ -77,6 +86,13 @@ impl Default for PreConnectConfig {
             flow_control_index: 0,
             // Default to LF line endings
             line_ending_index: 1, // LF
+            // File saving defaults
+            file_save_enabled: false,
+            file_save_format_index: 1, // Encoded
+            file_save_encoding_index: 1, // ASCII
+            file_save_directory: serial_core::buffer::default_cache_directory()
+                .to_string_lossy()
+                .into_owned(),
         }
     }
 }
@@ -115,7 +131,11 @@ const STOP_BITS_OPTIONS: &[&str] = &["1", "2"];
 const FLOW_CONTROL_OPTIONS: &[&str] = &["None", "Software (XON/XOFF)", "Hardware (RTS/CTS)"];
 
 // Session settings options
-const LINE_ENDING_OPTIONS: &[&str] = &["None (Raw)", "LF (\\n)", "CR (\\r)", "CRLF (\\r\\n)"];
+const RX_CHUNKING_OPTIONS: &[&str] = &["None (Raw)", "LF (\\n)", "CR (\\r)", "CRLF (\\r\\n)"];
+
+// File saving options
+const FILE_SAVE_FORMAT_OPTIONS: &[&str] = &["Raw Binary", "Encoded Text"];
+const FILE_SAVE_ENCODING_OPTIONS: &[&str] = &["UTF-8", "ASCII", "Hex", "Binary"];
 
 static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
     Section {
@@ -202,10 +222,10 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
         header: Some("Data Handling"),
         fields: &[
             FieldDef {
-                id: "line_ending",
-                label: "Line Ending",
+                id: "rx_chunking",
+                label: "RX Chunking",
                 kind: FieldKind::Select {
-                    options: LINE_ENDING_OPTIONS,
+                    options: RX_CHUNKING_OPTIONS,
                 },
                 get: |c| FieldValue::OptionIndex(c.line_ending_index),
                 set: |c, v| {
@@ -213,6 +233,71 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
                         c.line_ending_index = i;
                     }
                 },
+                visible: always_visible,
+                validate: always_valid,
+            },
+        ],
+    },
+    Section {
+        header: Some("File Saving"),
+        fields: &[
+            FieldDef {
+                id: "file_save_enabled",
+                label: "Save to File",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.file_save_enabled),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.file_save_enabled = b;
+                    }
+                },
+                visible: always_visible,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_format",
+                label: "Format",
+                kind: FieldKind::Select {
+                    options: FILE_SAVE_FORMAT_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.file_save_format_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.file_save_format_index = i;
+                    }
+                },
+                visible: |c| c.file_save_enabled,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_encoding",
+                label: "Encoding",
+                kind: FieldKind::Select {
+                    options: FILE_SAVE_ENCODING_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.file_save_encoding_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.file_save_encoding_index = i;
+                    }
+                },
+                // Only visible when save enabled AND format is Encoded (index 1)
+                visible: |c| c.file_save_enabled && c.file_save_format_index == 1,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_directory",
+                label: "Directory",
+                kind: FieldKind::TextInput {
+                    placeholder: "Enter directory path...",
+                },
+                get: |c| FieldValue::string(c.file_save_directory.clone()),
+                set: |c, v| {
+                    if let FieldValue::String(s) = v {
+                        c.file_save_directory = s.into_owned();
+                    }
+                },
+                // Always visible in pre-connect (file saving only starts on connect)
                 visible: always_visible,
                 validate: always_valid,
             },
@@ -228,6 +313,8 @@ impl PreConnectView {
             config_nav: ConfigPanelNav::new(),
             search_input: TextInputState::new().with_placeholder("Search ports..."),
             search_focused: false,
+            dir_path_input: TextInputState::new().with_placeholder("Enter directory path..."),
+            dir_path_focused: false,
             last_visible_height: 20, // Reasonable default
         }
     }
@@ -244,7 +331,7 @@ impl PreConnectView {
     }
 
     pub fn is_input_mode(&self) -> bool {
-        self.search_focused
+        self.search_focused || self.dir_path_focused
     }
 
     pub fn draw(
@@ -254,8 +341,11 @@ impl PreConnectView {
         buf: &mut Buffer,
         focus: Focus,
     ) {
-        // Main area: port list + optional search bar
-        let main_chunks = if self.search_focused || self.port_list.has_search() {
+        // Main area: port list + optional search/directory input bar
+        let show_search_bar = self.search_focused || self.port_list.has_search();
+        let show_dir_bar = self.dir_path_focused;
+
+        let main_chunks = if show_search_bar || show_dir_bar {
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Min(5), Constraint::Length(3)])
@@ -306,6 +396,17 @@ impl PreConnectView {
             TextInput::new(&mut self.search_input)
                 .block(search_block)
                 .focused(self.search_focused)
+                .render(main_chunks[1], buf);
+        } else if self.dir_path_focused {
+            // Directory path input bar
+            let dir_block = Block::default()
+                .title(" Save Directory ")
+                .borders(Borders::ALL)
+                .border_style(Theme::border_focused());
+
+            TextInput::new(&mut self.dir_path_input)
+                .block(dir_block)
+                .focused(true)
                 .render(main_chunks[1], buf);
         }
 
@@ -372,6 +473,26 @@ impl PreConnectView {
             return None;
         }
 
+        // Handle directory path input mode
+        if self.dir_path_focused {
+            match key.code {
+                KeyCode::Enter => {
+                    // Apply directory path and exit input mode
+                    self.config.file_save_directory = self.dir_path_input.content.clone();
+                    self.dir_path_focused = false;
+                }
+                KeyCode::Esc => {
+                    // Cancel and exit without saving
+                    self.dir_path_focused = false;
+                    self.dir_path_input.clear();
+                }
+                _ => {
+                    self.dir_path_input.handle_key(key);
+                }
+            }
+            return None;
+        }
+
         match focus {
             Focus::Main => self.handle_main_key(key),
             Focus::Config => self.handle_config_key(key),
@@ -425,6 +546,10 @@ impl PreConnectView {
                         port: port.to_string(),
                         serial_config: self.config.to_serial_config(),
                         rx_chunking: self.config.rx_chunking(),
+                        file_save_enabled: self.config.file_save_enabled,
+                        file_save_format_index: self.config.file_save_format_index,
+                        file_save_encoding_index: self.config.file_save_encoding_index,
+                        file_save_directory: self.config.file_save_directory.clone(),
                     });
                 }
             }
@@ -490,7 +615,7 @@ impl PreConnectView {
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
-                // Open dropdown for select fields, toggle for toggle fields
+                // Open dropdown for select fields, toggle for toggle fields, open input for text fields
                 if let Some(field) = self
                     .config_nav
                     .current_field(PRECONNECT_CONFIG_SECTIONS, &self.config)
@@ -502,6 +627,12 @@ impl PreConnectView {
                         let _ = self
                             .config_nav
                             .toggle_current(PRECONNECT_CONFIG_SECTIONS, &mut self.config);
+                    } else if field.kind.is_text_input() {
+                        // Open text input bar for text fields
+                        if field.id == "file_save_directory" {
+                            self.dir_path_input.set_content(&self.config.file_save_directory);
+                            self.dir_path_focused = true;
+                        }
                     }
                 }
             }

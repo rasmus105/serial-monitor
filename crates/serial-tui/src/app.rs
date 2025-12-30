@@ -296,6 +296,7 @@ impl App {
                     main_area,
                     config_area,
                     buf,
+                    &state.handle,
                     &state.serial_config,
                     focus,
                 );
@@ -479,13 +480,21 @@ impl App {
                     return;
                 }
                 let port_path = parts[1];
-                // Get serial config from pre-connect view if available, or use defaults
-                let (serial_config, rx_chunking) = match &self.mode {
+                // Get serial config and file save settings from pre-connect view if available, or use defaults
+                let (serial_config, rx_chunking, file_save_enabled, file_save_format_index, file_save_encoding_index, file_save_directory) = match &self.mode {
                     AppMode::PreConnect(view) => {
-                        (view.config.to_serial_config(), view.config.rx_chunking())
+                        (
+                            view.config.to_serial_config(),
+                            view.config.rx_chunking(),
+                            view.config.file_save_enabled,
+                            view.config.file_save_format_index,
+                            view.config.file_save_encoding_index,
+                            view.config.file_save_directory.clone(),
+                        )
                     }
                     AppMode::Connected(state) => {
-                        (state.serial_config.clone(), ChunkingStrategy::Raw)
+                        (state.serial_config.clone(), ChunkingStrategy::Raw, false, 1, 1, 
+                         serial_core::buffer::default_cache_directory().to_string_lossy().into_owned())
                     }
                 };
                 // Build session config from global settings
@@ -496,7 +505,16 @@ impl App {
                     buffer_size: settings.buffer_size(),
                     auto_save: settings.to_auto_save_config(),
                 };
-                self.connect(port_path, serial_config, session_config, settings.keep_awake).await;
+                self.connect(
+                    port_path,
+                    serial_config,
+                    session_config,
+                    settings.keep_awake,
+                    file_save_enabled,
+                    file_save_format_index,
+                    file_save_encoding_index,
+                    file_save_directory,
+                ).await;
             }
             "disconnect" | "d" => {
                 self.disconnect().await;
@@ -577,6 +595,10 @@ impl App {
                 port,
                 serial_config,
                 rx_chunking,
+                file_save_enabled,
+                file_save_format_index,
+                file_save_encoding_index,
+                file_save_directory,
             } => {
                 // Build session config from global settings
                 let settings = &self.help.settings;
@@ -586,7 +608,16 @@ impl App {
                     buffer_size: settings.buffer_size(),
                     auto_save: settings.to_auto_save_config(),
                 };
-                self.connect(&port, serial_config, session_config, settings.keep_awake).await;
+                self.connect(
+                    &port,
+                    serial_config,
+                    session_config,
+                    settings.keep_awake,
+                    file_save_enabled,
+                    file_save_format_index,
+                    file_save_encoding_index,
+                    file_save_directory,
+                ).await;
             }
             PreConnectAction::Toast(toast) => {
                 self.toasts.push(toast);
@@ -610,6 +641,38 @@ impl App {
             }
             TrafficAction::RequestClear => {
                 self.needs_clear = true;
+            }
+            TrafficAction::StartFileSaving => {
+                if let AppMode::Connected(ref mut state) = self.mode {
+                    let config = &state.traffic.config;
+                    
+                    // Build save config from traffic settings
+                    let save_config = build_user_save_config(
+                        &config.file_save_directory,
+                        state.handle.port_name(),
+                        config.file_save_format_index,
+                        config.file_save_encoding_index,
+                    );
+                    
+                    // Start saving
+                    let runtime = tokio::runtime::Handle::current();
+                    let mut buffer = state.handle.buffer_mut();
+                    if let Err(e) = buffer.save(save_config, &runtime) {
+                        drop(buffer);
+                        state.traffic.config.file_save_enabled = false;
+                        self.toasts.error(format!("Failed to start file saving: {}", e));
+                    } else {
+                        let path = buffer.save_path().map(|p| p.display().to_string()).unwrap_or_default();
+                        drop(buffer);
+                        self.toasts.success(format!("Saving to {}", path));
+                    }
+                }
+            }
+            TrafficAction::StopFileSaving => {
+                if let AppMode::Connected(ref state) = self.mode {
+                    state.handle.buffer_mut().stop_saving();
+                    self.toasts.info("File saving stopped");
+                }
             }
         }
     }
@@ -643,6 +706,10 @@ impl App {
         serial_config: SerialConfig,
         session_config: SessionConfig,
         keep_awake: bool,
+        file_save_enabled: bool,
+        file_save_format_index: usize,
+        file_save_encoding_index: usize,
+        file_save_directory: String,
     ) {
         self.toasts.info(format!("Connecting to {}...", port));
 
@@ -651,12 +718,43 @@ impl App {
                 let mut traffic = TrafficView::new();
                 traffic.session_start = Some(SystemTime::now());
                 
+                // Apply file saving settings from pre-connect config
+                traffic.config.file_save_enabled = file_save_enabled;
+                traffic.config.file_save_format_index = file_save_format_index;
+                traffic.config.file_save_encoding_index = file_save_encoding_index;
+                traffic.config.file_save_directory = file_save_directory.clone();
+                
                 // Create keep-awake handle and enable if setting is on
                 let mut keep_awake_handle = KeepAwake::new();
                 if keep_awake {
                     keep_awake_handle.enable();
                     if !keep_awake_handle.is_active() {
                         self.toasts.info("Keep-awake not available on this system");
+                    }
+                }
+                
+                // Start file saving if enabled from pre-connect
+                if file_save_enabled {
+                    let save_config = build_user_save_config(
+                        &file_save_directory,
+                        handle.port_name(),
+                        file_save_format_index,
+                        file_save_encoding_index,
+                    );
+                    
+                    let runtime = tokio::runtime::Handle::current();
+                    let mut buffer = handle.buffer_mut();
+                    match buffer.save(save_config, &runtime) {
+                        Ok(()) => {
+                            let path = buffer.save_path().map(|p| p.display().to_string()).unwrap_or_default();
+                            drop(buffer);
+                            self.toasts.success(format!("Saving to {}", path));
+                        }
+                        Err(e) => {
+                            drop(buffer);
+                            traffic.config.file_save_enabled = false;
+                            self.toasts.error(format!("Failed to start file saving: {}", e));
+                        }
                     }
                 }
                 
@@ -719,6 +817,11 @@ pub enum PreConnectAction {
         serial_config: SerialConfig,
         /// RX chunking strategy (from pre-connect config).
         rx_chunking: ChunkingStrategy,
+        /// File saving settings from pre-connect config.
+        file_save_enabled: bool,
+        file_save_format_index: usize,
+        file_save_encoding_index: usize,
+        file_save_directory: String,
     },
     Toast(crate::widget::Toast),
 }
@@ -729,6 +832,10 @@ pub enum TrafficAction {
     Toast(crate::widget::Toast),
     /// Request a full terminal clear (for layout changes).
     RequestClear,
+    /// Start file saving with the current config.
+    StartFileSaving,
+    /// Stop file saving.
+    StopFileSaving,
 }
 
 /// Actions from file sender view.
@@ -736,4 +843,63 @@ pub enum FileSenderAction {
     StartSending,
     CancelSending,
     Toast(crate::widget::Toast),
+}
+
+/// Build a UserSaveConfig from traffic config settings.
+fn build_user_save_config(
+    directory: &str,
+    port_name: &str,
+    format_index: usize,
+    encoding_index: usize,
+) -> serial_core::UserSaveConfig {
+    use serial_core::{Encoding, SaveFormat, SaveScope, UserSaveConfig, DirectionFilter};
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+    use chrono::{DateTime, Utc};
+    
+    // Generate filename with timestamp
+    let clean_port_name = port_name
+        .replace(['/', '\\'], "_")
+        .trim_start_matches("_dev_")
+        .to_string();
+    let dt: DateTime<Utc> = SystemTime::now().into();
+    let timestamp = dt.format("%Y-%m-%dT%H-%M-%S");
+    
+    // Determine format and extension
+    let (format, extension) = if format_index == 0 {
+        // Raw Binary
+        (SaveFormat::Raw, "bin")
+    } else {
+        // Encoded Text
+        let encoding = match encoding_index {
+            0 => Encoding::Utf8,
+            1 => Encoding::Ascii,
+            2 => Encoding::Hex(Default::default()),
+            3 => Encoding::Binary(Default::default()),
+            _ => Encoding::Ascii,
+        };
+        let ext = match encoding {
+            Encoding::Utf8 | Encoding::Ascii => "txt",
+            Encoding::Hex(_) => "hex",
+            Encoding::Binary(_) => "bin",
+        };
+        (
+            SaveFormat::Encoded {
+                encoding,
+                include_timestamps: true,
+                include_direction: true,
+            },
+            ext,
+        )
+    };
+    
+    let filename = format!("{}-{}.{}", clean_port_name, timestamp, extension);
+    let path = PathBuf::from(directory).join(filename);
+    
+    UserSaveConfig {
+        path,
+        scope: SaveScope::ExistingAndContinue, // Save existing buffer + continue streaming
+        format,
+        directions: DirectionFilter::all(),
+    }
 }

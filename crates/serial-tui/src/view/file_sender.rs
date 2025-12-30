@@ -21,7 +21,7 @@ use serial_core::{
 use crate::{
     app::{FileSenderAction, Focus},
     theme::Theme,
-    widget::{ConfigPanel, TextInput, Toast, handle_config_key, text_input::TextInputState},
+    widget::{ConfigPanel, ConnectionPanel, TextInput, Toast, handle_config_key, text_input::TextInputState},
 };
 
 /// File sender view state.
@@ -182,6 +182,7 @@ impl FileSenderView {
         main_area: Rect,
         config_area: Option<Rect>,
         buf: &mut Buffer,
+        handle: &SessionHandle,
         serial_config: &SerialConfig,
         focus: Focus,
     ) {
@@ -318,7 +319,7 @@ impl FileSenderView {
 
         // Config panel
         if let Some(config_area) = config_area {
-            self.draw_config(config_area, buf, serial_config, focus);
+            self.draw_config(config_area, buf, handle, serial_config, focus);
         }
     }
 
@@ -326,37 +327,24 @@ impl FileSenderView {
         &self,
         area: Rect,
         buf: &mut Buffer,
+        handle: &SessionHandle,
         serial_config: &SerialConfig,
         focus: Focus,
     ) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(5), Constraint::Min(5)])
+            .constraints([Constraint::Length(8), Constraint::Min(5)])
             .split(area);
 
-        // Connection info (read-only)
+        // Connection info with statistics
         let conn_block = Block::default()
             .title(" Connection ")
             .borders(Borders::ALL)
             .border_style(Theme::border());
 
-        let conn_inner = conn_block.inner(chunks[0]);
-        conn_block.render(chunks[0], buf);
-
-        let conn_lines = vec![Line::from(vec![
-            Span::styled("Baud: ", Theme::muted()),
-            Span::raw(serial_config.baud_rate.to_string()),
-        ])];
-
-        for (i, line) in conn_lines.into_iter().enumerate() {
-            if i >= conn_inner.height as usize {
-                break;
-            }
-            Paragraph::new(line).render(
-                Rect::new(conn_inner.x, conn_inner.y + i as u16, conn_inner.width, 1),
-                buf,
-            );
-        }
+        ConnectionPanel::new(handle.port_name(), serial_config, handle.statistics())
+            .block(conn_block)
+            .render(chunks[0], buf);
 
         // File sender config
         let config_block = Block::default()
