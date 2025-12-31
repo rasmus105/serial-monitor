@@ -141,6 +141,10 @@ pub struct GraphSettings {
     pub csv_delimiter_index: usize,
     /// CSV column names.
     pub csv_columns: String,
+    /// Parse RX (received) data for graphing.
+    pub parse_rx: bool,
+    /// Parse TX (transmitted) data for graphing.
+    pub parse_tx: bool,
     /// Show RX rate (for rate mode).
     pub show_rx: bool,
     /// Show TX rate (for rate mode).
@@ -161,6 +165,8 @@ impl Default for GraphSettings {
             regex_pattern: String::new(),
             csv_delimiter_index: 0, // Comma
             csv_columns: String::new(),
+            parse_rx: true,
+            parse_tx: false,
             show_rx: true,
             show_tx: true,
             time_range_index: 0, // All

@@ -597,6 +597,31 @@ impl DataBuffer {
         }
     }
 
+    /// Set which directions to parse for graphing.
+    ///
+    /// This clears existing parsed series and re-processes all raw chunks
+    /// with the new direction settings. Packet rate data is preserved.
+    pub fn set_graph_parse_directions(&mut self, parse_rx: bool, parse_tx: bool) {
+        if let Some(engine) = &mut self.graph {
+            // Only reparse if something changed
+            if engine.parse_rx == parse_rx && engine.parse_tx == parse_tx {
+                return;
+            }
+            
+            engine.parse_rx = parse_rx;
+            engine.parse_tx = parse_tx;
+            
+            // Clear parsed series data (but keep packet rate)
+            engine.series.clear();
+            engine.chunks_processed = 0;
+            
+            // Re-process all raw chunks with new direction settings
+            for raw in &self.raw_chunks {
+                engine.process_raw_chunk(raw);
+            }
+        }
+    }
+
     /// Get graph engine reference
     pub fn graph(&self) -> Option<&GraphEngine> {
         self.graph.as_ref()

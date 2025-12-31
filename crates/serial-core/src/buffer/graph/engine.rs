@@ -161,6 +161,11 @@ pub struct GraphEngine {
     /// configuration for *how* data should be parsed.
     pub config: GraphEngineConfig,
 
+    /// Whether to parse RX (received) data
+    pub parse_rx: bool,
+    /// Whether to parse TX (transmitted) data
+    pub parse_tx: bool,
+
     /// All different graph series and their data
     pub series: HashMap<String, GraphSeries>,
 
@@ -187,6 +192,8 @@ impl GraphEngine {
                     max_samples: 6000, // 10 minutes at 100ms windows
                 },
             },
+            parse_rx: true,
+            parse_tx: false,
             series: HashMap::new(),
             max_points_per_series: Self::DEFAULT_MAX_POINTS,
             next_color: 0,
@@ -206,10 +213,20 @@ impl GraphEngine {
     pub(crate) fn process_raw_chunk(&mut self, chunk: &RawChunk) {
         self.chunks_processed += 1;
 
-        // Update packet rate tracking
+        // Update packet rate tracking (always tracked regardless of parse settings)
         self.config
             .packet_rate
             .record(chunk.timestamp, chunk.direction, chunk.data.len());
+
+        // Check if we should parse this direction
+        let should_parse = match chunk.direction {
+            Direction::Rx => self.parse_rx,
+            Direction::Tx => self.parse_tx,
+        };
+
+        if !should_parse {
+            return;
+        }
 
         // Parse data as UTF-8 and store data points
         let text = String::from_utf8_lossy(&chunk.data);

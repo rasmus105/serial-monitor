@@ -46,6 +46,8 @@ struct AppliedParserConfig {
     regex_pattern: String,
     csv_delimiter_index: usize,
     csv_columns: String,
+    parse_rx: bool,
+    parse_tx: bool,
 }
 
 impl AppliedParserConfig {
@@ -55,6 +57,8 @@ impl AppliedParserConfig {
             regex_pattern: config.regex_pattern.clone(),
             csv_delimiter_index: config.csv_delimiter_index,
             csv_columns: config.csv_columns.clone(),
+            parse_rx: config.parse_rx,
+            parse_tx: config.parse_tx,
         }
     }
 }
@@ -99,6 +103,10 @@ pub struct GraphConfig {
     pub csv_delimiter_index: usize,
     /// CSV column names (comma-separated input string)
     pub csv_columns: String,
+    /// Parse RX (received) data for graphing
+    pub parse_rx: bool,
+    /// Parse TX (transmitted) data for graphing
+    pub parse_tx: bool,
     
     // --- RX/TX Rate mode options ---
     /// Show RX rate
@@ -123,6 +131,8 @@ impl Default for GraphConfig {
             regex_pattern: String::new(),
             csv_delimiter_index: 0, // Comma
             csv_columns: String::new(),
+            parse_rx: true,
+            parse_tx: false,
             show_rx: true,
             show_tx: true,
             time_range_index: 0, // All
@@ -326,6 +336,28 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
                 visible: |c| c.mode_index == 0 && c.parser_type_index == 1, // Parse Data + CSV
                 enabled: always_enabled,
                 parent_id: Some("parser_type"),
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "parse_rx",
+                label: "Parse RX",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.parse_rx),
+                set: |c, v| { if let FieldValue::Bool(b) = v { c.parse_rx = b; } },
+                visible: always_visible,
+                enabled: |c| c.mode_index == 0, // Parsed Data mode
+                parent_id: None,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "parse_tx",
+                label: "Parse TX",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.parse_tx),
+                set: |c, v| { if let FieldValue::Bool(b) = v { c.parse_tx = b; } },
+                visible: always_visible,
+                enabled: |c| c.mode_index == 0, // Parsed Data mode
+                parent_id: None,
                 validate: always_valid,
             },
         ],
@@ -891,12 +923,13 @@ impl GraphView {
                     // Enable with current parser config
                     if let Some(parser) = self.config.build_parser() {
                         buffer.enable_graph_with_parser(parser);
-                        self.last_applied_parser = Some(AppliedParserConfig::from_config(&self.config));
                     } else {
                         // Fallback to default if parser can't be built (e.g., invalid regex)
                         buffer.enable_graph();
-                        self.last_applied_parser = Some(AppliedParserConfig::from_config(&self.config));
                     }
+                    // Apply parse direction settings
+                    buffer.set_graph_parse_directions(self.config.parse_rx, self.config.parse_tx);
+                    self.last_applied_parser = Some(AppliedParserConfig::from_config(&self.config));
                 }
             }
             _ => {}
@@ -1033,24 +1066,43 @@ impl GraphView {
             return;
         }
         
-        // Build the new parser
-        if let Some(parser) = self.config.build_parser() {
-            // Start loading indicator
-            self.loading = Some(LoadingState::new("Reparsing data..."));
-            
-            // Apply the parser (this re-processes all data)
-            handle.buffer_mut().set_graph_parser(parser);
-            
-            // Update tracking
-            self.last_applied_parser = Some(current);
-            
-            // Clear loading (in a real async scenario, this would be done on completion)
-            // For now, since set_graph_parser is synchronous, we clear it
-            // but mark_visible won't have been called yet, so it won't flash
-            if let Some(ref loading) = self.loading {
-                if loading.can_dismiss() {
-                    self.loading = None;
-                }
+        // Check what kind of update is needed
+        let parser_changed = self.last_applied_parser.as_ref().map_or(true, |last| {
+            last.parser_type_index != current.parser_type_index
+                || last.regex_pattern != current.regex_pattern
+                || last.csv_delimiter_index != current.csv_delimiter_index
+                || last.csv_columns != current.csv_columns
+        });
+        
+        let direction_changed = self.last_applied_parser.as_ref().map_or(false, |last| {
+            last.parse_rx != current.parse_rx || last.parse_tx != current.parse_tx
+        });
+        
+        // Start loading indicator
+        self.loading = Some(LoadingState::new("Reparsing data..."));
+        
+        if parser_changed {
+            // Parser changed - need to rebuild everything
+            if let Some(parser) = self.config.build_parser() {
+                let mut buffer = handle.buffer_mut();
+                buffer.set_graph_parser(parser);
+                // Also update direction settings
+                buffer.set_graph_parse_directions(self.config.parse_rx, self.config.parse_tx);
+            }
+        } else if direction_changed {
+            // Only direction changed - just update directions
+            handle.buffer_mut().set_graph_parse_directions(self.config.parse_rx, self.config.parse_tx);
+        }
+        
+        // Update tracking
+        self.last_applied_parser = Some(current);
+        
+        // Clear loading (in a real async scenario, this would be done on completion)
+        // For now, since set_graph_parser is synchronous, we clear it
+        // but mark_visible won't have been called yet, so it won't flash
+        if let Some(ref loading) = self.loading {
+            if loading.can_dismiss() {
+                self.loading = None;
             }
         }
     }
@@ -1126,6 +1178,8 @@ impl GraphView {
         self.config.regex_pattern = settings.regex_pattern.clone();
         self.config.csv_delimiter_index = settings.csv_delimiter_index;
         self.config.csv_columns = settings.csv_columns.clone();
+        self.config.parse_rx = settings.parse_rx;
+        self.config.parse_tx = settings.parse_tx;
         self.config.show_rx = settings.show_rx;
         self.config.show_tx = settings.show_tx;
         self.config.time_range_index = settings.time_range_index;
@@ -1141,6 +1195,8 @@ impl GraphView {
             regex_pattern: self.config.regex_pattern.clone(),
             csv_delimiter_index: self.config.csv_delimiter_index,
             csv_columns: self.config.csv_columns.clone(),
+            parse_rx: self.config.parse_rx,
+            parse_tx: self.config.parse_tx,
             show_rx: self.config.show_rx,
             show_tx: self.config.show_tx,
             time_range_index: self.config.time_range_index,
