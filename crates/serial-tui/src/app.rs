@@ -221,6 +221,14 @@ impl App {
             self.draw_command_bar(cmd_area, buf);
         }
 
+        // Draw loading overlay (from graph view if reparsing)
+        if let AppMode::Connected(state) = &mut self.mode {
+            if let Some(ref mut loading) = state.graph.loading {
+                loading.mark_visible();
+                crate::widget::LoadingOverlay::new(loading).render(area, buf);
+            }
+        }
+
         // Draw toasts overlay
         render_toasts(&self.toasts, area, buf);
 
@@ -405,7 +413,7 @@ impl App {
                         // Tab switching
                         let is_input_mode = match state.tab {
                             ConnectedTab::Traffic => state.traffic.is_input_mode(),
-                            ConnectedTab::Graph => false,
+                            ConnectedTab::Graph => state.graph.is_input_mode(),
                             ConnectedTab::FileSender => state.file_sender.is_input_mode(),
                         };
 
@@ -452,7 +460,9 @@ impl App {
                                 }
                             }
                             ConnectedTab::Graph => {
-                                state.graph.handle_key(key, self.focus, &state.handle);
+                                if let Some(action) = state.graph.handle_key(key, self.focus, &state.handle) {
+                                    self.handle_graph_action(action);
+                                }
                             }
                             ConnectedTab::FileSender => {
                                 if let Some(action) = state.file_sender.handle_key(key, self.focus) {
@@ -473,6 +483,8 @@ impl App {
                 // Update file sender progress if active
                 if let AppMode::Connected(ref mut state) = self.mode {
                     state.file_sender.tick();
+                    // Dismiss loading overlay if it can be dismissed
+                    state.graph.dismiss_loading_if_ready();
                 }
             }
         }
@@ -711,6 +723,14 @@ impl App {
         }
     }
 
+    fn handle_graph_action(&mut self, action: GraphAction) {
+        match action {
+            GraphAction::Toast(toast) => {
+                self.toasts.push(toast);
+            }
+        }
+    }
+
     async fn connect(
         &mut self,
         port: &str,
@@ -808,7 +828,7 @@ impl App {
             AppMode::PreConnect(view) => view.is_input_mode(),
             AppMode::Connected(state) => match state.tab {
                 ConnectedTab::Traffic => state.traffic.is_input_mode(),
-                ConnectedTab::Graph => false,
+                ConnectedTab::Graph => state.graph.is_input_mode(),
                 ConnectedTab::FileSender => state.file_sender.is_input_mode(),
             },
         }
@@ -853,6 +873,11 @@ pub enum TrafficAction {
 pub enum FileSenderAction {
     StartSending,
     CancelSending,
+    Toast(crate::widget::Toast),
+}
+
+/// Actions from graph view.
+pub enum GraphAction {
     Toast(crate::widget::Toast),
 }
 

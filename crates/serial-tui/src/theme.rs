@@ -28,7 +28,9 @@ impl Theme {
     // UI element colors
     pub const BORDER: Color = Color::DarkGray;
     pub const BORDER_FOCUSED: Color = Color::Cyan;
-    pub const SELECTION: Color = Color::DarkGray;
+    /// Selection background - using indexed color 236 (very dark gray) for subtle highlighting
+    /// that doesn't wash out foreground colors. Falls back gracefully on 16-color terminals.
+    pub const SELECTION: Color = Color::Indexed(236);
     pub const MUTED: Color = Color::DarkGray;
     pub const HIGHLIGHT: Color = Color::White;
 

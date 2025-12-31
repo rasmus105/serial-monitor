@@ -151,8 +151,10 @@ fn handle_text_edit_key<T: 'static>(
 ) -> ConfigKeyResult {
     match key.code {
         KeyCode::Enter => {
-            let _ = nav.apply_text_edit(sections, config);
-            ConfigKeyResult::Changed
+            match nav.apply_text_edit(sections, config) {
+                Ok(()) => ConfigKeyResult::Changed,
+                Err(msg) => ConfigKeyResult::ValidationFailed(msg),
+            }
         }
         KeyCode::Esc => {
             nav.cancel_text_edit();

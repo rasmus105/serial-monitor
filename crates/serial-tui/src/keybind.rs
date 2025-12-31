@@ -196,6 +196,11 @@ pub fn all_keybinds() -> Vec<Keybind> {
             KeyContext::Graph,
         ),
         Keybind::new(
+            key(KeyCode::Tab),
+            "Switch Settings/Series",
+            KeyContext::Graph,
+        ),
+        Keybind::new(
             key(KeyCode::Char('t')),
             "Toggle series visibility",
             KeyContext::Graph,
