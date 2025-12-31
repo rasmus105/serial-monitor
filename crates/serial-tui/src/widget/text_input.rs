@@ -500,7 +500,7 @@ impl Widget for TextInput<'_> {
 // =============================================================================
 
 /// Find all path completions for the given input.
-fn find_path_completions(input: &str) -> Vec<String> {
+pub fn find_path_completions(input: &str) -> Vec<String> {
     if input.is_empty() {
         return Vec::new();
     }

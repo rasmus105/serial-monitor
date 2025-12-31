@@ -428,6 +428,14 @@ impl App {
         // Draw command bar if in command mode
         if let Some(cmd_area) = command_area {
             self.draw_command_bar(cmd_area, buf);
+            
+            // Draw completion popup above the command bar (needs full area for proper positioning)
+            let is_disconnected = matches!(self.sessions.active_state(), Some(SessionState::PreConnect(_)) | None);
+            let input_y = cmd_area.y;
+            let input_x = cmd_area.x + 2; // After border + ":" prefix
+            CompletionPopup::new(&self.completion, input_y, input_x)
+                .disconnected(is_disconnected)
+                .render(area, buf);
         }
 
         // Draw loading overlay (from graph view if reparsing)
@@ -493,15 +501,6 @@ impl App {
                 cell.set_fg(Theme::BG);
             }
         }
-
-        // Draw completion popup above the command bar
-        // input_y is the top of the command bar block (where popup should appear above)
-        // input_x is where the completions should align (after the ":" prefix)
-        let input_y = area.y;
-        let input_x = inner.x + 1; // After the ":" prefix
-        CompletionPopup::new(&self.completion, input_y, input_x)
-            .disconnected(is_disconnected)
-            .render(area, buf);
     }
 
     fn process_session_events(&mut self) {
