@@ -432,6 +432,9 @@ impl FileSenderView {
                 self.path_focused = false;
                 self.path_input.clear();
             }
+            KeyCode::Tab => {
+                self.path_input.complete_path();
+            }
             _ => {
                 self.path_input.handle_key(key);
             }

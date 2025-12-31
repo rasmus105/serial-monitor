@@ -505,6 +505,9 @@ impl PreConnectView {
                     self.dir_path_focused = false;
                     self.dir_path_input.clear();
                 }
+                KeyCode::Tab => {
+                    self.dir_path_input.complete_path();
+                }
                 _ => {
                     self.dir_path_input.handle_key(key);
                 }
