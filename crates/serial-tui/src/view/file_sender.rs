@@ -21,7 +21,11 @@ use serial_core::{
 use crate::{
     app::{FileSenderAction, Focus},
     theme::Theme,
-    widget::{ConfigPanel, ConnectionPanel, TextInput, Toast, handle_config_key, text_input::TextInputState},
+    widget::{
+        CompletionKind, CompletionPopup, CompletionState, ConfigPanel, ConnectionPanel,
+        PopupDirection, TextInput, Toast, handle_config_key,
+        text_input::{TextInputState, find_path_completions},
+    },
 };
 
 /// File sender view state.
@@ -30,6 +34,8 @@ pub struct FileSenderView {
     pub path_input: TextInputState,
     /// Whether path input is focused.
     pub path_focused: bool,
+    /// Path completion state.
+    pub path_completion: CompletionState,
     /// Selected file path.
     pub selected_path: Option<PathBuf>,
     /// File preview content.
@@ -153,6 +159,7 @@ impl FileSenderView {
         Self {
             path_input: TextInputState::new().with_placeholder("/path/to/file"),
             path_focused: false,
+            path_completion: CompletionState::default(),
             selected_path: None,
             preview: None,
             config: FileSenderConfig::default(),
@@ -219,6 +226,22 @@ impl FileSenderView {
             .block(path_block)
             .focused(self.path_focused)
             .render(main_chunks[0], buf);
+
+        // Render path completion popup (below the input)
+        if self.path_focused && self.path_completion.visible {
+            // Position popup below the path input, inside the inner area
+            let input_inner = Block::default()
+                .borders(Borders::ALL)
+                .inner(main_chunks[0]);
+            CompletionPopup::new(
+                &self.path_completion,
+                input_inner.y,
+                input_inner.x,
+            )
+            .direction(PopupDirection::Below)
+            .input_height(input_inner.height)
+            .render(main_area, buf);
+        }
 
         // Preview
         let preview_block = Block::default()
@@ -413,6 +436,13 @@ impl FileSenderView {
     fn handle_path_key(&mut self, key: KeyEvent) -> Option<FileSenderAction> {
         match key.code {
             KeyCode::Enter => {
+                // If completion is visible, apply the selected completion
+                if self.path_completion.visible {
+                    self.apply_path_completion();
+                    self.path_completion.hide();
+                    return None;
+                }
+                // Otherwise, confirm the path
                 let path_str = self.path_input.take();
                 if !path_str.is_empty() {
                     let path = PathBuf::from(&path_str);
@@ -429,17 +459,45 @@ impl FileSenderView {
                 self.path_focused = false;
             }
             KeyCode::Esc => {
-                self.path_focused = false;
-                self.path_input.clear();
+                if self.path_completion.visible {
+                    self.path_completion.hide();
+                } else {
+                    self.path_focused = false;
+                    self.path_input.clear();
+                }
             }
             KeyCode::Tab => {
-                self.path_input.complete_path();
+                if !self.path_completion.visible {
+                    self.update_path_completions();
+                } else {
+                    self.path_completion.next();
+                }
+                self.apply_path_completion();
+            }
+            KeyCode::BackTab => {
+                if self.path_completion.visible {
+                    self.path_completion.prev();
+                    self.apply_path_completion();
+                }
             }
             _ => {
                 self.path_input.handle_key(key);
+                self.path_completion.hide();
             }
         }
         None
+    }
+
+    fn update_path_completions(&mut self) {
+        let input = &self.path_input.content;
+        let completions = find_path_completions(input);
+        self.path_completion.show(completions, CompletionKind::Argument);
+    }
+
+    fn apply_path_completion(&mut self) {
+        if let Some(value) = self.path_completion.selected_value() {
+            self.path_input.set_content(value.to_string());
+        }
     }
 
     fn load_preview(&mut self, path: &PathBuf) {

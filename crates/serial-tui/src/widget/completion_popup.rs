@@ -1,6 +1,6 @@
 //! Completion popup widget.
 //!
-//! Displays a list of completion options above the command line input,
+//! Displays a list of completion options above or below an input field,
 //! similar to neovim's completion menu.
 
 use ratatui::{
@@ -23,6 +23,16 @@ pub enum CompletionKind {
     Command,
     /// Completing an argument to a command.
     Argument,
+}
+
+/// Direction to render the popup relative to the input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PopupDirection {
+    /// Render above the input (default, for command bars at bottom).
+    #[default]
+    Above,
+    /// Render below the input (for inputs at top of a region).
+    Below,
 }
 
 /// State for the completion popup.
@@ -104,36 +114,54 @@ impl CompletionState {
 
 /// Widget for rendering the completion popup.
 ///
-/// This widget renders a popup above the command input area, showing
+/// This widget renders a popup above or below an input area, showing
 /// available completions with the selected one highlighted.
 pub struct CompletionPopup<'a> {
     state: &'a CompletionState,
-    /// Y position of the command input (popup renders above this).
+    /// Y position of the input (popup renders above or below this).
     input_y: u16,
+    /// Height of the input area (used for below positioning).
+    input_height: u16,
     /// X position where the popup should start.
     input_x: u16,
     /// Whether to use disconnected (yellow) theming.
     disconnected: bool,
+    /// Direction to render the popup.
+    direction: PopupDirection,
 }
 
 impl<'a> CompletionPopup<'a> {
     /// Create a new completion popup.
     ///
     /// - `state`: The completion state to render
-    /// - `input_y`: Y coordinate of the input line (popup renders above)
+    /// - `input_y`: Y coordinate of the input line
     /// - `input_x`: X coordinate where the popup should align
     pub fn new(state: &'a CompletionState, input_y: u16, input_x: u16) -> Self {
         Self {
             state,
             input_y,
+            input_height: 1,
             input_x,
             disconnected: false,
+            direction: PopupDirection::Above,
         }
     }
 
     /// Use disconnected theming (yellow instead of cyan).
     pub fn disconnected(mut self, disconnected: bool) -> Self {
         self.disconnected = disconnected;
+        self
+    }
+
+    /// Set the direction to render the popup.
+    pub fn direction(mut self, direction: PopupDirection) -> Self {
+        self.direction = direction;
+        self
+    }
+
+    /// Set the height of the input area (for below positioning).
+    pub fn input_height(mut self, height: u16) -> Self {
+        self.input_height = height;
         self
     }
 }
@@ -163,13 +191,26 @@ impl Widget for CompletionPopup<'_> {
         let content_width = max_option_len.max(hint_text.len());
         let popup_width = (content_width + 4) as u16; // 2 chars padding each side
 
-        // Position popup above the input, aligned with input_x
+        // Position popup based on direction
         let popup_x = self.input_x.min(area.width.saturating_sub(popup_width));
-        let popup_y = self.input_y.saturating_sub(popup_height);
+        let popup_y = match self.direction {
+            PopupDirection::Above => self.input_y.saturating_sub(popup_height),
+            PopupDirection::Below => self.input_y + self.input_height,
+        };
 
         // Ensure popup fits within screen
-        if popup_y < area.y || popup_height > self.input_y.saturating_sub(area.y) {
-            return; // Not enough space above input
+        match self.direction {
+            PopupDirection::Above => {
+                if popup_y < area.y || popup_height > self.input_y.saturating_sub(area.y) {
+                    return; // Not enough space above input
+                }
+            }
+            PopupDirection::Below => {
+                let available_below = area.height.saturating_sub(popup_y.saturating_sub(area.y));
+                if popup_height > available_below {
+                    return; // Not enough space below input
+                }
+            }
         }
 
         let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);

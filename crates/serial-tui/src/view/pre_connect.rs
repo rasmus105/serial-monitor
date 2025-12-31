@@ -22,9 +22,9 @@ use crate::{
     app::{Focus, PreConnectAction},
     theme::Theme,
     widget::{
-        ConfigPanel, PortList, TextInput, Toast,
+        CompletionKind, CompletionPopup, CompletionState, ConfigPanel, PortList, TextInput, Toast,
         port_list::PortListState,
-        text_input::TextInputState,
+        text_input::{TextInputState, find_path_completions},
     },
 };
 
@@ -44,6 +44,8 @@ pub struct PreConnectView {
     pub dir_path_input: TextInputState,
     /// Whether directory path input is focused.
     pub dir_path_focused: bool,
+    /// Directory path completion state.
+    pub dir_path_completion: CompletionState,
     /// Last visible height for port list (for half-page scroll).
     last_visible_height: usize,
 }
@@ -334,6 +336,7 @@ impl PreConnectView {
             search_focused: false,
             dir_path_input: TextInputState::new().with_placeholder("Enter directory path..."),
             dir_path_focused: false,
+            dir_path_completion: CompletionState::default(),
             last_visible_height: 20, // Reasonable default
         }
     }
@@ -427,6 +430,20 @@ impl PreConnectView {
                 .block(dir_block)
                 .focused(true)
                 .render(main_chunks[1], buf);
+
+            // Render completion popup (above the input bar)
+            if self.dir_path_completion.visible {
+                let input_inner = Block::default()
+                    .borders(Borders::ALL)
+                    .inner(main_chunks[1]);
+                CompletionPopup::new(
+                    &self.dir_path_completion,
+                    input_inner.y,
+                    input_inner.x,
+                )
+                .disconnected(true)
+                .render(main_area, buf);
+            }
         }
 
         // Help text at bottom of port list
@@ -497,20 +514,42 @@ impl PreConnectView {
         if self.dir_path_focused {
             match key.code {
                 KeyCode::Enter => {
+                    // If completion is visible, apply the selected completion
+                    if self.dir_path_completion.visible {
+                        self.apply_dir_path_completion();
+                        self.dir_path_completion.hide();
+                        return None;
+                    }
                     // Apply directory path and exit input mode
                     self.config.file_save_directory = self.dir_path_input.content.clone();
                     self.dir_path_focused = false;
                 }
                 KeyCode::Esc => {
-                    // Cancel and exit without saving
-                    self.dir_path_focused = false;
-                    self.dir_path_input.clear();
+                    if self.dir_path_completion.visible {
+                        self.dir_path_completion.hide();
+                    } else {
+                        // Cancel and exit without saving
+                        self.dir_path_focused = false;
+                        self.dir_path_input.clear();
+                    }
                 }
                 KeyCode::Tab => {
-                    self.dir_path_input.complete_path();
+                    if !self.dir_path_completion.visible {
+                        self.update_dir_path_completions();
+                    } else {
+                        self.dir_path_completion.next();
+                    }
+                    self.apply_dir_path_completion();
+                }
+                KeyCode::BackTab => {
+                    if self.dir_path_completion.visible {
+                        self.dir_path_completion.prev();
+                        self.apply_dir_path_completion();
+                    }
                 }
                 _ => {
                     self.dir_path_input.handle_key(key);
+                    self.dir_path_completion.hide();
                 }
             }
             return None;
@@ -697,6 +736,18 @@ impl PreConnectView {
             _ => {}
         }
         None
+    }
+
+    fn update_dir_path_completions(&mut self) {
+        let input = &self.dir_path_input.content;
+        let completions = find_path_completions(input);
+        self.dir_path_completion.show(completions, CompletionKind::Argument);
+    }
+
+    fn apply_dir_path_completion(&mut self) {
+        if let Some(value) = self.dir_path_completion.selected_value() {
+            self.dir_path_input.set_content(value.to_string());
+        }
     }
 }
 

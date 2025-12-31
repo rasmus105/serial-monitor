@@ -22,7 +22,11 @@ use serial_core::{
 use crate::{
     app::{Focus, TrafficAction},
     theme::Theme,
-    widget::{ConfigKeyResult, ConfigPanel, ConnectionPanel, TextInput, handle_config_key, text_input::TextInputState},
+    widget::{
+        CompletionKind, CompletionPopup, CompletionState, ConfigKeyResult, ConfigPanel,
+        ConnectionPanel, TextInput, handle_config_key,
+        text_input::{TextInputState, find_path_completions},
+    },
 };
 
 /// Traffic view state.
@@ -45,6 +49,8 @@ pub struct TrafficView {
     pub dir_path_input: TextInputState,
     /// Whether directory path input is focused.
     pub dir_path_focused: bool,
+    /// Directory path completion state.
+    pub dir_path_completion: CompletionState,
     /// Traffic config.
     pub config: TrafficConfig,
     /// Config panel navigation.
@@ -370,6 +376,7 @@ impl TrafficView {
             send_focused: false,
             dir_path_input: TextInputState::new().with_placeholder("Enter directory path..."),
             dir_path_focused: false,
+            dir_path_completion: CompletionState::default(),
             config: TrafficConfig::default(),
             config_nav: ConfigPanelNav::new(),
             session_start: None,
@@ -425,6 +432,19 @@ impl TrafficView {
         // Draw input bar if active
         if show_input_bar {
             self.draw_input_bar(main_chunks[1], buf, handle);
+            
+            // Render directory path completion popup (above the input bar)
+            if self.dir_path_focused && self.dir_path_completion.visible {
+                let input_inner = Block::default()
+                    .borders(Borders::ALL)
+                    .inner(main_chunks[1]);
+                CompletionPopup::new(
+                    &self.dir_path_completion,
+                    input_inner.y,
+                    input_inner.x,
+                )
+                .render(main_area, buf);
+            }
         }
 
         // Draw config panel
@@ -1380,6 +1400,12 @@ impl TrafficView {
     fn handle_dir_path_key(&mut self, key: KeyEvent) -> Option<TrafficAction> {
         match key.code {
             KeyCode::Enter => {
+                // If completion is visible, apply the selected completion
+                if self.dir_path_completion.visible {
+                    self.apply_dir_path_completion();
+                    self.dir_path_completion.hide();
+                    return None;
+                }
                 // Apply directory path and exit input mode
                 self.config.file_save_directory = self.dir_path_input.content.clone();
                 self.dir_path_focused = false;
@@ -1387,20 +1413,48 @@ impl TrafficView {
                 return Some(TrafficAction::RequestClear);
             }
             KeyCode::Esc => {
-                // Cancel and exit without saving
-                self.dir_path_focused = false;
-                self.dir_path_input.clear();
-                // Layout changed - request clear to avoid artifacts
-                return Some(TrafficAction::RequestClear);
+                if self.dir_path_completion.visible {
+                    self.dir_path_completion.hide();
+                } else {
+                    // Cancel and exit without saving
+                    self.dir_path_focused = false;
+                    self.dir_path_input.clear();
+                    // Layout changed - request clear to avoid artifacts
+                    return Some(TrafficAction::RequestClear);
+                }
             }
             KeyCode::Tab => {
-                self.dir_path_input.complete_path();
+                if !self.dir_path_completion.visible {
+                    self.update_dir_path_completions();
+                } else {
+                    self.dir_path_completion.next();
+                }
+                self.apply_dir_path_completion();
+            }
+            KeyCode::BackTab => {
+                if self.dir_path_completion.visible {
+                    self.dir_path_completion.prev();
+                    self.apply_dir_path_completion();
+                }
             }
             _ => {
                 self.dir_path_input.handle_key(key);
+                self.dir_path_completion.hide();
             }
         }
         None
+    }
+
+    fn update_dir_path_completions(&mut self) {
+        let input = &self.dir_path_input.content;
+        let completions = find_path_completions(input);
+        self.dir_path_completion.show(completions, CompletionKind::Argument);
+    }
+
+    fn apply_dir_path_completion(&mut self) {
+        if let Some(value) = self.dir_path_completion.selected_value() {
+            self.dir_path_input.set_content(value.to_string());
+        }
     }
 }
 

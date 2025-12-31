@@ -10,7 +10,7 @@ pub mod sessions_modal;
 pub mod text_input;
 pub mod toast;
 
-pub use completion_popup::{CompletionKind, CompletionPopup, CompletionState};
+pub use completion_popup::{CompletionKind, CompletionPopup, CompletionState, PopupDirection};
 pub use config_panel::{ConfigKeyResult, ConfigPanel, handle_config_key};
 pub use confirm_overlay::{ConfirmOverlay, ConfirmState};
 pub use connect_modal::{ConnectModal, ConnectModalAction, ConnectModalState};
