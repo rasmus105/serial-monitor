@@ -13,6 +13,7 @@ use ratatui::{
 };
 use serial_core::{
     ChunkingStrategy, KeepAwake, SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle,
+    list_ports,
 };
 
 use crate::{
@@ -21,12 +22,39 @@ use crate::{
     theme::Theme,
     view::{file_sender::FileSenderView, graph::GraphView, pre_connect::PreConnectView, traffic::TrafficView},
     widget::{
-        ConfirmOverlay, ConfirmState, HelpOverlay, Toasts,
+        CompletionKind, CompletionPopup, CompletionState, ConfirmOverlay, ConfirmState, HelpOverlay, Toasts,
+        ConnectModal, ConnectModalState, ConnectModalAction,
+        SessionsModal, SessionsModalState, SessionsModalAction,
         help_overlay::HelpOverlayState,
         text_input::TextInputState,
         toast::render_toasts,
     },
 };
+
+/// What kind of argument a command takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommandArg {
+    None,
+    Path,
+    SerialPort,
+}
+
+/// Metadata about a command for completion.
+struct CommandInfo {
+    name: &'static str,
+    alias: &'static str,
+    arg: CommandArg,
+}
+
+/// Available commands for completion.
+const COMMANDS: &[CommandInfo] = &[
+    CommandInfo { name: "connect", alias: "c", arg: CommandArg::SerialPort },
+    CommandInfo { name: "disconnect", alias: "d", arg: CommandArg::None },
+    CommandInfo { name: "save", alias: "w", arg: CommandArg::Path },
+    CommandInfo { name: "quit", alias: "q", arg: CommandArg::None },
+    CommandInfo { name: "help", alias: "h", arg: CommandArg::None },
+    CommandInfo { name: "sessions", alias: "s", arg: CommandArg::None },
+];
 
 /// Main application state.
 pub struct App {
@@ -38,8 +66,12 @@ pub struct App {
     pub help: HelpOverlayState,
     /// Confirmation dialog state.
     pub confirm: ConfirmState,
-    /// Current view mode.
-    pub mode: AppMode,
+    /// Connect modal state.
+    pub connect_modal: ConnectModalState,
+    /// Sessions modal state.
+    pub sessions_modal: SessionsModalState,
+    /// Session manager for all active sessions.
+    pub sessions: SessionManager,
     /// Whether the config panel is visible.
     pub show_config: bool,
     /// Current focus area.
@@ -48,17 +80,37 @@ pub struct App {
     pub command_input: TextInputState,
     /// Whether command mode is active.
     pub command_mode: bool,
+    /// Command completion state.
+    pub completion: CompletionState,
     /// Whether the terminal needs a full clear on next draw.
     pub needs_clear: bool,
     /// Persistent settings.
     settings: TuiSettings,
 }
 
-/// Current view mode.
-pub enum AppMode {
-    /// Pre-connection: port selection and configuration.
+/// Manager for all active sessions.
+pub struct SessionManager {
+    /// All active sessions.
+    sessions: Vec<SessionEntry>,
+    /// Index of the currently active session (the one being displayed).
+    active_index: Option<usize>,
+    /// Counter for generating unique session IDs.
+    next_id: usize,
+}
+
+/// A single session entry.
+pub struct SessionEntry {
+    /// Unique identifier for this session.
+    pub id: usize,
+    /// Session state (connected or pre-connect).
+    pub state: SessionState,
+}
+
+/// State of a session.
+pub enum SessionState {
+    /// Pre-connection state.
     PreConnect(PreConnectView),
-    /// Connected: traffic, graph, or file sender views.
+    /// Connected state.
     Connected(ConnectedState),
 }
 
@@ -111,6 +163,132 @@ pub enum Focus {
     Config,
 }
 
+impl SessionManager {
+    /// Creates a new session manager with one PreConnect session.
+    pub fn new() -> Self {
+        Self {
+            sessions: Vec::new(),
+            active_index: None,
+            next_id: 0,
+        }
+    }
+
+    /// Get the active session.
+    pub fn active(&self) -> Option<&SessionEntry> {
+        self.active_index.and_then(|i| self.sessions.get(i))
+    }
+
+    /// Get the active session mutably.
+    pub fn active_mut(&mut self) -> Option<&mut SessionEntry> {
+        self.active_index.and_then(|i| self.sessions.get_mut(i))
+    }
+
+    /// Get the active session's state.
+    pub fn active_state(&self) -> Option<&SessionState> {
+        self.active().map(|e| &e.state)
+    }
+
+    /// Get the active session's state mutably.
+    pub fn active_state_mut(&mut self) -> Option<&mut SessionState> {
+        self.active_mut().map(|e| &mut e.state)
+    }
+
+    /// Add a new connected session, returns its ID.
+    pub fn add_connected(&mut self, state: ConnectedState) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.sessions.push(SessionEntry {
+            id,
+            state: SessionState::Connected(state),
+        });
+        // Switch to the new session
+        self.active_index = Some(self.sessions.len() - 1);
+        id
+    }
+
+    /// Add a new PreConnect session, returns its ID.
+    pub fn add_preconnect(&mut self, view: PreConnectView) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.sessions.push(SessionEntry {
+            id,
+            state: SessionState::PreConnect(view),
+        });
+        // Switch to the new session
+        self.active_index = Some(self.sessions.len() - 1);
+        id
+    }
+
+    /// Switch to a session by index.
+    pub fn switch_to(&mut self, index: usize) {
+        if index < self.sessions.len() {
+            self.active_index = Some(index);
+        }
+    }
+
+    /// Remove a session by index, auto-switch if removing active.
+    /// Returns the removed session entry if it existed.
+    pub fn remove(&mut self, index: usize) -> Option<SessionEntry> {
+        if index >= self.sessions.len() {
+            return None;
+        }
+
+        let entry = self.sessions.remove(index);
+
+        // Update active index
+        if self.sessions.is_empty() {
+            self.active_index = None;
+        } else if let Some(active) = self.active_index {
+            if active == index {
+                // Removed the active session - switch to nearest
+                self.active_index = Some(index.min(self.sessions.len() - 1));
+            } else if active > index {
+                // Active session shifted down
+                self.active_index = Some(active - 1);
+            }
+        }
+
+        Some(entry)
+    }
+
+    /// Number of sessions.
+    pub fn len(&self) -> usize {
+        self.sessions.len()
+    }
+
+    /// Whether there are no sessions.
+    pub fn is_empty(&self) -> bool {
+        self.sessions.is_empty()
+    }
+
+    /// Iterate over sessions mutably.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut SessionEntry> {
+        self.sessions.iter_mut()
+    }
+
+    /// Get the active index.
+    pub fn active_index(&self) -> Option<usize> {
+        self.active_index
+    }
+
+    /// Get a slice of all sessions.
+    pub fn sessions_slice(&self) -> &[SessionEntry] {
+        &self.sessions
+    }
+
+    /// Drain all sessions, returning an iterator that takes ownership.
+    pub fn drain(&mut self) -> impl Iterator<Item = SessionEntry> + '_ {
+        self.active_index = None;
+        self.sessions.drain(..)
+    }
+}
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         // Load persistent settings
@@ -124,16 +302,23 @@ impl App {
         let mut help = HelpOverlayState::default();
         help.settings = settings.global.clone().into();
         
+        // Create session manager with initial PreConnect session
+        let mut sessions = SessionManager::new();
+        sessions.add_preconnect(pre_connect);
+        
         Self {
             should_quit: false,
             toasts: Toasts::new(),
             help,
             confirm: ConfirmState::default(),
-            mode: AppMode::PreConnect(pre_connect),
+            connect_modal: ConnectModalState::default(),
+            sessions_modal: SessionsModalState::default(),
+            sessions,
             show_config: true,
             focus: Focus::Main,
             command_input: TextInputState::new().with_placeholder("Enter command..."),
             command_mode: false,
+            completion: CompletionState::default(),
             needs_clear: false,
             settings,
         }
@@ -141,8 +326,8 @@ impl App {
 
     /// Main event loop.
     pub async fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
-        // Initial port scan
-        if let AppMode::PreConnect(ref mut view) = self.mode {
+        // Initial port scan for any PreConnect sessions
+        if let Some(SessionState::PreConnect(view)) = self.sessions.active_state_mut() {
             view.refresh_ports();
         }
 
@@ -169,7 +354,7 @@ impl App {
                 self.handle_event(event).await;
             }
 
-            // Handle session events if connected
+            // Handle session events for ALL sessions (including background ones)
             self.process_session_events();
 
             // Tick toasts - request clear if any expired (they use Clear which leaves artifacts)
@@ -181,12 +366,13 @@ impl App {
                 // Save settings before quitting
                 self.save_settings();
                 
-                // Cleanup
-                if let AppMode::Connected(state) = std::mem::replace(
-                    &mut self.mode,
-                    AppMode::PreConnect(PreConnectView::new()),
-                ) {
-                    let _ = state.handle.disconnect().await;
+                // Cleanup - disconnect all connected sessions
+                // We drain all sessions to take ownership
+                let sessions: Vec<SessionEntry> = self.sessions.drain().collect();
+                for entry in sessions {
+                    if let SessionState::Connected(state) = entry.state {
+                        let _ = state.handle.disconnect().await;
+                    }
                 }
                 break;
             }
@@ -227,13 +413,15 @@ impl App {
             None
         };
 
-        // Draw based on mode
-        match &mut self.mode {
-            AppMode::PreConnect(view) => {
-                view.draw(main_area, config_area, buf, self.focus);
-            }
-            AppMode::Connected(state) => {
-                Self::draw_connected(state, main_area, config_area, buf, self.focus);
+        // Draw based on active session state
+        if let Some(entry) = self.sessions.active_mut() {
+            match &mut entry.state {
+                SessionState::PreConnect(view) => {
+                    view.draw(main_area, config_area, buf, self.focus);
+                }
+                SessionState::Connected(state) => {
+                    Self::draw_connected(state, main_area, config_area, buf, self.focus);
+                }
             }
         }
 
@@ -243,7 +431,7 @@ impl App {
         }
 
         // Draw loading overlay (from graph view if reparsing)
-        if let AppMode::Connected(state) = &mut self.mode {
+        if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
             if let Some(ref mut loading) = state.graph.loading {
                 loading.mark_visible();
                 crate::widget::LoadingOverlay::new(loading).render(area, buf);
@@ -256,21 +444,42 @@ impl App {
         // Draw confirmation overlay
         ConfirmOverlay::new(&self.confirm).render(area, buf);
 
+        // Draw connect modal overlay
+        ConnectModal::new(&self.connect_modal).render(area, buf);
+
+        // Draw sessions modal overlay
+        SessionsModal::new(
+            &self.sessions_modal,
+            self.sessions.sessions_slice(),
+            self.sessions.active_index(),
+        ).render(area, buf);
+
         // Draw help overlay
         HelpOverlay::new(&self.help).render(area, buf);
     }
 
     fn draw_command_bar(&self, area: Rect, buf: &mut Buffer) {
+        // Use disconnected theme when not connected
+        let is_disconnected = matches!(self.sessions.active_state(), Some(SessionState::PreConnect(_)) | None);
+        
         let block = Block::default()
             .title(" Command ")
             .borders(Borders::ALL)
-            .border_style(Theme::border_focused());
+            .border_style(if is_disconnected {
+                Theme::border_disconnected()
+            } else {
+                Theme::border_focused()
+            });
 
         let inner = block.inner(area);
         block.render(area, buf);
 
         // Draw the ":" prefix and input
-        let prefix = Span::styled(":", Theme::keybind());
+        let prefix = Span::styled(":", if is_disconnected {
+            Theme::keybind_disconnected()
+        } else {
+            Theme::keybind()
+        });
         let content = Span::raw(&self.command_input.content);
         let line = Line::from(vec![prefix, content]);
 
@@ -280,25 +489,46 @@ impl App {
         let cursor_x = inner.x + 1 + self.command_input.cursor_display_pos() as u16;
         if cursor_x < inner.x + inner.width {
             if let Some(cell) = buf.cell_mut((cursor_x, inner.y)) {
-                cell.set_bg(Theme::PRIMARY);
+                cell.set_bg(if is_disconnected { Theme::DISCONNECTED } else { Theme::PRIMARY });
                 cell.set_fg(Theme::BG);
             }
         }
+
+        // Draw completion popup above the command bar
+        // input_y is the top of the command bar block (where popup should appear above)
+        // input_x is where the completions should align (after the ":" prefix)
+        let input_y = area.y;
+        let input_x = inner.x + 1; // After the ":" prefix
+        CompletionPopup::new(&self.completion, input_y, input_x)
+            .disconnected(is_disconnected)
+            .render(area, buf);
     }
 
     fn process_session_events(&mut self) {
-        let events: Vec<SessionEvent> = if let AppMode::Connected(ref mut state) = self.mode {
-            let mut events = Vec::new();
-            while let Some(event) = state.handle.try_recv_event() {
-                events.push(event);
+        // Collect events from ALL sessions (including background ones)
+        // We collect (session_index, events) pairs to handle them correctly
+        let mut all_events: Vec<(usize, Vec<SessionEvent>)> = Vec::new();
+        
+        for (index, entry) in self.sessions.iter_mut().enumerate() {
+            if let SessionState::Connected(state) = &mut entry.state {
+                let mut events = Vec::new();
+                while let Some(event) = state.handle.try_recv_event() {
+                    events.push(event);
+                }
+                if !events.is_empty() {
+                    all_events.push((index, events));
+                }
             }
-            events
-        } else {
-            return;
-        };
+        }
 
-        for event in events {
-            self.handle_session_event(event);
+        // Process events - note we need to be careful about disconnection
+        // which may remove sessions
+        let active_index = self.sessions.active_index();
+        for (session_index, events) in all_events {
+            let is_active = Some(session_index) == active_index;
+            for event in events {
+                self.handle_session_event(event, session_index, is_active);
+            }
         }
     }
 
@@ -352,14 +582,31 @@ impl App {
                         KeyCode::Enter => {
                             let cmd = self.command_input.take();
                             self.command_mode = false;
+                            self.completion.hide();
                             self.execute_command(&cmd).await;
                         }
                         KeyCode::Esc => {
                             self.command_mode = false;
                             self.command_input.clear();
+                            self.completion.hide();
+                        }
+                        KeyCode::Tab => {
+                            if !self.completion.visible {
+                                self.update_completions();
+                            } else {
+                                self.completion.next();
+                            }
+                            self.apply_completion();
+                        }
+                        KeyCode::BackTab => {
+                            if self.completion.visible {
+                                self.completion.prev();
+                                self.apply_completion();
+                            }
                         }
                         _ => {
                             self.command_input.handle_key(key);
+                            self.completion.hide();
                         }
                     }
                     return;
@@ -392,11 +639,79 @@ impl App {
                     return;
                 }
 
+                // Handle connect modal (captures all input when visible)
+                if self.connect_modal.visible {
+                    match self.connect_modal.handle_key(key) {
+                        ConnectModalAction::Cancel => {
+                            self.connect_modal.hide();
+                            self.needs_clear = true;
+                        }
+                        ConnectModalAction::Connect => {
+                            let port_path = self.connect_modal.port_path.clone();
+                            let serial_config = self.connect_modal.config.to_serial_config();
+                            self.connect_modal.hide();
+                            self.needs_clear = true;
+                            
+                            // Build session config from global settings
+                            let settings = &self.help.settings;
+                            let session_config = SessionConfig {
+                                rx_chunking: ChunkingStrategy::Raw,
+                                tx_chunking: ChunkingStrategy::Raw,
+                                buffer_size: settings.buffer_size(),
+                                auto_save: settings.to_auto_save_config(),
+                            };
+                            self.connect(
+                                &port_path,
+                                serial_config,
+                                session_config,
+                                settings.keep_awake,
+                                false, // file_save_enabled
+                                1,     // file_save_format_index
+                                1,     // file_save_encoding_index
+                                serial_core::buffer::default_cache_directory().to_string_lossy().into_owned(),
+                            ).await;
+                        }
+                        ConnectModalAction::None => {}
+                    }
+                    return;
+                }
+
+                // Handle sessions modal (captures all input when visible)
+                if self.sessions_modal.visible {
+                    let session_count = self.sessions.len();
+                    match self.sessions_modal.handle_key(key, session_count) {
+                        SessionsModalAction::Close => {
+                            self.sessions_modal.hide();
+                            self.needs_clear = true;
+                        }
+                        SessionsModalAction::SwitchTo(index) => {
+                            self.sessions.switch_to(index);
+                            self.sessions_modal.hide();
+                            self.needs_clear = true;
+                        }
+                        SessionsModalAction::ConfirmDisconnect(index) => {
+                            // Disconnect the session at the given index
+                            self.disconnect_session(index).await;
+                            // Update selection if needed
+                            if self.sessions_modal.selected >= self.sessions.len() {
+                                self.sessions_modal.selected = self.sessions.len().saturating_sub(1);
+                            }
+                            // Close modal if no sessions left
+                            if self.sessions.is_empty() {
+                                self.sessions_modal.hide();
+                            }
+                            self.needs_clear = true;
+                        }
+                        SessionsModalAction::None => {}
+                    }
+                    return;
+                }
+
                 // Global keybindings
                 match key.code {
                     KeyCode::Char('q') => {
                         // When connected, show confirmation prompt instead of quitting
-                        if matches!(self.mode, AppMode::Connected(_)) {
+                        if matches!(self.sessions.active_state(), Some(SessionState::Connected(_))) {
                             self.confirm.show("Disconnect from port?");
                         } else {
                             self.should_quit = true;
@@ -430,11 +745,11 @@ impl App {
                     // Ctrl+h moves focus left (to Main panel)
                     KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) && !self.is_input_mode() => {
                         // Close dropdowns when switching focus
-                        if let AppMode::Connected(ref mut state) = self.mode {
+                        if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
                             state.traffic.config_nav.close_dropdown();
                             state.graph.config_nav.close_dropdown();
                             state.file_sender.config_nav.close_dropdown();
-                        } else if let AppMode::PreConnect(ref mut view) = self.mode {
+                        } else if let Some(SessionState::PreConnect(view)) = self.sessions.active_state_mut() {
                             view.config_nav.close_dropdown();
                         }
                         self.focus = Focus::Main;
@@ -450,71 +765,73 @@ impl App {
                     _ => {}
                 }
 
-                // Mode-specific handling
-                match &mut self.mode {
-                    AppMode::PreConnect(view) => {
-                        if let Some(action) = view.handle_key(key, self.focus) {
-                            self.handle_preconnect_action(action).await;
-                        }
-                    }
-                    AppMode::Connected(state) => {
-                        // Tab switching
-                        let is_input_mode = match state.tab {
-                            ConnectedTab::Traffic => state.traffic.is_input_mode(),
-                            ConnectedTab::Graph => state.graph.is_input_mode(),
-                            ConnectedTab::FileSender => state.file_sender.is_input_mode(),
-                        };
-
-                        if !is_input_mode {
-                            match key.code {
-                                KeyCode::Char('1') if state.tab != ConnectedTab::Traffic => {
-                                    state.traffic.config_nav.close_dropdown();
-                                    state.graph.config_nav.close_dropdown();
-                                    state.file_sender.config_nav.close_dropdown();
-                                    state.tab = ConnectedTab::Traffic;
-                                    self.needs_clear = true;
-                                    return;
-                                }
-                                KeyCode::Char('2') if state.tab != ConnectedTab::Graph => {
-                                    state.traffic.config_nav.close_dropdown();
-                                    state.graph.config_nav.close_dropdown();
-                                    state.file_sender.config_nav.close_dropdown();
-                                    state.tab = ConnectedTab::Graph;
-                                    self.needs_clear = true;
-                                    return;
-                                }
-                                KeyCode::Char('3') if state.tab != ConnectedTab::FileSender => {
-                                    state.traffic.config_nav.close_dropdown();
-                                    state.graph.config_nav.close_dropdown();
-                                    state.file_sender.config_nav.close_dropdown();
-                                    state.tab = ConnectedTab::FileSender;
-                                    self.needs_clear = true;
-                                    return;
-                                }
-                                // 'd' disconnects only without modifiers (Ctrl+d is half-page scroll)
-                                KeyCode::Char('d') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                    self.disconnect().await;
-                                    return;
-                                }
-                                _ => {}
+                // Session-specific handling
+                if let Some(entry) = self.sessions.active_mut() {
+                    match &mut entry.state {
+                        SessionState::PreConnect(view) => {
+                            if let Some(action) = view.handle_key(key, self.focus) {
+                                self.handle_preconnect_action(action).await;
                             }
                         }
+                        SessionState::Connected(state) => {
+                            // Tab switching
+                            let is_input_mode = match state.tab {
+                                ConnectedTab::Traffic => state.traffic.is_input_mode(),
+                                ConnectedTab::Graph => state.graph.is_input_mode(),
+                                ConnectedTab::FileSender => state.file_sender.is_input_mode(),
+                            };
 
-                        // Tab-specific handling
-                        match state.tab {
-                            ConnectedTab::Traffic => {
-                                if let Some(action) = state.traffic.handle_key(key, self.focus, &state.handle) {
-                                    self.handle_traffic_action(action).await;
+                            if !is_input_mode {
+                                match key.code {
+                                    KeyCode::Char('1') if state.tab != ConnectedTab::Traffic => {
+                                        state.traffic.config_nav.close_dropdown();
+                                        state.graph.config_nav.close_dropdown();
+                                        state.file_sender.config_nav.close_dropdown();
+                                        state.tab = ConnectedTab::Traffic;
+                                        self.needs_clear = true;
+                                        return;
+                                    }
+                                    KeyCode::Char('2') if state.tab != ConnectedTab::Graph => {
+                                        state.traffic.config_nav.close_dropdown();
+                                        state.graph.config_nav.close_dropdown();
+                                        state.file_sender.config_nav.close_dropdown();
+                                        state.tab = ConnectedTab::Graph;
+                                        self.needs_clear = true;
+                                        return;
+                                    }
+                                    KeyCode::Char('3') if state.tab != ConnectedTab::FileSender => {
+                                        state.traffic.config_nav.close_dropdown();
+                                        state.graph.config_nav.close_dropdown();
+                                        state.file_sender.config_nav.close_dropdown();
+                                        state.tab = ConnectedTab::FileSender;
+                                        self.needs_clear = true;
+                                        return;
+                                    }
+                                    // 'd' disconnects only without modifiers (Ctrl+d is half-page scroll)
+                                    KeyCode::Char('d') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                        self.confirm.show("Disconnect from port?");
+                                        return;
+                                    }
+                                    _ => {}
                                 }
                             }
-                            ConnectedTab::Graph => {
-                                if let Some(action) = state.graph.handle_key(key, self.focus, &state.handle) {
-                                    self.handle_graph_action(action);
+
+                            // Tab-specific handling
+                            match state.tab {
+                                ConnectedTab::Traffic => {
+                                    if let Some(action) = state.traffic.handle_key(key, self.focus, &state.handle) {
+                                        self.handle_traffic_action(action).await;
+                                    }
                                 }
-                            }
-                            ConnectedTab::FileSender => {
-                                if let Some(action) = state.file_sender.handle_key(key, self.focus) {
-                                    self.handle_file_sender_action(action).await;
+                                ConnectedTab::Graph => {
+                                    if let Some(action) = state.graph.handle_key(key, self.focus, &state.handle) {
+                                        self.handle_graph_action(action);
+                                    }
+                                }
+                                ConnectedTab::FileSender => {
+                                    if let Some(action) = state.file_sender.handle_key(key, self.focus) {
+                                        self.handle_file_sender_action(action).await;
+                                    }
                                 }
                             }
                         }
@@ -529,7 +846,7 @@ impl App {
             }
             AppEvent::Tick => {
                 // Update file sender progress if active
-                if let AppMode::Connected(ref mut state) = self.mode {
+                if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
                     state.file_sender.tick();
                     // Dismiss loading overlay if it can be dismissed
                     state.graph.dismiss_loading_if_ready();
@@ -550,44 +867,9 @@ impl App {
                     self.toasts.error("Usage: :connect <port_path>");
                     return;
                 }
-                let port_path = parts[1];
-                // Get serial config and file save settings from pre-connect view if available, or use defaults
-                let (serial_config, rx_chunking, file_save_enabled, file_save_format_index, file_save_encoding_index, file_save_directory) = match &self.mode {
-                    AppMode::PreConnect(view) => {
-                        // Save pre-connect settings before transitioning
-                        self.settings.pre_connect = view.to_settings();
-                        (
-                            view.config.to_serial_config(),
-                            view.config.rx_chunking(),
-                            view.config.file_save_enabled,
-                            view.config.file_save_format_index,
-                            view.config.file_save_encoding_index,
-                            view.config.file_save_directory.clone(),
-                        )
-                    }
-                    AppMode::Connected(state) => {
-                        (state.serial_config.clone(), ChunkingStrategy::Raw, false, 1, 1, 
-                         serial_core::buffer::default_cache_directory().to_string_lossy().into_owned())
-                    }
-                };
-                // Build session config from global settings
-                let settings = &self.help.settings;
-                let session_config = SessionConfig {
-                    rx_chunking,
-                    tx_chunking: ChunkingStrategy::Raw,
-                    buffer_size: settings.buffer_size(),
-                    auto_save: settings.to_auto_save_config(),
-                };
-                self.connect(
-                    port_path,
-                    serial_config,
-                    session_config,
-                    settings.keep_awake,
-                    file_save_enabled,
-                    file_save_format_index,
-                    file_save_encoding_index,
-                    file_save_directory,
-                ).await;
+                let port_path = parts[1].to_string();
+                // Show the connect modal instead of connecting directly
+                self.connect_modal.show(port_path);
             }
             "disconnect" | "d" => {
                 self.disconnect().await;
@@ -604,7 +886,11 @@ impl App {
                 self.save_buffer(path).await;
             }
             "help" | "h" => {
-                self.toasts.info("Commands: :connect <path>, :disconnect, :save <path>, :quit");
+                self.help.visible = true;
+                self.help.tab = crate::widget::help_overlay::HelpTab::Commands;
+            }
+            "sessions" | "s" => {
+                self.sessions_modal.show();
             }
             _ => {
                 self.toasts.error(format!("Unknown command: {}", parts[0]));
@@ -613,7 +899,7 @@ impl App {
     }
 
     async fn save_buffer(&mut self, path: &str) {
-        if let AppMode::Connected(ref state) = self.mode {
+        if let Some(SessionState::Connected(state)) = self.sessions.active_state() {
             let buffer = state.handle.buffer();
             let mut content = String::new();
             for chunk in buffer.chunks() {
@@ -636,25 +922,36 @@ impl App {
         }
     }
 
-    fn handle_session_event(&mut self, event: SessionEvent) {
+    fn handle_session_event(&mut self, event: SessionEvent, session_index: usize, is_active: bool) {
         match event {
             SessionEvent::Connected => {
-                self.toasts.success("Connected");
+                if is_active {
+                    self.toasts.success("Connected");
+                }
             }
             SessionEvent::Disconnected { error } => {
-                if let Some(err) = error {
-                    self.toasts.error(format!("Disconnected: {}", err));
-                } else {
-                    self.toasts.info("Disconnected");
+                if is_active {
+                    if let Some(err) = error {
+                        self.toasts.error(format!("Disconnected: {}", err));
+                    } else {
+                        self.toasts.info("Disconnected");
+                    }
                 }
-                // Return to pre-connect mode
-                self.mode = AppMode::PreConnect(PreConnectView::new());
-                if let AppMode::PreConnect(ref mut view) = self.mode {
+                // Remove the disconnected session
+                self.sessions.remove(session_index);
+                
+                // If no sessions left, create a fresh PreConnect session
+                if self.sessions.is_empty() {
+                    let mut view = PreConnectView::new();
                     view.refresh_ports();
+                    self.sessions.add_preconnect(view);
                 }
+                self.needs_clear = true;
             }
             SessionEvent::Error(msg) => {
-                self.toasts.error(msg);
+                if is_active {
+                    self.toasts.error(msg);
+                }
             }
             SessionEvent::DataReceived { .. } | SessionEvent::DataSent { .. } => {
                 // Data is already in the buffer, UI will pick it up on next render
@@ -675,7 +972,7 @@ impl App {
             } => {
                 // Save pre-connect settings before transitioning to connected state
                 // This ensures settings are preserved even if we quit while connected
-                if let AppMode::PreConnect(view) = &self.mode {
+                if let Some(SessionState::PreConnect(view)) = self.sessions.active_state() {
                     self.settings.pre_connect = view.to_settings();
                 }
                 
@@ -707,7 +1004,7 @@ impl App {
     async fn handle_traffic_action(&mut self, action: TrafficAction) {
         match action {
             TrafficAction::Send(data) => {
-                if let AppMode::Connected(ref state) = self.mode {
+                if let Some(SessionState::Connected(state)) = self.sessions.active_state() {
                     if let Err(e) = state.handle.send(data).await {
                         self.toasts.error(format!("Send failed: {}", e));
                     }
@@ -722,7 +1019,7 @@ impl App {
                 self.needs_clear = true;
             }
             TrafficAction::StartFileSaving => {
-                if let AppMode::Connected(ref mut state) = self.mode {
+                if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
                     let config = &state.traffic.config;
                     
                     // Build save config from traffic settings
@@ -748,7 +1045,7 @@ impl App {
                 }
             }
             TrafficAction::StopFileSaving => {
-                if let AppMode::Connected(ref state) = self.mode {
+                if let Some(SessionState::Connected(state)) = self.sessions.active_state() {
                     state.handle.buffer_mut().stop_saving();
                     self.toasts.info("File saving stopped");
                 }
@@ -759,7 +1056,7 @@ impl App {
     async fn handle_file_sender_action(&mut self, action: FileSenderAction) {
         match action {
             FileSenderAction::StartSending => {
-                if let AppMode::Connected(ref mut state) = self.mode {
+                if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
                     if let Err(e) = state.file_sender.start_sending(&state.handle).await {
                         self.toasts.error(format!("Failed to start sending: {}", e));
                     } else {
@@ -768,7 +1065,7 @@ impl App {
                 }
             }
             FileSenderAction::CancelSending => {
-                if let AppMode::Connected(ref mut state) = self.mode {
+                if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
                     state.file_sender.cancel_sending();
                     self.toasts.info("File sending cancelled");
                 }
@@ -864,7 +1161,15 @@ impl App {
                     serial_config,
                     keep_awake: keep_awake_handle,
                 };
-                self.mode = AppMode::Connected(state);
+                
+                // Remove the current PreConnect session (if any) and add the connected session
+                // This replaces the current session rather than adding a new one
+                if let Some(active_idx) = self.sessions.active_index() {
+                    if matches!(self.sessions.active_state(), Some(SessionState::PreConnect(_))) {
+                        self.sessions.remove(active_idx);
+                    }
+                }
+                self.sessions.add_connected(state);
                 self.needs_clear = true;
             }
             Err(e) => {
@@ -874,15 +1179,41 @@ impl App {
     }
 
     async fn disconnect(&mut self) {
-        if let AppMode::Connected(state) = std::mem::replace(
-            &mut self.mode,
-            AppMode::PreConnect(PreConnectView::new()),
-        ) {
-            let _ = state.handle.disconnect().await;
-            self.toasts.info("Disconnected");
+        // Get the current active index
+        if let Some(active_idx) = self.sessions.active_index() {
+            // Remove the active session (this will disconnect it)
+            if let Some(entry) = self.sessions.remove(active_idx) {
+                if let SessionState::Connected(state) = entry.state {
+                    let _ = state.handle.disconnect().await;
+                    self.toasts.info("Disconnected");
+                }
+            }
         }
-        if let AppMode::PreConnect(ref mut view) = self.mode {
+        
+        // If no sessions left, create a fresh PreConnect session
+        if self.sessions.is_empty() {
+            let mut view = PreConnectView::new();
             view.refresh_ports();
+            self.sessions.add_preconnect(view);
+        }
+        
+        self.needs_clear = true;
+    }
+
+    /// Disconnect a specific session by index.
+    async fn disconnect_session(&mut self, index: usize) {
+        if let Some(entry) = self.sessions.remove(index) {
+            if let SessionState::Connected(state) = entry.state {
+                let _ = state.handle.disconnect().await;
+                self.toasts.info("Session disconnected");
+            }
+        }
+        
+        // If no sessions left, create a fresh PreConnect session
+        if self.sessions.is_empty() {
+            let mut view = PreConnectView::new();
+            view.refresh_ports();
+            self.sessions.add_preconnect(view);
         }
     }
 
@@ -890,13 +1221,100 @@ impl App {
         if self.command_mode {
             return true;
         }
-        match &self.mode {
-            AppMode::PreConnect(view) => view.is_input_mode(),
-            AppMode::Connected(state) => match state.tab {
+        match self.sessions.active_state() {
+            Some(SessionState::PreConnect(view)) => view.is_input_mode(),
+            Some(SessionState::Connected(state)) => match state.tab {
                 ConnectedTab::Traffic => state.traffic.is_input_mode(),
                 ConnectedTab::Graph => state.graph.is_input_mode(),
                 ConnectedTab::FileSender => state.file_sender.is_input_mode(),
             },
+            None => false,
+        }
+    }
+
+    /// Update completion options based on current command input.
+    fn update_completions(&mut self) {
+        use crate::widget::text_input::find_path_completions;
+
+        let input = &self.command_input.content;
+        let trimmed = input.trim();
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+
+        // Determine if we're completing a command name or an argument
+        // We're completing a command if:
+        // 1. No input at all, OR
+        // 2. Only one word and no trailing space (still typing the command)
+        let completing_command = parts.is_empty() || (parts.len() == 1 && !input.ends_with(' '));
+
+        let (completions, kind) = if completing_command {
+            // Completing command name
+            let prefix = parts.first().copied().unwrap_or("");
+            let options: Vec<String> = COMMANDS
+                .iter()
+                .filter(|cmd| cmd.name.starts_with(prefix) || cmd.alias.starts_with(prefix))
+                .map(|cmd| cmd.name.to_string())
+                .collect();
+            (options, CompletionKind::Command)
+        } else {
+            // We have a command, now complete its argument
+            let cmd_name = parts[0];
+            let cmd_info = COMMANDS.iter().find(|c| c.name == cmd_name || c.alias == cmd_name);
+
+            let options = if let Some(info) = cmd_info {
+                // Get the argument prefix (everything after the command)
+                let arg_prefix = parts.get(1).copied().unwrap_or("");
+                
+                match info.arg {
+                    CommandArg::Path => {
+                        find_path_completions(arg_prefix)
+                    }
+                    CommandArg::SerialPort => {
+                        list_ports()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|p| {
+                                // Match if full path starts with prefix OR
+                                // if the port name (filename part) contains the prefix
+                                p.name.starts_with(arg_prefix) || 
+                                p.name.rsplit('/').next()
+                                    .map(|filename| filename.starts_with(arg_prefix))
+                                    .unwrap_or(false)
+                            })
+                            .map(|p| p.name)
+                            .collect()
+                    }
+                    CommandArg::None => Vec::new(),
+                }
+            } else {
+                // Unknown command, no completions
+                Vec::new()
+            };
+            (options, CompletionKind::Argument)
+        };
+
+        self.completion.show(completions, kind);
+    }
+
+    /// Apply the selected completion to the command input.
+    fn apply_completion(&mut self) {
+        if let Some(value) = self.completion.selected_value() {
+            let input = &self.command_input.content;
+            let parts: Vec<&str> = input.trim().split_whitespace().collect();
+
+            // Use the stored kind to determine how to apply the completion
+            let new_content = match self.completion.kind {
+                CompletionKind::Command => {
+                    // Completing a command - replace with command + space
+                    format!("{} ", value)
+                }
+                CompletionKind::Argument => {
+                    // Completing an argument - keep the command, replace the argument
+                    let cmd = parts.first().copied().unwrap_or("");
+                    format!("{} {}", cmd, value)
+                }
+            };
+
+            self.command_input.set_content(new_content);
         }
     }
     
@@ -905,15 +1323,16 @@ impl App {
         // Collect settings from current view mode
         // Note: We only update settings for views that exist in the current mode.
         // Settings for other views are preserved from the last time they were active.
-        match &self.mode {
-            AppMode::PreConnect(view) => {
+        match self.sessions.active_state() {
+            Some(SessionState::PreConnect(view)) => {
                 self.settings.pre_connect = view.to_settings();
             }
-            AppMode::Connected(state) => {
+            Some(SessionState::Connected(state)) => {
                 self.settings.traffic = state.traffic.to_settings();
                 self.settings.graph = state.graph.to_settings();
                 self.settings.file_sender = state.file_sender.to_settings();
             }
+            None => {}
         }
         
         // Collect global settings from help overlay
