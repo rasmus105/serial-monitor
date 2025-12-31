@@ -171,10 +171,24 @@ impl Default for GraphSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileSenderSettings {
-    /// Chunk size in bytes.
-    pub chunk_size: usize,
-    /// Delay between chunks in milliseconds.
-    pub delay_ms: usize,
+    /// Chunking mode: 0 = Delimiter, 1 = Bytes
+    pub chunk_mode_index: usize,
+    /// Delimiter index (for delimiter mode)
+    pub delimiter_index: usize,
+    /// Whether to include delimiter in sent chunks
+    pub include_delimiter: bool,
+    /// Byte chunk size value (for bytes mode)
+    pub byte_chunk_value: usize,
+    /// Byte chunk unit index
+    pub byte_unit_index: usize,
+    /// Whether to append a suffix to each chunk
+    pub append_suffix: bool,
+    /// Suffix delimiter index
+    pub suffix_delimiter_index: usize,
+    /// Delay value
+    pub delay_value: usize,
+    /// Delay unit index
+    pub delay_unit_index: usize,
     /// Repeat sending the file.
     pub repeat: bool,
 }
@@ -182,8 +196,15 @@ pub struct FileSenderSettings {
 impl Default for FileSenderSettings {
     fn default() -> Self {
         Self {
-            chunk_size: 64,
-            delay_ms: 10,
+            chunk_mode_index: 0,        // Delimiter
+            delimiter_index: 0,         // LF
+            include_delimiter: true,
+            byte_chunk_value: 64,
+            byte_unit_index: 0,         // Bytes
+            append_suffix: false,
+            suffix_delimiter_index: 0,  // LF
+            delay_value: 10,
+            delay_unit_index: 0,        // Milliseconds
             repeat: false,
         }
     }

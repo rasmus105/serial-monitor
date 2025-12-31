@@ -394,13 +394,13 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 let is_sub_option = field.parent_id.is_some();
                 let value = (field.get)(self.data);
 
-                // Determine if this is the last sub-option in this section
+                // Determine if this is the last sub-option with the same parent
                 // (a sub-option is any field with a parent_id)
-                let is_last_sibling = if field.parent_id.is_some() {
-                    // Check if there are any more sub-options after this one
+                let is_last_sibling = if let Some(parent) = field.parent_id {
+                    // Check if there are any more sub-options with the same parent after this one
                     !visible_fields.iter()
                         .skip(field_in_section_idx + 1)
-                        .any(|f| f.parent_id.is_some())
+                        .any(|f| f.parent_id == Some(parent))
                 } else {
                     false
                 };
