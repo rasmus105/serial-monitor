@@ -197,7 +197,7 @@ impl GraphEngine {
 
 impl Default for GraphEngine {
     fn default() -> Self {
-        Self::from_parser(GraphParserType::KeyValue(super::parser::KeyValue))
+        Self::from_parser(GraphParserType::Smart(super::parser::Smart))
     }
 }
 
@@ -305,7 +305,7 @@ impl GraphEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::parser::{Csv, Json, KeyValue, RawNumbers, Regex};
+    use super::super::parser::{Csv, Json, Regex, Smart};
 
     fn raw_chunk(data: &str) -> RawChunk {
         RawChunk {
@@ -320,20 +320,20 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // KeyValue Parser Tests
+    // Smart Parser Tests
     // -------------------------------------------------------------------------
 
     #[test]
-    fn key_value_simple() {
-        let mut engine = engine(KeyValue);
+    fn smart_simple() {
+        let mut engine = engine(Smart);
         engine.process_raw_chunk(&raw_chunk("temp=25.5"));
 
         assert_eq!(engine.series["temp"].points[0].value, 25.5);
     }
 
     #[test]
-    fn key_value_multiple_pairs() {
-        let mut engine = engine(KeyValue);
+    fn smart_multiple_pairs() {
+        let mut engine = engine(Smart);
         engine.process_raw_chunk(&raw_chunk("temp=25.5, humidity=60"));
 
         assert_eq!(engine.series["temp"].points[0].value, 25.5);
@@ -341,24 +341,26 @@ mod tests {
     }
 
     #[test]
-    fn key_value_colon_separator() {
-        let mut engine = engine(KeyValue);
+    fn smart_colon_separator() {
+        let mut engine = engine(Smart);
         engine.process_raw_chunk(&raw_chunk("temperature: 41.3"));
 
         assert_eq!(engine.series["temperature"].points[0].value, 41.3);
     }
 
     #[test]
-    fn key_value_colon_separator_multiple() {
-        let mut engine = engine(KeyValue);
+    fn smart_colon_separator_multiple() {
+        let mut engine = engine(Smart);
         engine.process_raw_chunk(&raw_chunk("temperature: 41.3, hum: 13.3, pre:9"));
 
         assert_eq!(engine.series["temperature"].points[0].value, 41.3);
+        assert_eq!(engine.series["hum"].points[0].value, 13.3);
+        assert_eq!(engine.series["pre"].points[0].value, 9.0);
     }
 
     #[test]
-    fn key_value_negative_number() {
-        let mut engine = engine(KeyValue);
+    fn smart_negative_number() {
+        let mut engine = engine(Smart);
         engine.process_raw_chunk(&raw_chunk("offset=-12.5"));
 
         assert_eq!(engine.series["offset"].points[0].value, -12.5);
@@ -437,21 +439,21 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // RawNumbers Parser Tests
+    // Smart Parser - Raw Numbers Fallback Tests
     // -------------------------------------------------------------------------
 
     #[test]
-    fn raw_numbers_simple() {
-        let mut engine = engine(RawNumbers);
-        engine.process_raw_chunk(&raw_chunk("Reading: 25.5 degrees"));
+    fn smart_raw_numbers_simple() {
+        let mut engine = engine(Smart);
+        engine.process_raw_chunk(&raw_chunk("25.5"));
 
         assert_eq!(engine.series["0"].points[0].value, 25.5);
     }
 
     #[test]
-    fn raw_numbers_multiple() {
-        let mut engine = engine(RawNumbers);
-        engine.process_raw_chunk(&raw_chunk("Values: 10, 20.5, 30"));
+    fn smart_raw_numbers_multiple() {
+        let mut engine = engine(Smart);
+        engine.process_raw_chunk(&raw_chunk("10, 20.5, 30"));
 
         assert_eq!(engine.series["0"].points[0].value, 10.0);
         assert_eq!(engine.series["1"].points[0].value, 20.5);
@@ -459,9 +461,9 @@ mod tests {
     }
 
     #[test]
-    fn raw_numbers_negative() {
-        let mut engine = engine(RawNumbers);
-        engine.process_raw_chunk(&raw_chunk("Temp: -15.3"));
+    fn smart_raw_numbers_negative() {
+        let mut engine = engine(Smart);
+        engine.process_raw_chunk(&raw_chunk("-15.3"));
 
         assert_eq!(engine.series["0"].points[0].value, -15.3);
     }
@@ -495,7 +497,7 @@ mod tests {
 
     #[test]
     fn engine_multiple_chunks_same_series() {
-        let mut engine = engine(KeyValue);
+        let mut engine = engine(Smart);
         engine.process_raw_chunk(&raw_chunk("temp=20"));
         engine.process_raw_chunk(&raw_chunk("temp=21"));
         engine.process_raw_chunk(&raw_chunk("temp=22"));
@@ -509,7 +511,7 @@ mod tests {
 
     #[test]
     fn engine_auto_color_assignment() {
-        let mut engine = engine(KeyValue);
+        let mut engine = engine(Smart);
         engine.process_raw_chunk(&raw_chunk("temp=25"));
         engine.process_raw_chunk(&raw_chunk("humidity=60"));
         engine.process_raw_chunk(&raw_chunk("pressure=1013"));
@@ -521,7 +523,7 @@ mod tests {
 
     #[test]
     fn packet_rate_recording() {
-        let mut engine = engine(KeyValue);
+        let mut engine = engine(Smart);
         engine.process_raw_chunk(&raw_chunk("temp=25"));
         engine.process_raw_chunk(&raw_chunk("temp=26"));
         engine.process_raw_chunk(&raw_chunk("temp=27"));

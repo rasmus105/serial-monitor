@@ -16,7 +16,7 @@ use ratatui::{
 };
 use serial_core::{
     SerialConfig, SessionHandle,
-    buffer::graph::{GraphMode, GraphParserType, Csv, KeyValue, Json, RawNumbers, Regex},
+    buffer::graph::{GraphMode, GraphParserType, Csv, Json, Regex, Smart},
     ui::{
         config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
     },
@@ -91,7 +91,7 @@ pub struct GraphConfig {
     pub mode_index: usize,
     
     // --- Parsed Data mode options ---
-    /// Parser type: 0=KeyValue, 1=CSV, 2=JSON, 3=Regex, 4=Raw Numbers
+    /// Parser type: 0=Smart, 1=CSV, 2=JSON, 3=Regex
     pub parser_type_index: usize,
     /// Regex pattern (for Regex parser)
     pub regex_pattern: String,
@@ -119,7 +119,7 @@ impl Default for GraphConfig {
     fn default() -> Self {
         Self {
             mode_index: 0, // Parsed Data
-            parser_type_index: 0, // KeyValue
+            parser_type_index: 0, // Smart
             regex_pattern: String::new(),
             csv_delimiter_index: 0, // Comma
             csv_columns: String::new(),
@@ -170,7 +170,7 @@ impl GraphConfig {
     /// Build the parser from current config.
     pub fn build_parser(&self) -> Option<GraphParserType> {
         match self.parser_type_index {
-            0 => Some(GraphParserType::KeyValue(KeyValue)),
+            0 => Some(GraphParserType::Smart(Smart)),
             1 => Some(GraphParserType::Csv(Csv {
                 delimiter: self.csv_delimiter(),
                 column_names: self.csv_column_names(),
@@ -186,7 +186,6 @@ impl GraphConfig {
                         .map(GraphParserType::Regex)
                 }
             }
-            4 => Some(GraphParserType::RawNumbers(RawNumbers)),
             _ => None,
         }
     }
@@ -217,7 +216,7 @@ impl GraphConfig {
 // =============================================================================
 
 const MODE_OPTIONS: &[&str] = &["Parse Data", "RX/TX Rate"];
-const PARSER_TYPE_OPTIONS: &[&str] = &["Key=Value", "CSV", "JSON", "Regex", "Raw Numbers"];
+const PARSER_TYPE_OPTIONS: &[&str] = &["Smart", "CSV", "JSON", "Regex"];
 const CSV_DELIMITER_OPTIONS: &[&str] = &["Comma (,)", "Semicolon (;)", "Tab", "Space", "Pipe (|)"];
 const TIME_RANGE_OPTIONS: &[&str] = &["All", "1 Hour", "5 Min", "Custom"];
 const TIME_UNIT_OPTIONS: &[&str] = &["seconds", "minutes", "hours"];

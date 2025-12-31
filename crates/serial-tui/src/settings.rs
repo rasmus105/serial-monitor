@@ -154,7 +154,7 @@ impl Default for GraphSettings {
     fn default() -> Self {
         Self {
             mode_index: 0, // Parsed Data
-            parser_type_index: 0, // KeyValue
+            parser_type_index: 0, // Smart
             regex_pattern: String::new(),
             csv_delimiter_index: 0, // Comma
             csv_columns: String::new(),
