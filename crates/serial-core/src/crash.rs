@@ -107,11 +107,13 @@ impl Display for CrashInfo {
 
 /// Returns the default directory for crash logs.
 ///
-/// Uses `~/.cache/serial-monitor/` on Linux, with `/tmp/serial-monitor/` as fallback.
+/// Uses the platform-appropriate cache directory (e.g., `~/.cache/serial-monitor/` on Linux,
+/// `~/Library/Caches/serial-monitor/` on macOS, `C:\Users\<User>\AppData\Local\serial-monitor\`
+/// on Windows), with the system temp directory as fallback.
 pub fn crash_log_directory() -> PathBuf {
     dirs::cache_dir()
         .map(|p| p.join("serial-monitor"))
-        .unwrap_or_else(|| PathBuf::from("/tmp/serial-monitor"))
+        .unwrap_or_else(|| std::env::temp_dir().join("serial-monitor"))
 }
 
 /// Write a crash log to disk.
