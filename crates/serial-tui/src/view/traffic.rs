@@ -75,7 +75,8 @@ pub struct TrafficConfig {
     pub timestamp_format_index: usize,
     pub auto_scroll: bool,
     pub lock_to_bottom: bool,
-    pub pattern_mode_index: usize,
+    pub search_mode_index: usize,
+    pub filter_mode_index: usize,
     pub wrap_text: bool,
     // File saving settings (can be toggled while connected)
     pub file_save_enabled: bool,
@@ -94,7 +95,8 @@ impl Default for TrafficConfig {
             timestamp_format_index: 0, // Relative
             auto_scroll: true,
             lock_to_bottom: false,
-            pattern_mode_index: 0, // Normal
+            search_mode_index: 0, // Normal
+            filter_mode_index: 0, // Normal
             wrap_text: true, // Wrap by default
             // File saving defaults
             file_save_enabled: false,
@@ -121,7 +123,6 @@ impl TrafficConfig {
 
 // Config panel definitions
 const ENCODING_OPTIONS: &[&str] = ENCODING_DISPLAY_NAMES;
-const PATTERN_MODE_OPTIONS: &[&str] = &["Normal", "Regex"];
 const TIMESTAMP_FORMAT_OPTIONS: &[&str] = &["Relative", "HH:MM:SS.mmm", "HH:MM:SS"];
 
 // File saving options
@@ -254,23 +255,6 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                 set: |c, v| {
                     if let FieldValue::Bool(b) = v {
                         c.show_rx = b;
-                    }
-                },
-                visible: always_visible,
-                enabled: always_enabled,
-                parent_id: None,
-                validate: always_valid,
-            },
-            FieldDef {
-                id: "pattern_mode",
-                label: "Pattern Mode",
-                kind: FieldKind::Select {
-                    options: PATTERN_MODE_OPTIONS,
-                },
-                get: |c| FieldValue::OptionIndex(c.pattern_mode_index),
-                set: |c, v| {
-                    if let FieldValue::OptionIndex(i) = v {
-                        c.pattern_mode_index = i;
                     }
                 },
                 visible: always_visible,
@@ -1319,7 +1303,7 @@ impl TrafficView {
                 // Then update search pattern incrementally
                 let pattern = &self.search_input.content;
                 if !pattern.is_empty() {
-                    let mode = if self.config.pattern_mode_index == 1 {
+                    let mode = if self.config.search_mode_index == 1 {
                         PatternMode::Regex
                     } else {
                         PatternMode::Normal
@@ -1357,7 +1341,7 @@ impl TrafficView {
                 // Then update filter pattern incrementally
                 let pattern = &self.filter_input.content;
                 if !pattern.is_empty() {
-                    let mode = if self.config.pattern_mode_index == 1 {
+                    let mode = if self.config.filter_mode_index == 1 {
                         PatternMode::Regex
                     } else {
                         PatternMode::Normal
@@ -1480,7 +1464,8 @@ impl TrafficView {
         self.config.timestamp_format_index = settings.timestamp_format_index;
         self.config.auto_scroll = settings.auto_scroll;
         self.config.lock_to_bottom = settings.lock_to_bottom;
-        self.config.pattern_mode_index = settings.pattern_mode_index;
+        self.config.search_mode_index = settings.search_mode_index;
+        self.config.filter_mode_index = settings.filter_mode_index;
         self.config.wrap_text = settings.wrap_text;
         self.config.file_save_enabled = settings.file_save_enabled;
         self.config.file_save_format_index = settings.file_save_format_index;
@@ -1498,7 +1483,8 @@ impl TrafficView {
             timestamp_format_index: self.config.timestamp_format_index,
             auto_scroll: self.config.auto_scroll,
             lock_to_bottom: self.config.lock_to_bottom,
-            pattern_mode_index: self.config.pattern_mode_index,
+            search_mode_index: self.config.search_mode_index,
+            filter_mode_index: self.config.filter_mode_index,
             wrap_text: self.config.wrap_text,
             file_save_enabled: self.config.file_save_enabled,
             file_save_format_index: self.config.file_save_format_index,

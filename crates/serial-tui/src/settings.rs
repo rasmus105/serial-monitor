@@ -88,8 +88,10 @@ pub struct TrafficSettings {
     pub auto_scroll: bool,
     /// Lock to bottom (prevent scroll up).
     pub lock_to_bottom: bool,
-    /// Pattern mode index (Normal/Regex).
-    pub pattern_mode_index: usize,
+    /// Search mode index (Normal/Regex).
+    pub search_mode_index: usize,
+    /// Filter mode index (Normal/Regex).
+    pub filter_mode_index: usize,
     /// Wrap long lines.
     pub wrap_text: bool,
     /// File saving enabled.
@@ -112,7 +114,8 @@ impl Default for TrafficSettings {
             timestamp_format_index: 0, // Relative
             auto_scroll: true,
             lock_to_bottom: false,
-            pattern_mode_index: 0, // Normal
+            search_mode_index: 0, // Normal
+            filter_mode_index: 0, // Normal
             wrap_text: true,
             file_save_enabled: false,
             file_save_format_index: 1,   // Encoded

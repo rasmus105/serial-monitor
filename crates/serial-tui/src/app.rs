@@ -615,6 +615,8 @@ impl App {
                 if self.help.visible {
                     if self.help.handle_key(key) {
                         self.needs_clear = true;
+                        // Sync global pattern settings to connected sessions when help is closed
+                        self.sync_global_pattern_settings();
                     }
                     return;
                 }
@@ -1113,6 +1115,9 @@ impl App {
                 traffic.config.file_save_format_index = file_save_format_index;
                 traffic.config.file_save_encoding_index = file_save_encoding_index;
                 traffic.config.file_save_directory = file_save_directory.clone();
+                // Apply global pattern matching settings (these override traffic settings)
+                traffic.config.search_mode_index = self.help.settings.search_mode_index;
+                traffic.config.filter_mode_index = self.help.settings.filter_mode_index;
                 
                 // Create keep-awake handle and enable if setting is on
                 let mut keep_awake_handle = KeepAwake::new();
@@ -1233,6 +1238,19 @@ impl App {
                 ConnectedTab::FileSender => state.file_sender.is_input_mode(),
             },
             None => false,
+        }
+    }
+
+    /// Sync global pattern matching settings to all connected sessions.
+    fn sync_global_pattern_settings(&mut self) {
+        let search_mode = self.help.settings.search_mode_index;
+        let filter_mode = self.help.settings.filter_mode_index;
+        
+        for entry in self.sessions.iter_mut() {
+            if let SessionState::Connected(state) = &mut entry.state {
+                state.traffic.config.search_mode_index = search_mode;
+                state.traffic.config.filter_mode_index = filter_mode;
+            }
         }
     }
 
