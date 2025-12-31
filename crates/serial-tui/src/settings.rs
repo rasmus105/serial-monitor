@@ -191,6 +191,12 @@ pub struct FileSenderSettings {
     pub delay_unit_index: usize,
     /// Repeat sending the file.
     pub repeat: bool,
+    /// Preview size limit value
+    pub preview_limit_value: usize,
+    /// Preview size limit unit index (0=KB, 1=MB)
+    pub preview_limit_unit_index: usize,
+    /// Auto-follow current chunk during sending
+    pub auto_follow: bool,
 }
 
 impl Default for FileSenderSettings {
@@ -206,6 +212,9 @@ impl Default for FileSenderSettings {
             delay_value: 10,
             delay_unit_index: 0,        // Milliseconds
             repeat: false,
+            preview_limit_value: 1,     // 1 MB default
+            preview_limit_unit_index: 1, // MB
+            auto_follow: true,          // Follow current chunk by default
         }
     }
 }

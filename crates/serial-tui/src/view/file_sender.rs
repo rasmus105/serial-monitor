@@ -7,8 +7,9 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
-    style::Style,
-    widgets::{Block, Borders, Gauge, Paragraph, Widget, Wrap},
+    style::{Color, Style, Stylize},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget},
 };
 use serial_core::{
     ChunkMode, Delimiter, FileSendConfig, FileSendHandle, FileSendProgress, SerialConfig,
@@ -27,6 +28,10 @@ use crate::{
         text_input::{TextInputState, find_path_completions},
     },
 };
+
+// Highlight colors for progress indication (foreground only for subtlety)
+const SENT_COLOR: Color = Color::Green;         // Green text for already-sent data
+const CURRENT_COLOR: Color = Color::Yellow;     // Yellow text for the current chunk
 
 /// File sender view state.
 pub struct FileSenderView {
@@ -48,15 +53,22 @@ pub struct FileSenderView {
     pub send_handle: Option<FileSendHandle>,
     /// Latest progress.
     pub progress: Option<FileSendProgress>,
+    /// Current scroll position (in display lines).
+    pub scroll: usize,
+    /// Cached visible height for scroll calculations.
+    pub last_visible_height: usize,
 }
 
 /// Preview of selected file.
 #[derive(Debug, Clone)]
 pub struct FilePreview {
     pub size: u64,
-    pub content: String,
+    /// Raw bytes of the file (up to limit)
+    pub raw_bytes: Vec<u8>,
     pub is_binary: bool,
     pub line_count: Option<usize>,
+    /// Whether the file was truncated due to size limit
+    pub truncated: bool,
 }
 
 /// File sender configuration.
@@ -83,6 +95,12 @@ pub struct FileSenderConfig {
     pub delay_unit_index: usize,
     pub repeat: bool,
     pub is_sending: bool,
+    /// Preview size limit value
+    pub preview_limit_value: usize,
+    /// Preview size limit unit index (0=KB, 1=MB)
+    pub preview_limit_unit_index: usize,
+    /// Auto-follow current chunk during sending
+    pub auto_follow: bool,
 }
 
 impl Default for FileSenderConfig {
@@ -100,11 +118,15 @@ impl Default for FileSenderConfig {
             delay_unit_index: 0, // Milliseconds
             repeat: false,
             is_sending: false,
+            preview_limit_value: 1,     // 1 MB default
+            preview_limit_unit_index: 1, // MB
+            auto_follow: true,
         }
     }
 }
 
 const CHUNK_MODE_OPTIONS: &[&str] = &["Delimiter", "Bytes"];
+const PREVIEW_LIMIT_UNIT_OPTIONS: &[&str] = &["KB", "MB"];
 
 static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
     Section {
@@ -307,6 +329,65 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
         ],
     },
     Section {
+        header: Some("Preview"),
+        fields: &[
+            FieldDef {
+                id: "preview_limit_value",
+                label: "Max Size",
+                kind: FieldKind::NumericInput { min: Some(1), max: None },
+                get: |c| FieldValue::Usize(c.preview_limit_value),
+                set: |c, v| {
+                    if let FieldValue::Usize(n) = v {
+                        c.preview_limit_value = n;
+                    }
+                },
+                visible: always_visible,
+                enabled: |c| !c.is_sending,
+                parent_id: None,
+                validate: |v| {
+                    if let FieldValue::Usize(n) = v {
+                        if *n == 0 {
+                            return Err(Cow::Borrowed("Max size must be > 0"));
+                        }
+                    }
+                    Ok(())
+                },
+            },
+            FieldDef {
+                id: "preview_limit_unit",
+                label: "Unit",
+                kind: FieldKind::Select {
+                    options: PREVIEW_LIMIT_UNIT_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.preview_limit_unit_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.preview_limit_unit_index = i;
+                    }
+                },
+                visible: always_visible,
+                enabled: |c| !c.is_sending,
+                parent_id: Some("preview_limit_value"),
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "auto_follow",
+                label: "Auto-follow",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.auto_follow),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.auto_follow = b;
+                    }
+                },
+                visible: always_visible,
+                enabled: always_visible,
+                parent_id: None,
+                validate: always_valid,
+            },
+        ],
+    },
+    Section {
         header: Some("Control"),
         fields: &[
             FieldDef {
@@ -340,6 +421,8 @@ impl FileSenderView {
             config_nav: ConfigPanelNav::new(),
             send_handle: None,
             progress: None,
+            scroll: 0,
+            last_visible_height: 0,
         }
     }
 
@@ -354,21 +437,49 @@ impl FileSenderView {
     }
 
     pub fn tick(&mut self) {
+        // Collect all progress updates first to avoid borrow conflicts
+        let mut updates = Vec::new();
+        let mut should_stop = false;
+        
         if let Some(ref mut handle) = self.send_handle {
             while let Some(progress) = handle.try_recv_progress() {
                 let complete = progress.complete;
-                self.progress = Some(progress);
+                updates.push(progress);
                 if complete {
-                    self.send_handle = None;
-                    self.config.is_sending = false;
+                    should_stop = true;
                     break;
                 }
             }
         }
+        
+        // Now process updates without borrowing handle
+        for progress in updates {
+            let complete = progress.complete;
+            let bytes_sent = progress.bytes_sent;
+            
+            // Auto-follow: scroll to keep current chunk visible
+            if self.config.auto_follow && !complete {
+                let current_line = self.byte_offset_to_line(bytes_sent);
+                let visible_height = self.last_visible_height;
+                
+                // Keep current chunk roughly centered or at least visible
+                if current_line >= self.scroll + visible_height.saturating_sub(2) {
+                    // Scroll down to keep current chunk visible
+                    self.scroll = current_line.saturating_sub(visible_height / 3);
+                }
+            }
+            
+            self.progress = Some(progress);
+        }
+        
+        if should_stop {
+            self.send_handle = None;
+            self.config.is_sending = false;
+        }
     }
 
     pub fn draw(
-        &self,
+        &mut self,
         main_area: Rect,
         config_area: Option<Rect>,
         buf: &mut Buffer,
@@ -404,10 +515,12 @@ impl FileSenderView {
                 .unwrap_or_default();
             let size_str = format_bytes(preview.size);
 
+            let truncated_indicator = if preview.truncated { " [truncated]" } else { "" };
+
             if let Some(lines) = preview.line_count {
-                format!(" Preview: {} ({}, {} lines) ", filename, size_str, lines)
+                format!(" Preview: {} ({}, {} lines){} ", filename, size_str, lines, truncated_indicator)
             } else {
-                format!(" Preview: {} ({}, binary) ", filename, size_str)
+                format!(" Preview: {} ({}, binary){} ", filename, size_str, truncated_indicator)
             }
         } else {
             " Preview ".to_string()
@@ -425,16 +538,12 @@ impl FileSenderView {
         let preview_inner = preview_block.inner(main_chunks[0]);
         preview_block.render(main_chunks[0], buf);
 
+        // Store visible height for scroll calculations
+        self.last_visible_height = preview_inner.height as usize;
+
         if let Some(preview) = &self.preview {
-            let content = if preview.is_binary {
-                format!("[Binary file - {} bytes]", preview.size)
-            } else {
-                preview.content.clone()
-            };
-            Paragraph::new(content)
-                .wrap(Wrap { trim: false })
-                .style(Theme::muted())
-                .render(preview_inner, buf);
+            // Pass both outer area (for scrollbar in border) and inner area (for content)
+            self.draw_preview(main_chunks[0], preview_inner, buf, preview);
         } else {
             Paragraph::new("Select a file using the config panel →")
                 .style(Theme::muted())
@@ -605,8 +714,321 @@ impl FileSenderView {
         }
     }
 
+    /// Draw the file preview with scrolling and progress highlighting.
+    fn draw_preview(&self, outer_area: Rect, inner_area: Rect, buf: &mut Buffer, preview: &FilePreview) {
+        if inner_area.width == 0 || inner_area.height == 0 {
+            return;
+        }
+
+        let visible_height = inner_area.height as usize;
+
+        // Calculate chunk boundaries for highlighting
+        let (bytes_sent, current_chunk_start, current_chunk_end) = self.get_chunk_boundaries(preview);
+
+        // Build display lines with highlighting
+        let display_lines = if preview.is_binary {
+            self.build_hex_lines(preview, bytes_sent, current_chunk_start, current_chunk_end)
+        } else {
+            self.build_text_lines(preview, bytes_sent, current_chunk_start, current_chunk_end)
+        };
+
+        // Add truncation indicator if needed
+        let mut all_lines = display_lines;
+        if preview.truncated {
+            all_lines.push(Line::from(Span::styled(
+                format!("... [truncated - showing {} of {}]", 
+                    format_bytes(preview.raw_bytes.len() as u64),
+                    format_bytes(preview.size)),
+                Style::default().fg(Theme::WARNING).bold()
+            )));
+        }
+
+        let total_lines = all_lines.len();
+        let max_scroll = total_lines.saturating_sub(visible_height);
+        let scroll = self.scroll.min(max_scroll);
+
+        // Render visible lines
+        let visible_lines: Vec<Line> = all_lines
+            .into_iter()
+            .skip(scroll)
+            .take(visible_height)
+            .collect();
+
+        // Render content
+        for (i, line) in visible_lines.iter().enumerate() {
+            if i < visible_height {
+                let y = inner_area.y + i as u16;
+                buf.set_line(inner_area.x, y, line, inner_area.width);
+            }
+        }
+
+        // Render scrollbar in the right border (like traffic view)
+        if total_lines > visible_height {
+            let scrollbar_area = Rect::new(
+                outer_area.x + outer_area.width - 1,
+                outer_area.y + 1,
+                1,
+                outer_area.height.saturating_sub(2),
+            );
+            let mut scrollbar_state = ScrollbarState::new(max_scroll.max(1))
+                .position(scroll);
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .render(scrollbar_area, buf, &mut scrollbar_state);
+        }
+    }
+
+    /// Get the byte boundaries for highlighting based on progress.
+    /// Returns (bytes_sent, current_chunk_start, current_chunk_end)
+    fn get_chunk_boundaries(&self, preview: &FilePreview) -> (u64, u64, u64) {
+        let Some(progress) = &self.progress else {
+            return (0, 0, 0);
+        };
+
+        if !self.is_sending() && progress.complete {
+            // Sending complete - all data is "sent"
+            return (preview.raw_bytes.len() as u64, 0, 0);
+        }
+
+        let bytes_sent = progress.bytes_sent;
+        
+        // Current chunk starts where we've sent up to
+        let current_chunk_start = bytes_sent;
+        
+        // Calculate where the current chunk ends based on chunking mode
+        let current_chunk_end = if self.config.chunk_mode_index == 1 {
+            // Bytes mode - fixed chunk size
+            let chunk_size = SizeUnit::from_index(self.config.byte_unit_index)
+                .to_bytes(self.config.byte_chunk_value) as u64;
+            (bytes_sent + chunk_size).min(preview.size)
+        } else {
+            // Delimiter mode - find the next delimiter in the preview data
+            let delimiter = Delimiter::from_index(self.config.delimiter_index);
+            let delimiter_bytes = delimiter.as_bytes();
+            
+            let start_idx = bytes_sent as usize;
+            if start_idx >= preview.raw_bytes.len() {
+                preview.size
+            } else {
+                // Search for delimiter starting from bytes_sent
+                let search_slice = &preview.raw_bytes[start_idx..];
+                if let Some(pos) = find_delimiter(search_slice, delimiter_bytes) {
+                    let end = start_idx + pos;
+                    // Include delimiter if configured
+                    if self.config.include_delimiter {
+                        (end + delimiter_bytes.len()).min(preview.raw_bytes.len()) as u64
+                    } else {
+                        end as u64
+                    }
+                } else {
+                    // No delimiter found - chunk extends to end of file
+                    preview.size
+                }
+            }
+        };
+
+        (bytes_sent, current_chunk_start, current_chunk_end)
+    }
+
+    /// Build display lines for text content with highlighting.
+    fn build_text_lines(
+        &self,
+        preview: &FilePreview,
+        bytes_sent: u64,
+        current_chunk_start: u64,
+        current_chunk_end: u64,
+    ) -> Vec<Line<'static>> {
+        let text = String::from_utf8_lossy(&preview.raw_bytes);
+        let mut lines = Vec::new();
+        let mut byte_offset: u64 = 0;
+
+        for line_text in text.lines() {
+            let line_start = byte_offset;
+            let line_end = byte_offset + line_text.len() as u64;
+
+            let mut spans = Vec::new();
+            let mut char_offset = line_start;
+
+            for ch in line_text.chars() {
+                let ch_len = ch.len_utf8() as u64;
+                let style = if self.is_sending() || self.progress.as_ref().is_some_and(|p| p.bytes_sent > 0) {
+                    if char_offset < bytes_sent {
+                        // Already sent - green foreground
+                        Style::default().fg(SENT_COLOR)
+                    } else if char_offset >= current_chunk_start && char_offset < current_chunk_end && self.is_sending() {
+                        // Current chunk - yellow foreground
+                        Style::default().fg(CURRENT_COLOR)
+                    } else {
+                        // Not yet sent
+                        Theme::muted()
+                    }
+                } else {
+                    Theme::muted()
+                };
+
+                spans.push(Span::styled(ch.to_string(), style));
+                char_offset += ch_len;
+            }
+
+            lines.push(Line::from(spans));
+            byte_offset = line_end + 1; // +1 for newline
+        }
+
+        lines
+    }
+
+    /// Build display lines for hex (binary) content with highlighting.
+    fn build_hex_lines(
+        &self,
+        preview: &FilePreview,
+        bytes_sent: u64,
+        current_chunk_start: u64,
+        current_chunk_end: u64,
+    ) -> Vec<Line<'static>> {
+        let bytes_per_line = 16;
+        let mut lines = Vec::new();
+
+        for (line_idx, chunk) in preview.raw_bytes.chunks(bytes_per_line).enumerate() {
+            let line_start = (line_idx * bytes_per_line) as u64;
+            let mut spans = Vec::new();
+
+            // Address prefix
+            spans.push(Span::styled(
+                format!("{:08X}  ", line_start),
+                Theme::muted()
+            ));
+
+            // Hex bytes
+            for (i, &byte) in chunk.iter().enumerate() {
+                let byte_offset = line_start + i as u64;
+                let style = if self.is_sending() || self.progress.as_ref().is_some_and(|p| p.bytes_sent > 0) {
+                    if byte_offset < bytes_sent {
+                        Style::default().fg(SENT_COLOR)
+                    } else if byte_offset >= current_chunk_start && byte_offset < current_chunk_end && self.is_sending() {
+                        Style::default().fg(CURRENT_COLOR)
+                    } else {
+                        Theme::muted()
+                    }
+                } else {
+                    Theme::muted()
+                };
+
+                let separator = if i == 7 { "  " } else { " " };
+                spans.push(Span::styled(format!("{:02X}{}", byte, separator), style));
+            }
+
+            // Pad if line is short
+            let missing = bytes_per_line - chunk.len();
+            if missing > 0 {
+                let padding = "   ".repeat(missing) + if chunk.len() <= 7 { "  " } else { "" };
+                spans.push(Span::styled(padding, Theme::muted()));
+            }
+
+            // ASCII representation
+            spans.push(Span::styled(" |", Theme::muted()));
+            for (i, &byte) in chunk.iter().enumerate() {
+                let byte_offset = line_start + i as u64;
+                let ch = if byte.is_ascii_graphic() || byte == b' ' {
+                    byte as char
+                } else {
+                    '.'
+                };
+                let style = if self.is_sending() || self.progress.as_ref().is_some_and(|p| p.bytes_sent > 0) {
+                    if byte_offset < bytes_sent {
+                        Style::default().fg(SENT_COLOR)
+                    } else if byte_offset >= current_chunk_start && byte_offset < current_chunk_end && self.is_sending() {
+                        Style::default().fg(CURRENT_COLOR)
+                    } else {
+                        Theme::muted()
+                    }
+                } else {
+                    Theme::muted()
+                };
+                spans.push(Span::styled(ch.to_string(), style));
+            }
+            spans.push(Span::styled("|", Theme::muted()));
+
+            lines.push(Line::from(spans));
+        }
+
+        lines
+    }
+
+    /// Calculate the total number of display lines for scroll calculations.
+    fn total_display_lines(&self) -> usize {
+        let Some(preview) = &self.preview else {
+            return 0;
+        };
+
+        let base_lines = if preview.is_binary {
+            // Hex view: 16 bytes per line
+            preview.raw_bytes.len().div_ceil(16)
+        } else {
+            // Text view: count actual lines
+            let text = String::from_utf8_lossy(&preview.raw_bytes);
+            text.lines().count()
+        };
+
+        // Add 1 for truncation indicator if needed
+        if preview.truncated {
+            base_lines + 1
+        } else {
+            base_lines
+        }
+    }
+
+    /// Calculate the display line for a given byte offset (for auto-follow).
+    fn byte_offset_to_line(&self, byte_offset: u64) -> usize {
+        let Some(preview) = &self.preview else {
+            return 0;
+        };
+
+        if preview.is_binary {
+            // Hex view: 16 bytes per line
+            (byte_offset as usize) / 16
+        } else {
+            // Text view: count newlines up to offset
+            let text = String::from_utf8_lossy(&preview.raw_bytes);
+            let mut line = 0;
+            let mut current_offset = 0u64;
+            for line_text in text.lines() {
+                let line_end = current_offset + line_text.len() as u64 + 1;
+                if byte_offset < line_end {
+                    return line;
+                }
+                line += 1;
+                current_offset = line_end;
+            }
+            line
+        }
+    }
+
     fn handle_main_key(&mut self, key: KeyEvent) -> Option<FileSenderAction> {
+        let has_ctrl = key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL);
+        let half_page = self.last_visible_height / 2;
+        let total_lines = self.total_display_lines();
+        let max_scroll = total_lines.saturating_sub(self.last_visible_height);
+
         match key.code {
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
+                self.scroll = self.scroll.saturating_add(1).min(max_scroll);
+            }
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
+                self.scroll = self.scroll.saturating_sub(1);
+            }
+            KeyCode::Char('d') if has_ctrl => {
+                self.scroll = self.scroll.saturating_add(half_page).min(max_scroll);
+            }
+            KeyCode::Char('u') if has_ctrl => {
+                self.scroll = self.scroll.saturating_sub(half_page);
+            }
+            KeyCode::Char('g') => {
+                self.scroll = 0;
+            }
+            KeyCode::Char('G') => {
+                self.scroll = max_scroll;
+            }
             KeyCode::Enter => {
                 if self.selected_path.is_some() && !self.is_sending() {
                     return Some(FileSenderAction::StartSending);
@@ -739,40 +1161,45 @@ impl FileSenderView {
         if let Ok(metadata) = std::fs::metadata(path) {
             let size = metadata.len();
 
-            // Read first 1KB for preview
-            let preview_size = 1024.min(size as usize);
-            if let Ok(content) = std::fs::read(path) {
-                let preview_bytes = &content[..preview_size.min(content.len())];
+            // Calculate preview limit in bytes
+            let limit_bytes = match self.config.preview_limit_unit_index {
+                0 => self.config.preview_limit_value * 1024,        // KB
+                _ => self.config.preview_limit_value * 1024 * 1024, // MB
+            };
 
-                // Check if binary
-                let is_binary = preview_bytes.iter().any(|&b| b == 0 || (b < 32 && b != b'\n' && b != b'\r' && b != b'\t'));
+            let read_size = limit_bytes.min(size as usize);
+            let truncated = size as usize > limit_bytes;
 
-                let (content, line_count) = if is_binary {
-                    // Show hex dump
-                    let hex = preview_bytes
-                        .iter()
-                        .take(256)
-                        .map(|b| format!("{:02X}", b))
-                        .collect::<Vec<_>>()
-                        .chunks(16)
-                        .map(|chunk| chunk.join(" "))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    (hex, None)
+            if let Ok(mut file) = std::fs::File::open(path) {
+                use std::io::Read;
+                let mut raw_bytes = vec![0u8; read_size];
+                if file.read_exact(&mut raw_bytes).is_err() {
+                    // If exact read fails, try reading what we can
+                    raw_bytes = std::fs::read(path).unwrap_or_default();
+                    raw_bytes.truncate(limit_bytes);
+                }
+
+                // Check if binary (null bytes or control chars except newline/tab/cr)
+                let is_binary = raw_bytes.iter().any(|&b| b == 0 || (b < 32 && b != b'\n' && b != b'\r' && b != b'\t'));
+
+                let line_count = if is_binary {
+                    None
                 } else {
-                    // Count lines from full file content for accurate count
-                    let full_text = String::from_utf8_lossy(&content);
-                    let lines = full_text.lines().count();
-                    let preview_text = String::from_utf8_lossy(preview_bytes).to_string();
-                    (preview_text, Some(lines))
+                    // Count lines in the loaded portion
+                    let text = String::from_utf8_lossy(&raw_bytes);
+                    Some(text.lines().count())
                 };
 
                 self.preview = Some(FilePreview {
                     size,
-                    content,
+                    raw_bytes,
                     is_binary,
                     line_count,
+                    truncated,
                 });
+                
+                // Reset scroll when loading new file
+                self.scroll = 0;
             }
         }
     }
@@ -855,6 +1282,9 @@ impl FileSenderView {
         self.config.delay_value = settings.delay_value;
         self.config.delay_unit_index = settings.delay_unit_index;
         self.config.repeat = settings.repeat;
+        self.config.preview_limit_value = settings.preview_limit_value;
+        self.config.preview_limit_unit_index = settings.preview_limit_unit_index;
+        self.config.auto_follow = settings.auto_follow;
     }
 
     /// Extract current settings from this view.
@@ -870,6 +1300,9 @@ impl FileSenderView {
             delay_value: self.config.delay_value,
             delay_unit_index: self.config.delay_unit_index,
             repeat: self.config.repeat,
+            preview_limit_value: self.config.preview_limit_value,
+            preview_limit_unit_index: self.config.preview_limit_unit_index,
+            auto_follow: self.config.auto_follow,
         }
     }
 }
@@ -882,4 +1315,9 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{} B", bytes)
     }
+}
+
+/// Find the position of a delimiter in a byte slice.
+fn find_delimiter(data: &[u8], delimiter: &[u8]) -> Option<usize> {
+    data.windows(delimiter.len()).position(|w| w == delimiter)
 }
