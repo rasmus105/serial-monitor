@@ -506,3 +506,27 @@ impl Default for FileSenderView {
         Self::new()
     }
 }
+
+// =============================================================================
+// Settings persistence
+// =============================================================================
+
+use crate::settings::FileSenderSettings;
+
+impl FileSenderView {
+    /// Apply saved settings to this view.
+    pub fn apply_settings(&mut self, settings: &FileSenderSettings) {
+        self.config.chunk_size = settings.chunk_size;
+        self.config.delay_ms = settings.delay_ms;
+        self.config.repeat = settings.repeat;
+    }
+
+    /// Extract current settings from this view.
+    pub fn to_settings(&self) -> FileSenderSettings {
+        FileSenderSettings {
+            chunk_size: self.config.chunk_size,
+            delay_ms: self.config.delay_ms,
+            repeat: self.config.repeat,
+        }
+    }
+}

@@ -1112,3 +1112,41 @@ impl Default for GraphView {
 }
 
 use crate::widget::ConfigPanel;
+
+// =============================================================================
+// Settings integration
+// =============================================================================
+
+use crate::settings::GraphSettings;
+
+impl GraphView {
+    /// Apply settings loaded from disk.
+    pub fn apply_settings(&mut self, settings: &GraphSettings) {
+        self.config.mode_index = settings.mode_index;
+        self.config.parser_type_index = settings.parser_type_index;
+        self.config.regex_pattern = settings.regex_pattern.clone();
+        self.config.csv_delimiter_index = settings.csv_delimiter_index;
+        self.config.csv_columns = settings.csv_columns.clone();
+        self.config.show_rx = settings.show_rx;
+        self.config.show_tx = settings.show_tx;
+        self.config.time_range_index = settings.time_range_index;
+        self.config.custom_time_value = settings.custom_time_value;
+        self.config.custom_time_unit_index = settings.custom_time_unit_index;
+    }
+    
+    /// Extract settings for saving to disk.
+    pub fn to_settings(&self) -> GraphSettings {
+        GraphSettings {
+            mode_index: self.config.mode_index,
+            parser_type_index: self.config.parser_type_index,
+            regex_pattern: self.config.regex_pattern.clone(),
+            csv_delimiter_index: self.config.csv_delimiter_index,
+            csv_columns: self.config.csv_columns.clone(),
+            show_rx: self.config.show_rx,
+            show_tx: self.config.show_tx,
+            time_range_index: self.config.time_range_index,
+            custom_time_value: self.config.custom_time_value,
+            custom_time_unit_index: self.config.custom_time_unit_index,
+        }
+    }
+}

@@ -5,10 +5,11 @@
 
 use std::fmt::Write;
 
+use serde::{Deserialize, Serialize};
 use strum::{AsRefStr, Display, EnumMessage};
 
 /// Formatting options for hexadecimal display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HexFormat {
     /// Bytes per group (0 = no grouping)
     pub group_size: u8,
@@ -29,7 +30,7 @@ impl Default for HexFormat {
 }
 
 /// Formatting options for binary display
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BinaryFormat {
     /// Bits per group (0 = no grouping, typically 8 for byte grouping)
     pub group_size: u8,
@@ -47,7 +48,7 @@ impl Default for BinaryFormat {
 }
 
 /// Encoding mode for displaying raw bytes
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Display, EnumMessage, AsRefStr)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Display, EnumMessage, AsRefStr, Serialize, Deserialize)]
 pub enum Encoding {
     /// UTF-8 with replacement character for invalid sequences
     #[default]

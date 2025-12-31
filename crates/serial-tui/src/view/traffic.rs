@@ -1406,3 +1406,47 @@ impl Default for TrafficView {
         Self::new()
     }
 }
+
+// =============================================================================
+// Settings integration
+// =============================================================================
+
+use crate::settings::TrafficSettings;
+
+impl TrafficView {
+    /// Apply settings loaded from disk.
+    pub fn apply_settings(&mut self, settings: &TrafficSettings) {
+        self.config.encoding_index = settings.encoding_index;
+        self.config.show_tx = settings.show_tx;
+        self.config.show_rx = settings.show_rx;
+        self.config.show_timestamps = settings.show_timestamps;
+        self.config.timestamp_format_index = settings.timestamp_format_index;
+        self.config.auto_scroll = settings.auto_scroll;
+        self.config.lock_to_bottom = settings.lock_to_bottom;
+        self.config.pattern_mode_index = settings.pattern_mode_index;
+        self.config.wrap_text = settings.wrap_text;
+        self.config.file_save_enabled = settings.file_save_enabled;
+        self.config.file_save_format_index = settings.file_save_format_index;
+        self.config.file_save_encoding_index = settings.file_save_encoding_index;
+        self.config.file_save_directory = settings.file_save_directory.clone();
+    }
+    
+    /// Extract settings for saving to disk.
+    pub fn to_settings(&self) -> TrafficSettings {
+        TrafficSettings {
+            encoding_index: self.config.encoding_index,
+            show_tx: self.config.show_tx,
+            show_rx: self.config.show_rx,
+            show_timestamps: self.config.show_timestamps,
+            timestamp_format_index: self.config.timestamp_format_index,
+            auto_scroll: self.config.auto_scroll,
+            lock_to_bottom: self.config.lock_to_bottom,
+            pattern_mode_index: self.config.pattern_mode_index,
+            wrap_text: self.config.wrap_text,
+            file_save_enabled: self.config.file_save_enabled,
+            file_save_format_index: self.config.file_save_format_index,
+            file_save_encoding_index: self.config.file_save_encoding_index,
+            file_save_directory: self.config.file_save_directory.clone(),
+        }
+    }
+}

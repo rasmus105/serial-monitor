@@ -21,6 +21,7 @@ mod file_sender;
 pub mod keep_awake;
 mod port;
 mod session;
+pub mod settings;
 
 // Utility modules for frontends to avoid duplication
 pub mod buffer;

@@ -13,3 +13,5 @@ ratatui = { workspace = true }
 crossterm = { workspace = true, features = ["event-stream"] }
 unicode-width = { workspace = true }
 chrono = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

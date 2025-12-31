@@ -701,3 +701,41 @@ impl Default for PreConnectView {
         Self::new()
     }
 }
+
+// =============================================================================
+// Settings integration
+// =============================================================================
+
+use crate::settings::PreConnectSettings;
+
+impl PreConnectView {
+    /// Apply settings loaded from disk.
+    pub fn apply_settings(&mut self, settings: &PreConnectSettings) {
+        self.config.baud_rate_index = settings.baud_rate_index;
+        self.config.data_bits_index = settings.data_bits_index;
+        self.config.parity_index = settings.parity_index;
+        self.config.stop_bits_index = settings.stop_bits_index;
+        self.config.flow_control_index = settings.flow_control_index;
+        self.config.line_ending_index = settings.line_ending_index;
+        self.config.file_save_enabled = settings.file_save_enabled;
+        self.config.file_save_format_index = settings.file_save_format_index;
+        self.config.file_save_encoding_index = settings.file_save_encoding_index;
+        self.config.file_save_directory = settings.file_save_directory.clone();
+    }
+    
+    /// Extract settings for saving to disk.
+    pub fn to_settings(&self) -> PreConnectSettings {
+        PreConnectSettings {
+            baud_rate_index: self.config.baud_rate_index,
+            data_bits_index: self.config.data_bits_index,
+            parity_index: self.config.parity_index,
+            stop_bits_index: self.config.stop_bits_index,
+            flow_control_index: self.config.flow_control_index,
+            line_ending_index: self.config.line_ending_index,
+            file_save_enabled: self.config.file_save_enabled,
+            file_save_format_index: self.config.file_save_format_index,
+            file_save_encoding_index: self.config.file_save_encoding_index,
+            file_save_directory: self.config.file_save_directory.clone(),
+        }
+    }
+}

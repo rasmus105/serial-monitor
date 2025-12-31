@@ -17,6 +17,7 @@ use serial_core::{
 
 use crate::{
     event::{AppEvent, poll_event},
+    settings::TuiSettings,
     theme::Theme,
     view::{file_sender::FileSenderView, graph::GraphView, pre_connect::PreConnectView, traffic::TrafficView},
     widget::{
@@ -49,6 +50,8 @@ pub struct App {
     pub command_mode: bool,
     /// Whether the terminal needs a full clear on next draw.
     pub needs_clear: bool,
+    /// Persistent settings.
+    settings: TuiSettings,
 }
 
 /// Current view mode.
@@ -110,17 +113,29 @@ pub enum Focus {
 
 impl App {
     pub fn new() -> Self {
+        // Load persistent settings
+        let settings = TuiSettings::load();
+        
+        // Create pre-connect view with saved settings
+        let mut pre_connect = PreConnectView::new();
+        pre_connect.apply_settings(&settings.pre_connect);
+        
+        // Create help overlay with saved global settings
+        let mut help = HelpOverlayState::default();
+        help.settings = settings.global.clone().into();
+        
         Self {
             should_quit: false,
             toasts: Toasts::new(),
-            help: HelpOverlayState::default(),
+            help,
             confirm: ConfirmState::default(),
-            mode: AppMode::PreConnect(PreConnectView::new()),
+            mode: AppMode::PreConnect(pre_connect),
             show_config: true,
             focus: Focus::Main,
             command_input: TextInputState::new().with_placeholder("Enter command..."),
             command_mode: false,
             needs_clear: false,
+            settings,
         }
     }
 
@@ -163,6 +178,9 @@ impl App {
             }
 
             if self.should_quit {
+                // Save settings before quitting
+                self.save_settings();
+                
                 // Cleanup
                 if let AppMode::Connected(state) = std::mem::replace(
                     &mut self.mode,
@@ -536,6 +554,8 @@ impl App {
                 // Get serial config and file save settings from pre-connect view if available, or use defaults
                 let (serial_config, rx_chunking, file_save_enabled, file_save_format_index, file_save_encoding_index, file_save_directory) = match &self.mode {
                     AppMode::PreConnect(view) => {
+                        // Save pre-connect settings before transitioning
+                        self.settings.pre_connect = view.to_settings();
                         (
                             view.config.to_serial_config(),
                             view.config.rx_chunking(),
@@ -653,6 +673,12 @@ impl App {
                 file_save_encoding_index,
                 file_save_directory,
             } => {
+                // Save pre-connect settings before transitioning to connected state
+                // This ensures settings are preserved even if we quit while connected
+                if let AppMode::PreConnect(view) = &self.mode {
+                    self.settings.pre_connect = view.to_settings();
+                }
+                
                 // Build session config from global settings
                 let settings = &self.help.settings;
                 let session_config = SessionConfig {
@@ -779,7 +805,9 @@ impl App {
                 let mut traffic = TrafficView::new();
                 traffic.session_start = Some(SystemTime::now());
                 
-                // Apply file saving settings from pre-connect config
+                // Apply saved settings to traffic view first
+                traffic.apply_settings(&self.settings.traffic);
+                // Override file save settings with what was configured in pre-connect
                 traffic.config.file_save_enabled = file_save_enabled;
                 traffic.config.file_save_format_index = file_save_format_index;
                 traffic.config.file_save_encoding_index = file_save_encoding_index;
@@ -819,12 +847,20 @@ impl App {
                     }
                 }
                 
+                // Create and configure graph view
+                let mut graph = GraphView::new();
+                graph.apply_settings(&self.settings.graph);
+                
+                // Create and configure file sender view
+                let mut file_sender = FileSenderView::new();
+                file_sender.apply_settings(&self.settings.file_sender);
+                
                 let state = ConnectedState {
                     handle,
                     tab: ConnectedTab::Traffic,
                     traffic,
-                    graph: GraphView::new(),
-                    file_sender: FileSenderView::new(),
+                    graph,
+                    file_sender,
                     serial_config,
                     keep_awake: keep_awake_handle,
                 };
@@ -861,6 +897,32 @@ impl App {
                 ConnectedTab::Graph => state.graph.is_input_mode(),
                 ConnectedTab::FileSender => state.file_sender.is_input_mode(),
             },
+        }
+    }
+    
+    /// Collect and save all settings.
+    fn save_settings(&mut self) {
+        // Collect settings from current view mode
+        // Note: We only update settings for views that exist in the current mode.
+        // Settings for other views are preserved from the last time they were active.
+        match &self.mode {
+            AppMode::PreConnect(view) => {
+                self.settings.pre_connect = view.to_settings();
+            }
+            AppMode::Connected(state) => {
+                self.settings.traffic = state.traffic.to_settings();
+                self.settings.graph = state.graph.to_settings();
+                self.settings.file_sender = state.file_sender.to_settings();
+            }
+        }
+        
+        // Collect global settings from help overlay
+        self.settings.global = (&self.help.settings).into();
+        
+        // Save to file
+        if let Err(e) = self.settings.save() {
+            // Don't show toast since we're quitting, but log to stderr
+            eprintln!("Warning: Failed to save settings: {}", e);
         }
     }
 }
