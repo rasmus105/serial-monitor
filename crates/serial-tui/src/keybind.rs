@@ -106,7 +106,7 @@ pub const fn alt(code: KeyCode) -> KeyEvent {
 pub fn all_keybinds() -> Vec<Keybind> {
     vec![
         // Global
-        Keybind::new(key(KeyCode::Char('q')), "Quit", KeyContext::Global),
+        Keybind::new(key(KeyCode::Char('q')), "Quit / Disconnect prompt", KeyContext::Global),
         Keybind::new(key(KeyCode::Char('?')), "Help/Settings", KeyContext::Global),
         Keybind::new(
             key(KeyCode::Char('c')),

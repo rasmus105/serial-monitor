@@ -20,7 +20,7 @@ use crate::{
     theme::Theme,
     view::{file_sender::FileSenderView, graph::GraphView, pre_connect::PreConnectView, traffic::TrafficView},
     widget::{
-        HelpOverlay, Toasts,
+        ConfirmOverlay, ConfirmState, HelpOverlay, Toasts,
         help_overlay::HelpOverlayState,
         text_input::TextInputState,
         toast::render_toasts,
@@ -35,6 +35,8 @@ pub struct App {
     pub toasts: Toasts,
     /// Help overlay state.
     pub help: HelpOverlayState,
+    /// Confirmation dialog state.
+    pub confirm: ConfirmState,
     /// Current view mode.
     pub mode: AppMode,
     /// Whether the config panel is visible.
@@ -112,6 +114,7 @@ impl App {
             should_quit: false,
             toasts: Toasts::new(),
             help: HelpOverlayState::default(),
+            confirm: ConfirmState::default(),
             mode: AppMode::PreConnect(PreConnectView::new()),
             show_config: true,
             focus: Focus::Main,
@@ -232,6 +235,9 @@ impl App {
         // Draw toasts overlay
         render_toasts(&self.toasts, area, buf);
 
+        // Draw confirmation overlay
+        ConfirmOverlay::new(&self.confirm).render(area, buf);
+
         // Draw help overlay
         HelpOverlay::new(&self.help).render(area, buf);
     }
@@ -349,10 +355,34 @@ impl App {
                     return;
                 }
 
+                // Handle confirmation overlay (captures all input when visible)
+                if self.confirm.visible {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            self.confirm.hide();
+                            self.needs_clear = true;
+                            self.disconnect().await;
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N')
+                        | KeyCode::Char('q') | KeyCode::Char('Q')
+                        | KeyCode::Esc => {
+                            self.confirm.hide();
+                            self.needs_clear = true;
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
                 // Global keybindings
                 match key.code {
                     KeyCode::Char('q') => {
-                        self.should_quit = true;
+                        // When connected, show confirmation prompt instead of quitting
+                        if matches!(self.mode, AppMode::Connected(_)) {
+                            self.confirm.show("Disconnect from port?");
+                        } else {
+                            self.should_quit = true;
+                        }
                         return;
                     }
                     KeyCode::Char('?') => {
