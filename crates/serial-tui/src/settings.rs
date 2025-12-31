@@ -54,14 +54,14 @@ pub struct PreConnectSettings {
 impl Default for PreConnectSettings {
     fn default() -> Self {
         Self {
-            baud_rate_index: 8,  // 115200
-            data_bits_index: 3,  // 8 bits
-            parity_index: 0,     // None
-            stop_bits_index: 0,  // 1
+            baud_rate_index: 8,    // 115200
+            data_bits_index: 3,    // 8 bits
+            parity_index: 0,       // None
+            stop_bits_index: 0,    // 1
             flow_control_index: 0, // None
-            line_ending_index: 1, // LF
+            line_ending_index: 1,  // LF
             file_save_enabled: false,
-            file_save_format_index: 1, // Encoded
+            file_save_format_index: 1,   // Encoded
             file_save_encoding_index: 1, // ASCII
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
@@ -115,7 +115,7 @@ impl Default for TrafficSettings {
             pattern_mode_index: 0, // Normal
             wrap_text: true,
             file_save_enabled: false,
-            file_save_format_index: 1, // Encoded
+            file_save_format_index: 1,   // Encoded
             file_save_encoding_index: 1, // ASCII
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
@@ -153,7 +153,7 @@ pub struct GraphSettings {
 impl Default for GraphSettings {
     fn default() -> Self {
         Self {
-            mode_index: 0, // Parsed Data
+            mode_index: 0,        // Parsed Data
             parser_type_index: 0, // Smart
             regex_pattern: String::new(),
             csv_delimiter_index: 0, // Comma
@@ -177,6 +177,8 @@ pub struct FileSenderSettings {
     pub delimiter_index: usize,
     /// Whether to include delimiter in sent chunks
     pub include_delimiter: bool,
+    /// Number of lines per chunk (for delimiter mode)
+    pub lines_per_chunk: usize,
     /// Byte chunk size value (for bytes mode)
     pub byte_chunk_value: usize,
     /// Byte chunk unit index
@@ -202,19 +204,20 @@ pub struct FileSenderSettings {
 impl Default for FileSenderSettings {
     fn default() -> Self {
         Self {
-            chunk_mode_index: 0,        // Delimiter
-            delimiter_index: 0,         // LF
+            chunk_mode_index: 0, // Delimiter
+            delimiter_index: 0,  // LF
             include_delimiter: true,
+            lines_per_chunk: 1,
             byte_chunk_value: 64,
-            byte_unit_index: 0,         // Bytes
+            byte_unit_index: 0, // Bytes
             append_suffix: false,
-            suffix_delimiter_index: 0,  // LF
+            suffix_delimiter_index: 0, // LF
             delay_value: 10,
-            delay_unit_index: 0,        // Milliseconds
+            delay_unit_index: 0, // Milliseconds
             repeat: false,
-            preview_limit_value: 1,     // 1 MB default
+            preview_limit_value: 1,      // 1 MB default
             preview_limit_unit_index: 1, // MB
-            auto_follow: true,          // Follow current chunk by default
+            auto_follow: false,          // Follow current chunk by default
         }
     }
 }
@@ -274,7 +277,7 @@ impl Default for GlobalSettings {
             // Auto-save defaults
             auto_save_enabled: true,
             auto_save_max_sessions: 10,
-            auto_save_format_index: 1, // Encoded
+            auto_save_format_index: 1,   // Encoded
             auto_save_encoding_index: 1, // ASCII
             auto_save_timestamps: true,
             auto_save_direction: false,

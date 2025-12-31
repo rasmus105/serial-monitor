@@ -180,6 +180,9 @@ pub struct FileSendConfig {
     pub chunk_mode: ChunkMode,
     /// Whether to include the delimiter in sent chunks (only for delimiter mode)
     pub include_delimiter: bool,
+    /// Number of delimiter-separated units to send per chunk (only for delimiter mode)
+    /// e.g., if set to 2 and delimiter is '\n', sends 2 lines at a time
+    pub lines_per_chunk: usize,
     /// Optional suffix to append to each chunk (e.g., line ending)
     pub chunk_suffix: Option<Cow<'static, [u8]>>,
     /// Delay between chunks
@@ -193,6 +196,7 @@ impl Default for FileSendConfig {
         Self {
             chunk_mode: ChunkMode::default(),
             include_delimiter: true,
+            lines_per_chunk: 1,
             chunk_suffix: None,
             chunk_delay: Duration::from_millis(10),
             repeat: false,
@@ -456,9 +460,19 @@ async fn send_delimiter_chunked(
     };
 
     let delimiter_bytes = delimiter.as_bytes();
-    let chunks = split_by_delimiter(&content, delimiter_bytes, config.include_delimiter);
+    let individual_chunks = split_by_delimiter(&content, delimiter_bytes, config.include_delimiter);
 
-    for chunk_data in chunks {
+    // Group chunks according to lines_per_chunk
+    let lines_per_chunk = config.lines_per_chunk.max(1);
+    let grouped_chunks: Vec<Vec<u8>> = individual_chunks
+        .chunks(lines_per_chunk)
+        .map(|group| group.concat())
+        .collect();
+
+    // Now we know the total number of chunks
+    progress.total_chunks = grouped_chunks.len();
+
+    for chunk_data in grouped_chunks {
         // Check for cancellation
         if cancel_rx.try_recv().is_ok() {
             progress.complete = true;

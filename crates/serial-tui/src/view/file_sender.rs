@@ -81,6 +81,8 @@ pub struct FileSenderConfig {
     pub delimiter_index: usize,
     /// Whether to include delimiter in sent chunks
     pub include_delimiter: bool,
+    /// Number of lines per chunk (for delimiter mode)
+    pub lines_per_chunk: usize,
     /// Byte chunk size value (for bytes mode)
     pub byte_chunk_value: usize,
     /// Byte chunk unit index
@@ -110,6 +112,7 @@ impl Default for FileSenderConfig {
             chunk_mode_index: 0, // Delimiter
             delimiter_index: 0,  // LF
             include_delimiter: true,
+            lines_per_chunk: 1,
             byte_chunk_value: 64,
             byte_unit_index: 0, // Bytes
             append_suffix: false,
@@ -202,6 +205,28 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
                 enabled: |c| !c.is_sending,
                 parent_id: Some("delimiter"),
                 validate: always_valid,
+            },
+            FieldDef {
+                id: "lines_per_chunk",
+                label: "Lines per Chunk",
+                kind: FieldKind::NumericInput { min: Some(1), max: None },
+                get: |c| FieldValue::Usize(c.lines_per_chunk),
+                set: |c, v| {
+                    if let FieldValue::Usize(n) = v {
+                        c.lines_per_chunk = n;
+                    }
+                },
+                visible: |c| c.chunk_mode_index == 0, // Only for delimiter mode
+                enabled: |c| !c.is_sending,
+                parent_id: Some("delimiter"),
+                validate: |v| {
+                    if let FieldValue::Usize(n) = v {
+                        if *n == 0 {
+                            return Err(Cow::Borrowed("Must be >= 1"));
+                        }
+                    }
+                    Ok(())
+                },
             },
             FieldDef {
                 id: "byte_chunk_value",
@@ -1232,6 +1257,7 @@ impl FileSenderView {
             let config = FileSendConfig {
                 chunk_mode,
                 include_delimiter: self.config.include_delimiter,
+                lines_per_chunk: self.config.lines_per_chunk,
                 chunk_suffix,
                 chunk_delay,
                 repeat: self.config.repeat,
@@ -1275,6 +1301,7 @@ impl FileSenderView {
         self.config.chunk_mode_index = settings.chunk_mode_index;
         self.config.delimiter_index = settings.delimiter_index;
         self.config.include_delimiter = settings.include_delimiter;
+        self.config.lines_per_chunk = settings.lines_per_chunk;
         self.config.byte_chunk_value = settings.byte_chunk_value;
         self.config.byte_unit_index = settings.byte_unit_index;
         self.config.append_suffix = settings.append_suffix;
@@ -1293,6 +1320,7 @@ impl FileSenderView {
             chunk_mode_index: self.config.chunk_mode_index,
             delimiter_index: self.config.delimiter_index,
             include_delimiter: self.config.include_delimiter,
+            lines_per_chunk: self.config.lines_per_chunk,
             byte_chunk_value: self.config.byte_chunk_value,
             byte_unit_index: self.config.byte_unit_index,
             append_suffix: self.config.append_suffix,

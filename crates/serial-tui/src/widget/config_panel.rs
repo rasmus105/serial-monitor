@@ -8,7 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
-use serial_core::ui::config::{ConfigPanelNav, FieldKind, FieldValue, Section};
+use serial_core::ui::config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section};
 
 use crate::theme::Theme;
 
@@ -391,19 +391,15 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 let is_dropdown_open = is_selected && self.nav.dropdown_open;
                 let is_text_editing = is_selected && self.nav.text_editing;
                 let is_enabled = (field.enabled)(self.data);
-                let is_sub_option = field.parent_id.is_some();
                 let value = (field.get)(self.data);
 
-                // Determine if this is the last sub-option with the same parent
-                // (a sub-option is any field with a parent_id)
-                let is_last_sibling = if let Some(parent) = field.parent_id {
-                    // Check if there are any more sub-options with the same parent after this one
-                    !visible_fields.iter()
-                        .skip(field_in_section_idx + 1)
-                        .any(|f| f.parent_id == Some(parent))
-                } else {
-                    false
-                };
+                // Calculate tree prefix for hierarchical display
+                let tree_prefix = calculate_tree_prefix(
+                    field,
+                    field_in_section_idx,
+                    &visible_fields,
+                );
+                let tree_prefix_width = tree_prefix.chars().count();
 
                 // Calculate styles based on enabled state
                 let (label_style, value_style) = if self.read_only || !is_enabled {
@@ -478,18 +474,6 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 // Apply value style override if present (for special toggles like send_active)
                 let value_style = value_style_override.unwrap_or(value_style);
 
-                // Calculate tree prefix for sub-options
-                let tree_prefix = if is_sub_option {
-                    if is_last_sibling {
-                        "└ "  // Last item uses corner
-                    } else {
-                        "├ "  // Middle items use tee
-                    }
-                } else {
-                    ""
-                };
-                let tree_prefix_width = if is_sub_option { 2 } else { 0 };
-
                 // Calculate layout: tree_prefix + label on left, value on right
                 let label = &field.label;
                 let available = inner.width as usize;
@@ -507,7 +491,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 // Build line with tree prefix
                 let tree_prefix_style = if is_enabled { Theme::muted() } else { Theme::muted() };
                 let line = Line::from(vec![
-                    Span::styled(tree_prefix.to_string(), tree_prefix_style),
+                    Span::styled(tree_prefix.clone(), tree_prefix_style),
                     Span::styled(label_display, label_style),
                     Span::raw(" ".repeat(padding)),
                     Span::styled(value_str, value_style),
@@ -625,4 +609,87 @@ fn render_dropdown_overlay(
             .style(style)
             .render(Rect::new(inner.x, y, inner.width, 1), buf);
     }
+}
+
+/// Calculate tree prefix for hierarchical field display.
+///
+/// Builds a prefix string like "├ ", "└ ", "│ ├ ", "│ └ ", etc.
+/// based on the field's position in the parent-child hierarchy.
+fn calculate_tree_prefix<T>(
+    field: &FieldDef<T>,
+    field_idx: usize,
+    visible_fields: &[&FieldDef<T>],
+) -> String {
+    let Some(parent_id) = field.parent_id else {
+        return String::new();
+    };
+
+    // Build the ancestry chain from root to this field's parent
+    let mut ancestry = Vec::new();
+    let mut current_parent = Some(parent_id);
+    
+    while let Some(pid) = current_parent {
+        ancestry.push(pid);
+        // Find the parent field and get its parent
+        current_parent = visible_fields.iter()
+            .find(|f| f.id == pid)
+            .and_then(|f| f.parent_id);
+    }
+    
+    // Reverse so we go from root to immediate parent
+    ancestry.reverse();
+    
+    let mut prefix = String::new();
+    
+    // For each ancestor level, determine if we need "│ " (has more siblings) or "  " (no more siblings)
+    for (level, &ancestor_id) in ancestry.iter().enumerate() {
+        if level == ancestry.len() - 1 {
+            // This is the immediate parent - use ├ or └
+            let has_more_siblings = visible_fields.iter()
+                .skip(field_idx + 1)
+                .any(|f| f.parent_id == Some(ancestor_id));
+            
+            if has_more_siblings {
+                prefix.push_str("├ ");
+            } else {
+                prefix.push_str("└ ");
+            }
+        } else {
+            // This is a grandparent or higher - check if it has more children after current branch
+            // Find the child of this ancestor that is an ancestor of our field
+            let child_ancestor = ancestry.get(level + 1);
+            
+            // Check if the ancestor has more children after the branch we're in
+            let ancestor_has_more_children = visible_fields.iter()
+                .skip(field_idx + 1)
+                .any(|f| {
+                    // Check if this field is a direct child of the ancestor
+                    // but NOT in our current branch
+                    f.parent_id == Some(ancestor_id) && 
+                    child_ancestor.map_or(true, |&child| !is_descendant_of(f, child, visible_fields))
+                });
+            
+            if ancestor_has_more_children {
+                prefix.push_str("│ ");
+            } else {
+                prefix.push_str("  ");
+            }
+        }
+    }
+    
+    prefix
+}
+
+/// Check if a field is a descendant of a given ancestor (by id)
+fn is_descendant_of<T>(field: &FieldDef<T>, ancestor_id: &str, visible_fields: &[&FieldDef<T>]) -> bool {
+    let mut current_parent = field.parent_id;
+    while let Some(pid) = current_parent {
+        if pid == ancestor_id {
+            return true;
+        }
+        current_parent = visible_fields.iter()
+            .find(|f| f.id == pid)
+            .and_then(|f| f.parent_id);
+    }
+    false
 }
