@@ -418,53 +418,65 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 };
 
                 // Format field based on kind
-                let value_str = match (&field.kind, &value) {
+                let (value_str, value_style_override) = match (&field.kind, &value) {
                     (FieldKind::Toggle, FieldValue::Bool(b)) => {
-                        if *b { "[x]" } else { "[ ]" }.to_string()
+                        // Special handling for send_active toggle
+                        if field.id == "send_active" {
+                            if *b {
+                                ("[ Stop]".to_string(), Some(Theme::error()))
+                            } else {
+                                ("[Start]".to_string(), Some(Theme::success()))
+                            }
+                        } else {
+                            (if *b { "[x]" } else { "[ ]" }.to_string(), None)
+                        }
                     }
                     (FieldKind::Select { options }, FieldValue::OptionIndex(i)) => {
                         let option = options.get(*i).unwrap_or(&"?");
                         if is_dropdown_open {
                             // Show dropdown indicator when open
-                            format!("[{}] ▼", option)
+                            (format!("[{}] ▼", option), None)
                         } else {
-                            format!("[{}]", option)
+                            (format!("[{}]", option), None)
                         }
                     }
                     (FieldKind::TextInput { placeholder }, FieldValue::String(s)) => {
                         if is_text_editing {
                             // Show edit buffer with cursor indicator
-                            format!("{}▏", self.nav.text_buffer())
+                            (format!("{}▏", self.nav.text_buffer()), None)
                         } else if s.is_empty() {
-                            format!("[{}]", placeholder)
+                            (format!("[{}]", placeholder), None)
                         } else {
-                            s.to_string()
+                            (s.to_string(), None)
                         }
                     }
                     (FieldKind::NumericInput { .. }, FieldValue::Usize(n)) => {
                         if is_text_editing {
                             // Show edit buffer with cursor indicator
-                            format!("{}▏", self.nav.text_buffer())
+                            (format!("{}▏", self.nav.text_buffer()), None)
                         } else {
-                            n.to_string()
+                            (n.to_string(), None)
                         }
                     }
                     (FieldKind::NumericInput { .. }, FieldValue::Isize(n)) => {
                         if is_text_editing {
-                            format!("{}▏", self.nav.text_buffer())
+                            (format!("{}▏", self.nav.text_buffer()), None)
                         } else {
-                            n.to_string()
+                            (n.to_string(), None)
                         }
                     }
                     (FieldKind::NumericInput { .. }, FieldValue::Float(f)) => {
                         if is_text_editing {
-                            format!("{}▏", self.nav.text_buffer())
+                            (format!("{}▏", self.nav.text_buffer()), None)
                         } else {
-                            format!("{:.2}", f)
+                            (format!("{:.2}", f), None)
                         }
                     }
-                    _ => "?".to_string(),
+                    _ => ("?".to_string(), None),
                 };
+
+                // Apply value style override if present (for special toggles like send_active)
+                let value_style = value_style_override.unwrap_or(value_style);
 
                 // Calculate tree prefix for sub-options
                 let tree_prefix = if is_sub_option {

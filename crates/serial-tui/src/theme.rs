@@ -37,6 +37,8 @@ impl Theme {
     pub const SELECTION: Color = Color::Indexed(236);
     pub const MUTED: Color = Color::DarkGray;
     pub const HIGHLIGHT: Color = Color::White;
+    /// Gauge/progress bar unfilled background - slightly visible against terminal background
+    pub const GAUGE_BG: Color = Color::Indexed(238);
 
     // Styles
     pub fn default() -> Style {
