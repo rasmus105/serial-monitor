@@ -162,19 +162,37 @@ impl Widget for ToastsWidget<'_> {
             return;
         }
 
-        // Calculate toast area (top-right corner)
-        let toast_width = 40.min(area.width.saturating_sub(4));
-        let toast_x = area.x + area.width.saturating_sub(toast_width + 2);
-
         let visible = self.toasts.toasts.iter().take(self.toasts.max_visible);
 
         let mut y = area.y + 1;
         for toast in visible {
-            if y + 3 > area.y + area.height {
+            // Calculate toast dimensions based on message length
+            // Minimum width: 30, Maximum width: 70% of screen or 60 chars
+            let max_width = (area.width * 70 / 100).max(30).min(60) as usize;
+            let msg_len = toast.message.len();
+            
+            // Toast width: message length + borders (2) + padding (2), clamped
+            let toast_width = (msg_len + 4).clamp(30, max_width) as u16;
+            let toast_width = toast_width.min(area.width.saturating_sub(4));
+            
+            // Calculate how many lines we need for the message
+            // Inner width is toast_width - 2 (borders)
+            let inner_width = toast_width.saturating_sub(2) as usize;
+            let num_lines = if inner_width > 0 {
+                (msg_len + inner_width - 1) / inner_width // ceiling division
+            } else {
+                1
+            }.max(1).min(4); // max 4 lines of text
+            
+            // Toast height: lines + borders (2)
+            let toast_height = (num_lines as u16) + 2;
+            
+            if y + toast_height > area.y + area.height {
                 break;
             }
 
-            let toast_area = Rect::new(toast_x, y, toast_width, 3);
+            let toast_x = area.x + area.width.saturating_sub(toast_width + 2);
+            let toast_area = Rect::new(toast_x, y, toast_width, toast_height);
 
             // Clear background
             Clear.render(toast_area, buf);
@@ -193,7 +211,7 @@ impl Widget for ToastsWidget<'_> {
                 .alignment(Alignment::Left)
                 .render(inner, buf);
 
-            y += 4;
+            y += toast_height + 1; // +1 for spacing between toasts
         }
     }
 }

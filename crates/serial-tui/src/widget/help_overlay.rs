@@ -21,33 +21,33 @@ pub enum HelpTab {
     #[default]
     Shortcuts,
     Settings,
-    About,
+    Commands,
 }
 
 impl HelpTab {
-    pub const ALL: [HelpTab; 3] = [HelpTab::Shortcuts, HelpTab::Settings, HelpTab::About];
+    pub const ALL: [HelpTab; 3] = [HelpTab::Shortcuts, HelpTab::Settings, HelpTab::Commands];
 
     pub fn title(self) -> &'static str {
         match self {
             HelpTab::Shortcuts => "Shortcuts",
             HelpTab::Settings => "Settings",
-            HelpTab::About => "About",
+            HelpTab::Commands => "Commands",
         }
     }
 
     pub fn next(self) -> Self {
         match self {
             HelpTab::Shortcuts => HelpTab::Settings,
-            HelpTab::Settings => HelpTab::About,
-            HelpTab::About => HelpTab::Shortcuts,
+            HelpTab::Settings => HelpTab::Commands,
+            HelpTab::Commands => HelpTab::Shortcuts,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            HelpTab::Shortcuts => HelpTab::About,
+            HelpTab::Shortcuts => HelpTab::Commands,
             HelpTab::Settings => HelpTab::Shortcuts,
-            HelpTab::About => HelpTab::Settings,
+            HelpTab::Commands => HelpTab::Settings,
         }
     }
 }
@@ -562,7 +562,7 @@ impl HelpOverlayState {
 
         // Tab-specific handling
         match self.tab {
-            HelpTab::Shortcuts | HelpTab::About => {
+            HelpTab::Shortcuts | HelpTab::Commands => {
                 match key.code {
                     KeyCode::Char('j') | KeyCode::Down => {
                         self.scroll = self.scroll.saturating_add(1);
@@ -724,7 +724,7 @@ impl Widget for HelpOverlay<'_> {
         match self.state.tab {
             HelpTab::Shortcuts => render_shortcuts(content_area, buf, self.state.scroll),
             HelpTab::Settings => render_settings(content_area, buf, &self.state.settings, &self.state.settings_nav),
-            HelpTab::About => render_about(content_area, buf),
+            HelpTab::Commands => render_commands(content_area, buf, self.state.scroll),
         }
     }
 }
@@ -801,35 +801,52 @@ fn render_settings(area: Rect, buf: &mut Buffer, settings: &AppSettings, nav: &C
         .render(panel_area, buf);
 }
 
-fn render_about(area: Rect, buf: &mut Buffer) {
-    let lines = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Serial Monitor",
-            Theme::title(),
-        )]),
-        Line::from(""),
-        Line::from("A terminal-based serial port monitor with"),
-        Line::from("vim-like keybindings."),
-        Line::from(""),
-        Line::from(vec![Span::styled("Features:", Theme::highlight())]),
-        Line::from("  - Real-time traffic monitoring"),
-        Line::from("  - Graphing of parsed data"),
-        Line::from("  - File sending with progress"),
-        Line::from("  - Multiple encoding views"),
-        Line::from("  - Search and filtering"),
-        Line::from("  - Auto-save for crash recovery"),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("Press "),
-            Span::styled("?", Theme::keybind()),
-            Span::raw(" again or "),
-            Span::styled("Esc", Theme::keybind()),
-            Span::raw(" to close"),
-        ]),
+fn render_commands(area: Rect, buf: &mut Buffer, scroll: usize) {
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Usage section
+    lines.push(Line::from(vec![Span::styled("Command Mode", Theme::title())]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("Press "),
+        Span::styled(":", Theme::keybind()),
+        Span::raw(" to enter command mode. Use "),
+        Span::styled("Tab", Theme::keybind()),
+        Span::raw(" for completion."),
+    ]));
+    lines.push(Line::from(vec![
+        Span::raw("Press "),
+        Span::styled("Enter", Theme::keybind()),
+        Span::raw(" to execute, "),
+        Span::styled("Esc", Theme::keybind()),
+        Span::raw(" to cancel."),
+    ]));
+    lines.push(Line::from(""));
+
+    // Commands section
+    lines.push(Line::from(vec![Span::styled("Available Commands", Theme::title())]));
+    lines.push(Line::from(""));
+
+    // Command list: (command, alias, description)
+    let commands = [
+        (":connect <port>", ":c", "Open connection config modal for the specified port"),
+        (":disconnect", ":d", "Disconnect from the current session"),
+        (":save <path>", ":w", "Save buffer contents to a file"),
+        (":quit", ":q", "Quit the application"),
+        (":help", ":h", "Open this help panel"),
+        (":sessions", ":s", "Open the sessions manager modal"),
     ];
 
-    Paragraph::new(lines)
-        .alignment(Alignment::Center)
-        .render(area, buf);
+    for (cmd, alias, desc) in commands {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<18}", cmd), Theme::keybind()),
+            Span::styled(format!("{:<6}", alias), Theme::muted()),
+            Span::raw(desc),
+        ]));
+    }
+
+    // Apply scroll
+    let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).collect();
+
+    Paragraph::new(visible_lines).render(area, buf);
 }
