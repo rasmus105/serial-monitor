@@ -243,6 +243,21 @@ impl GraphEngine {
         self.next_color = 0;
     }
 
+    /// Set a new parser type.
+    ///
+    /// This clears all parsed series data since the old data was parsed with
+    /// a different parser. Packet rate data is preserved since it's
+    /// parser-independent.
+    ///
+    /// After calling this, you should re-process raw chunks to repopulate
+    /// the series data with the new parser.
+    pub fn set_parser(&mut self, parser: GraphParserType) {
+        self.config.parser = Box::new(parser);
+        self.series.clear();
+        self.chunks_processed = 0;
+        self.next_color = 0;
+    }
+
     /// Trim data points older than the given timestamp
     ///
     /// Called by DataBuffer when old chunks are truncated to keep graph

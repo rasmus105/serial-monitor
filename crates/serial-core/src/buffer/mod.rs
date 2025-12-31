@@ -567,9 +567,34 @@ impl DataBuffer {
         }
     }
 
+    /// Enable graph engine with a specific parser type.
+    pub fn enable_graph_with_parser(&mut self, parser: graph::GraphParserType) {
+        if self.graph.is_none() {
+            let mut engine = GraphEngine::from_parser(parser);
+            for raw in &self.raw_chunks {
+                engine.process_raw_chunk(raw);
+            }
+            self.graph = Some(engine);
+        }
+    }
+
     /// Disable graph engine
     pub fn disable_graph(&mut self) {
         self.graph = None;
+    }
+
+    /// Set a new parser for the graph engine and re-process all data.
+    ///
+    /// This clears existing parsed series and re-processes all raw chunks
+    /// with the new parser. If the graph is not enabled, this does nothing.
+    pub fn set_graph_parser(&mut self, parser: graph::GraphParserType) {
+        if let Some(engine) = &mut self.graph {
+            engine.set_parser(parser);
+            // Re-process all raw chunks with the new parser
+            for raw in &self.raw_chunks {
+                engine.process_raw_chunk(raw);
+            }
+        }
     }
 
     /// Get graph engine reference

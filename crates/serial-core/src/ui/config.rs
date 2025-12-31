@@ -507,7 +507,8 @@ impl ConfigPanelNav {
 
     /// Apply the current text buffer to the state and exit edit mode
     ///
-    /// Returns Ok(()) if successful, Err with validation message if failed
+    /// Returns Ok(()) if successful, Err with validation message if failed.
+    /// On validation failure, the text buffer is preserved so the user can fix it.
     pub fn apply_text_edit<T: 'static>(
         &mut self,
         sections: &[Section<T>],
@@ -517,15 +518,27 @@ impl ConfigPanelNav {
             return Ok(());
         }
 
-        let result = if let Some(field) = sections.nth_visible_field(state, self.selected) {
-            field.set_value(state, FieldValue::string(std::mem::take(&mut self.text_buffer)))
+        if let Some(field) = sections.nth_visible_field(state, self.selected) {
+            // Validate BEFORE consuming the buffer
+            let value = FieldValue::string(self.text_buffer.clone());
+            let validation_result = (field.validate)(&value);
+            
+            if validation_result.is_ok() {
+                // Validation passed - apply the value and exit edit mode
+                field.set_value_unchecked(state, value);
+                self.text_editing = false;
+                self.text_buffer.clear();
+                Ok(())
+            } else {
+                // Validation failed - keep editing mode active with the current buffer
+                // so user can fix their input
+                validation_result
+            }
         } else {
+            self.text_editing = false;
+            self.text_buffer.clear();
             Ok(())
-        };
-
-        self.text_editing = false;
-        self.text_buffer.clear();
-        result
+        }
     }
 
     /// Cancel text editing and discard changes
@@ -635,7 +648,7 @@ impl ConfigPanelNav {
 // =============================================================================
 
 /// Result of handling a config panel key event
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigKeyResult {
     /// Key was not handled (should be passed to other handlers)
     NotHandled,
@@ -645,6 +658,8 @@ pub enum ConfigKeyResult {
     Changed,
     /// Dropdown was closed (may need clear for overlay removal)
     DropdownClosed,
+    /// Validation failed when trying to apply input (includes error message)
+    ValidationFailed(Cow<'static, str>),
 }
 
 impl ConfigKeyResult {
