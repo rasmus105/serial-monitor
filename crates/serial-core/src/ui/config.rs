@@ -133,6 +133,16 @@ impl FieldKind {
         matches!(self, FieldKind::TextInput { .. })
     }
 
+    /// Check if this field kind uses numeric input
+    pub fn is_numeric_input(&self) -> bool {
+        matches!(self, FieldKind::NumericInput { .. })
+    }
+
+    /// Check if this field kind requires text editing (text or numeric input)
+    pub fn is_editable(&self) -> bool {
+        matches!(self, FieldKind::TextInput { .. } | FieldKind::NumericInput { .. })
+    }
+
     /// Get the number of options for a Select field
     pub fn option_count(&self) -> usize {
         match self {
@@ -493,13 +503,31 @@ impl ConfigPanelNav {
 
     /// Start text editing mode for the current field
     ///
-    /// Initializes the text buffer with the current field value
+    /// Initializes the text buffer with the current field value.
+    /// Works for both TextInput and NumericInput fields.
     pub fn start_text_edit<T: 'static>(&mut self, sections: &[Section<T>], state: &T) {
         if let Some(field) = self.current_field(sections, state) {
             if field.kind.is_text_input() {
                 if let FieldValue::String(s) = field.get_value(state) {
                     self.text_buffer = s.to_string();
                     self.text_editing = true;
+                }
+            } else if field.kind.is_numeric_input() {
+                // Initialize with current numeric value as string
+                match field.get_value(state) {
+                    FieldValue::Usize(n) => {
+                        self.text_buffer = n.to_string();
+                        self.text_editing = true;
+                    }
+                    FieldValue::Isize(n) => {
+                        self.text_buffer = n.to_string();
+                        self.text_editing = true;
+                    }
+                    FieldValue::Float(n) => {
+                        self.text_buffer = n.to_string();
+                        self.text_editing = true;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -509,6 +537,7 @@ impl ConfigPanelNav {
     ///
     /// Returns Ok(()) if successful, Err with validation message if failed.
     /// On validation failure, the text buffer is preserved so the user can fix it.
+    /// Works for both TextInput and NumericInput fields.
     pub fn apply_text_edit<T: 'static>(
         &mut self,
         sections: &[Section<T>],
@@ -519,8 +548,23 @@ impl ConfigPanelNav {
         }
 
         if let Some(field) = sections.nth_visible_field(state, self.selected) {
+            // Determine the appropriate FieldValue based on field kind
+            let value = if field.kind.is_numeric_input() {
+                // Parse numeric value from text buffer
+                if let Ok(n) = self.text_buffer.parse::<usize>() {
+                    FieldValue::Usize(n)
+                } else if let Ok(n) = self.text_buffer.parse::<isize>() {
+                    FieldValue::Isize(n)
+                } else if let Ok(n) = self.text_buffer.parse::<f64>() {
+                    FieldValue::Float(n)
+                } else {
+                    return Err(Cow::Borrowed("Invalid number"));
+                }
+            } else {
+                FieldValue::string(self.text_buffer.clone())
+            };
+            
             // Validate BEFORE consuming the buffer
-            let value = FieldValue::string(self.text_buffer.clone());
             let validation_result = (field.validate)(&value);
             
             if validation_result.is_ok() {

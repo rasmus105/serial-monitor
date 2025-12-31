@@ -107,9 +107,9 @@ pub struct GraphConfig {
     pub show_tx: bool,
     
     // --- Time range options (both modes) ---
-    /// Time range preset: 0=All, 1=1h, 2=30m, 3=10m, 4=5m, 5=1m, 6=Custom
+    /// Time range preset: 0=All, 1=1 Hour, 2=5 Min, 3=Custom
     pub time_range_index: usize,
-    /// Custom time value (used when time_range_index == 6)
+    /// Custom time value (used when time_range_index == 3)
     pub custom_time_value: usize,
     /// Custom time unit: 0=seconds, 1=minutes, 2=hours
     pub custom_time_unit_index: usize,
@@ -196,11 +196,8 @@ impl GraphConfig {
         match self.time_range_index {
             0 => None, // All
             1 => Some(Duration::from_secs(3600)), // 1 hour
-            2 => Some(Duration::from_secs(1800)), // 30 min
-            3 => Some(Duration::from_secs(600)),  // 10 min
-            4 => Some(Duration::from_secs(300)),  // 5 min
-            5 => Some(Duration::from_secs(60)),   // 1 min
-            6 => {
+            2 => Some(Duration::from_secs(300)),  // 5 min
+            3 => {
                 // Custom
                 let multiplier = match self.custom_time_unit_index {
                     0 => 1,      // seconds
@@ -219,10 +216,10 @@ impl GraphConfig {
 // Config Panel Definitions
 // =============================================================================
 
-const MODE_OPTIONS: &[&str] = &["Parsed Data", "RX/TX Rate"];
+const MODE_OPTIONS: &[&str] = &["Parse Data", "RX/TX Rate"];
 const PARSER_TYPE_OPTIONS: &[&str] = &["Key=Value", "CSV", "JSON", "Regex", "Raw Numbers"];
 const CSV_DELIMITER_OPTIONS: &[&str] = &["Comma (,)", "Semicolon (;)", "Tab", "Space", "Pipe (|)"];
-const TIME_RANGE_OPTIONS: &[&str] = &["All", "1 hour", "30 min", "10 min", "5 min", "1 min", "Custom"];
+const TIME_RANGE_OPTIONS: &[&str] = &["All", "1 Hour", "5 Min", "Custom"];
 const TIME_UNIT_OPTIONS: &[&str] = &["seconds", "minutes", "hours"];
 
 static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
@@ -258,7 +255,7 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
                 get: |c| FieldValue::Usize(c.custom_time_value),
                 set: |c, v| { if let FieldValue::Usize(n) = v { c.custom_time_value = n; } },
                 visible: always_visible,
-                enabled: |c| c.time_range_index == 6, // Custom
+                enabled: |c| c.time_range_index == 3, // Custom
                 parent_id: Some("time_range"),
                 validate: always_valid,
             },
@@ -269,7 +266,7 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
                 get: |c| FieldValue::OptionIndex(c.custom_time_unit_index),
                 set: |c, v| { if let FieldValue::OptionIndex(i) = v { c.custom_time_unit_index = i; } },
                 visible: always_visible,
-                enabled: |c| c.time_range_index == 6, // Custom
+                enabled: |c| c.time_range_index == 3, // Custom
                 parent_id: Some("time_range"),
                 validate: always_valid,
             },
@@ -295,8 +292,8 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
                 kind: FieldKind::TextInput { placeholder: "(?P<temp>\\d+\\.?\\d*)" },
                 get: |c| FieldValue::String(Cow::Owned(c.regex_pattern.clone())),
                 set: |c, v| { if let FieldValue::String(s) = v { c.regex_pattern = s.into_owned(); } },
-                visible: always_visible,
-                enabled: |c| c.mode_index == 0 && c.parser_type_index == 3, // Parsed Data + Regex
+                visible: |c| c.mode_index == 0 && c.parser_type_index == 3, // Parse Data + Regex
+                enabled: always_enabled,
                 parent_id: Some("parser_type"),
                 validate: |v| {
                     if let FieldValue::String(s) = v {
@@ -316,8 +313,8 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
                 kind: FieldKind::Select { options: CSV_DELIMITER_OPTIONS },
                 get: |c| FieldValue::OptionIndex(c.csv_delimiter_index),
                 set: |c, v| { if let FieldValue::OptionIndex(i) = v { c.csv_delimiter_index = i; } },
-                visible: always_visible,
-                enabled: |c| c.mode_index == 0 && c.parser_type_index == 1, // Parsed Data + CSV
+                visible: |c| c.mode_index == 0 && c.parser_type_index == 1, // Parse Data + CSV
+                enabled: always_enabled,
                 parent_id: Some("parser_type"),
                 validate: always_valid,
             },
@@ -327,8 +324,8 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
                 kind: FieldKind::TextInput { placeholder: "temp,humidity,..." },
                 get: |c| FieldValue::String(Cow::Owned(c.csv_columns.clone())),
                 set: |c, v| { if let FieldValue::String(s) = v { c.csv_columns = s.into_owned(); } },
-                visible: always_visible,
-                enabled: |c| c.mode_index == 0 && c.parser_type_index == 1, // Parsed Data + CSV
+                visible: |c| c.mode_index == 0 && c.parser_type_index == 1, // Parse Data + CSV
+                enabled: always_enabled,
                 parent_id: Some("parser_type"),
                 validate: always_valid,
             },
@@ -393,7 +390,7 @@ impl GraphView {
         // Draw chart area
         let chart_block = Block::default()
             .title(match mode {
-                GraphMode::ParsedData => " Graph (Parsed Data) ",
+                GraphMode::ParsedData => " Graph (Parse Data) ",
                 GraphMode::PacketRate => " Graph (RX/TX Rate) ",
             })
             .borders(Borders::ALL)
