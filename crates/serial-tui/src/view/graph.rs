@@ -378,9 +378,9 @@ impl GraphView {
             }
         }
 
-        // Config panel
+        // Config panel - pass buffer reference to avoid RwLock deadlock
         if let Some(config_area) = config_area {
-            self.draw_config(config_area, buf, handle, serial_config, focus);
+            self.draw_config(config_area, buf, handle, &buffer, serial_config, focus);
         }
     }
 
@@ -672,10 +672,10 @@ impl GraphView {
         area: Rect,
         buf: &mut Buffer,
         handle: &SessionHandle,
+        buffer: &serial_core::DataBuffer,
         serial_config: &SerialConfig,
         focus: Focus,
     ) {
-        let buffer = handle.buffer();
         
         // Calculate how much space we need for series section
         let series_count = buffer.graph()

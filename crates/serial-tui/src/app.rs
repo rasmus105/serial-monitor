@@ -139,7 +139,14 @@ impl App {
             // Draw UI
             terminal.draw(|f| self.draw(f.area(), f.buffer_mut()))?;
 
-            // Poll for events (with timeout for session events)
+            // Drain all pending events before rendering next frame.
+            // This prevents event queue backlog when events arrive faster than
+            // we can render (e.g., fast mouse wheel scrolling).
+            while let Some(event) = poll_event(Duration::from_millis(0)) {
+                self.handle_event(event).await;
+            }
+
+            // Wait for next event or timeout (for session events and periodic updates)
             if let Some(event) = poll_event(Duration::from_millis(50)) {
                 self.handle_event(event).await;
             }

@@ -18,6 +18,9 @@ pub enum AppEvent {
 }
 
 /// Poll for terminal events with a timeout.
+/// Returns `None` if no event is available within the timeout.
+/// Returns `Some(AppEvent::Tick)` only when timeout > 0 and no event arrived
+/// (to signal that periodic updates should occur).
 pub fn poll_event(timeout: Duration) -> Option<AppEvent> {
     if event::poll(timeout).ok()? {
         match event::read().ok()? {
@@ -26,7 +29,11 @@ pub fn poll_event(timeout: Duration) -> Option<AppEvent> {
             Event::Resize(w, h) => Some(AppEvent::Resize(w, h)),
             _ => None,
         }
+    } else if timeout.is_zero() {
+        // No event and non-blocking poll - return None so drain loops can exit
+        None
     } else {
+        // No event but we waited - return Tick for periodic updates
         Some(AppEvent::Tick)
     }
 }
