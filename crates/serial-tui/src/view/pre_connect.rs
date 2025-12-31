@@ -391,7 +391,7 @@ impl PreConnectView {
             .title(port_title)
             .borders(Borders::ALL)
             .border_style(if focus == Focus::Main && !self.search_focused {
-                Theme::border_focused()
+                Theme::border_disconnected()
             } else {
                 Theme::border()
             });
@@ -407,7 +407,7 @@ impl PreConnectView {
                 .title(" Search ")
                 .borders(Borders::ALL)
                 .border_style(if self.search_focused {
-                    Theme::border_focused()
+                    Theme::border_disconnected()
                 } else {
                     Theme::border()
                 });
@@ -421,7 +421,7 @@ impl PreConnectView {
             let dir_block = Block::default()
                 .title(" Save Directory ")
                 .borders(Borders::ALL)
-                .border_style(Theme::border_focused());
+                .border_style(Theme::border_disconnected());
 
             TextInput::new(&mut self.dir_path_input)
                 .block(dir_block)
@@ -433,15 +433,15 @@ impl PreConnectView {
         if main_chunks[0].height > 2 {
             let help_y = main_chunks[0].y + main_chunks[0].height - 2;
             let help_line = Line::from(vec![
-                Span::styled("Enter", Theme::keybind()),
+                Span::styled("Enter", Theme::keybind_disconnected()),
                 Span::raw(" connect  "),
-                Span::styled("r", Theme::keybind()),
+                Span::styled("r", Theme::keybind_disconnected()),
                 Span::raw(" refresh  "),
-                Span::styled("/", Theme::keybind()),
+                Span::styled("/", Theme::keybind_disconnected()),
                 Span::raw(" search  "),
-                Span::styled("Ctrl+h/l", Theme::keybind()),
+                Span::styled("Ctrl+h/l", Theme::keybind_disconnected()),
                 Span::raw(" panels  "),
-                Span::styled("?", Theme::keybind()),
+                Span::styled("?", Theme::keybind_disconnected()),
                 Span::raw(" help"),
             ]);
             Paragraph::new(help_line)
@@ -455,7 +455,7 @@ impl PreConnectView {
                 .title(" Configuration ")
                 .borders(Borders::ALL)
                 .border_style(if focus == Focus::Config {
-                    Theme::border_focused()
+                    Theme::border_disconnected()
                 } else {
                     Theme::border()
                 });
@@ -463,6 +463,7 @@ impl PreConnectView {
             ConfigPanel::new(PRECONNECT_CONFIG_SECTIONS, &self.config, &self.config_nav)
                 .block(config_block)
                 .focused(focus == Focus::Config)
+                .disconnected(true)
                 .render(config_area, buf);
         }
     }

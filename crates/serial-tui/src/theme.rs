@@ -14,6 +14,9 @@ impl Theme {
     pub const PRIMARY: Color = Color::Cyan;
     pub const SECONDARY: Color = Color::Blue;
     pub const ACCENT: Color = Color::Magenta;
+    
+    // Disconnected/pre-connect accent (yellow to indicate "not connected")
+    pub const DISCONNECTED: Color = Color::Yellow;
 
     // Status colors
     pub const SUCCESS: Color = Color::Green;
@@ -28,6 +31,7 @@ impl Theme {
     // UI element colors
     pub const BORDER: Color = Color::DarkGray;
     pub const BORDER_FOCUSED: Color = Color::Cyan;
+    pub const BORDER_DISCONNECTED: Color = Color::Yellow;
     /// Selection background - using indexed color 236 (very dark gray) for subtle highlighting
     /// that doesn't wash out foreground colors. Falls back gracefully on 16-color terminals.
     pub const SELECTION: Color = Color::Indexed(236);
@@ -42,6 +46,10 @@ impl Theme {
     pub fn title() -> Style {
         Style::default().fg(Self::PRIMARY).add_modifier(Modifier::BOLD)
     }
+    
+    pub fn title_disconnected() -> Style {
+        Style::default().fg(Self::DISCONNECTED).add_modifier(Modifier::BOLD)
+    }
 
     pub fn border() -> Style {
         Style::default().fg(Self::BORDER)
@@ -49,6 +57,10 @@ impl Theme {
 
     pub fn border_focused() -> Style {
         Style::default().fg(Self::BORDER_FOCUSED)
+    }
+    
+    pub fn border_disconnected() -> Style {
+        Style::default().fg(Self::BORDER_DISCONNECTED)
     }
 
     pub fn selected() -> Style {
@@ -89,6 +101,10 @@ impl Theme {
 
     pub fn keybind() -> Style {
         Style::default().fg(Self::PRIMARY).add_modifier(Modifier::BOLD)
+    }
+    
+    pub fn keybind_disconnected() -> Style {
+        Style::default().fg(Self::DISCONNECTED).add_modifier(Modifier::BOLD)
     }
 
     pub fn keybind_desc() -> Style {

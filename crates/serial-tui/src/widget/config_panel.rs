@@ -230,6 +230,8 @@ pub struct ConfigPanel<'a, T: 'static> {
     block: Option<Block<'a>>,
     /// Whether to show config as read-only (grayed out).
     read_only: bool,
+    /// Whether to use disconnected theming (yellow instead of cyan).
+    disconnected: bool,
 }
 
 impl<'a, T: 'static> ConfigPanel<'a, T> {
@@ -241,6 +243,7 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
             focused: false,
             block: None,
             read_only: false,
+            disconnected: false,
         }
     }
 
@@ -259,9 +262,15 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
         self
     }
 
+    /// Use disconnected theming (yellow section headers instead of cyan).
+    pub fn disconnected(mut self, disconnected: bool) -> Self {
+        self.disconnected = disconnected;
+        self
+    }
+
     /// Get info needed to render dropdown overlay after the main panel.
-    /// Returns (field_y, options, selected_index) if dropdown is open.
-    fn get_dropdown_info(&self, inner: Rect) -> Option<(u16, &'static [&'static str], usize)> {
+    /// Returns (field_y, options, selected_index, disconnected) if dropdown is open.
+    fn get_dropdown_info(&self, inner: Rect) -> Option<(u16, &'static [&'static str], usize, bool)> {
         if !self.nav.dropdown_open || !self.focused {
             return None;
         }
@@ -290,7 +299,7 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
 
                 if self.nav.selected == field_index {
                     if let FieldKind::Select { options } = &field.kind {
-                        return Some((y, options, self.nav.dropdown_index));
+                        return Some((y, options, self.nav.dropdown_index, self.disconnected));
                     }
                 }
 
@@ -347,6 +356,8 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
             if let Some(header) = &section.header {
                 let header_style = if self.read_only {
                     Theme::muted()
+                } else if self.disconnected {
+                    Theme::title_disconnected()
                 } else {
                     Theme::title()
                 };
@@ -516,8 +527,8 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
         }
 
         // Render dropdown overlay if open
-        if let Some((field_y, options, selected_idx)) = dropdown_info {
-            render_dropdown_overlay(buf, inner, field_y, options, selected_idx);
+        if let Some((field_y, options, selected_idx, disconnected)) = dropdown_info {
+            render_dropdown_overlay(buf, inner, field_y, options, selected_idx, disconnected);
         }
     }
 }
@@ -529,6 +540,7 @@ fn render_dropdown_overlay(
     field_y: u16,
     options: &[&str],
     selected_idx: usize,
+    disconnected: bool,
 ) {
     // Calculate dropdown dimensions
     let max_option_len = options.iter().map(|s| s.len()).max().unwrap_or(10);
@@ -556,7 +568,11 @@ fn render_dropdown_overlay(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Theme::border_focused());
+        .border_style(if disconnected {
+            Theme::border_disconnected()
+        } else {
+            Theme::border_focused()
+        });
 
     let inner = block.inner(dropdown_area);
     block.render(dropdown_area, buf);
@@ -573,11 +589,12 @@ fn render_dropdown_overlay(
         let y = inner.y + (i - scroll_offset) as u16;
         let is_selected = i == selected_idx;
 
-        // Highlight selected option
+        // Highlight selected option (use disconnected color when appropriate)
+        let highlight_color = if disconnected { Theme::DISCONNECTED } else { Theme::PRIMARY };
         if is_selected {
             for x in inner.x..inner.x + inner.width {
                 if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_bg(Theme::PRIMARY);
+                    cell.set_bg(highlight_color);
                     cell.set_fg(Theme::BG);
                 }
             }
