@@ -1,4 +1,5 @@
 pub mod config_panel;
+pub mod confirm_overlay;
 pub mod connection_panel;
 pub mod help_overlay;
 pub mod loading_overlay;
@@ -7,6 +8,7 @@ pub mod text_input;
 pub mod toast;
 
 pub use config_panel::{ConfigKeyResult, ConfigPanel, handle_config_key};
+pub use confirm_overlay::{ConfirmOverlay, ConfirmState};
 pub use connection_panel::ConnectionPanel;
 pub use help_overlay::HelpOverlay;
 pub use loading_overlay::{LoadingOverlay, LoadingState};

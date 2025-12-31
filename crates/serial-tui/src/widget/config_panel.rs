@@ -91,7 +91,7 @@ pub fn handle_config_key<T: 'static>(
                 if field.kind.is_select() {
                     nav.open_dropdown(sections, config);
                     return ConfigKeyResult::Handled;
-                } else if field.kind.is_text_input() {
+                } else if field.kind.is_editable() {
                     nav.start_text_edit(sections, config);
                     return ConfigKeyResult::Handled;
                 } else if matches!(field.kind, FieldKind::Toggle) {
@@ -149,6 +149,11 @@ fn handle_text_edit_key<T: 'static>(
     sections: &[Section<T>],
     config: &mut T,
 ) -> ConfigKeyResult {
+    // Check if we're editing a numeric field
+    let is_numeric = nav.current_field(sections, config)
+        .map(|f| f.kind.is_numeric_input())
+        .unwrap_or(false);
+    
     match key.code {
         KeyCode::Enter => {
             match nav.apply_text_edit(sections, config) {
@@ -191,7 +196,15 @@ fn handle_text_edit_key<T: 'static>(
                     _ => ConfigKeyResult::Handled,
                 }
             } else {
-                nav.text_buffer_mut().push(c);
+                // For numeric fields, only allow digits
+                if is_numeric {
+                    if c.is_ascii_digit() {
+                        nav.text_buffer_mut().push(c);
+                    }
+                    // Silently ignore non-digit characters for numeric input
+                } else {
+                    nav.text_buffer_mut().push(c);
+                }
                 ConfigKeyResult::Handled
             }
         }
@@ -370,12 +383,13 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 let is_sub_option = field.parent_id.is_some();
                 let value = (field.get)(self.data);
 
-                // Determine if this is the last sibling with the same parent
-                let is_last_sibling = if let Some(parent_id) = field.parent_id {
-                    // Check if there are any more visible fields with the same parent after this one
+                // Determine if this is the last sub-option in this section
+                // (a sub-option is any field with a parent_id)
+                let is_last_sibling = if field.parent_id.is_some() {
+                    // Check if there are any more sub-options after this one
                     !visible_fields.iter()
                         .skip(field_in_section_idx + 1)
-                        .any(|f| f.parent_id == Some(parent_id))
+                        .any(|f| f.parent_id.is_some())
                 } else {
                     false
                 };
@@ -416,9 +430,28 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                             s.to_string()
                         }
                     }
-                    (FieldKind::NumericInput { .. }, FieldValue::Usize(n)) => n.to_string(),
-                    (FieldKind::NumericInput { .. }, FieldValue::Isize(n)) => n.to_string(),
-                    (FieldKind::NumericInput { .. }, FieldValue::Float(f)) => format!("{:.2}", f),
+                    (FieldKind::NumericInput { .. }, FieldValue::Usize(n)) => {
+                        if is_text_editing {
+                            // Show edit buffer with cursor indicator
+                            format!("{}▏", self.nav.text_buffer())
+                        } else {
+                            n.to_string()
+                        }
+                    }
+                    (FieldKind::NumericInput { .. }, FieldValue::Isize(n)) => {
+                        if is_text_editing {
+                            format!("{}▏", self.nav.text_buffer())
+                        } else {
+                            n.to_string()
+                        }
+                    }
+                    (FieldKind::NumericInput { .. }, FieldValue::Float(f)) => {
+                        if is_text_editing {
+                            format!("{}▏", self.nav.text_buffer())
+                        } else {
+                            format!("{:.2}", f)
+                        }
+                    }
                     _ => "?".to_string(),
                 };
 
