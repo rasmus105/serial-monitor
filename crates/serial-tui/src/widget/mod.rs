@@ -1,17 +1,23 @@
+pub mod completion_popup;
 pub mod config_panel;
 pub mod confirm_overlay;
+pub mod connect_modal;
 pub mod connection_panel;
 pub mod help_overlay;
 pub mod loading_overlay;
 pub mod port_list;
+pub mod sessions_modal;
 pub mod text_input;
 pub mod toast;
 
+pub use completion_popup::{CompletionKind, CompletionPopup, CompletionState};
 pub use config_panel::{ConfigKeyResult, ConfigPanel, handle_config_key};
 pub use confirm_overlay::{ConfirmOverlay, ConfirmState};
+pub use connect_modal::{ConnectModal, ConnectModalAction, ConnectModalState};
 pub use connection_panel::ConnectionPanel;
 pub use help_overlay::HelpOverlay;
 pub use loading_overlay::{LoadingOverlay, LoadingState};
 pub use port_list::PortList;
+pub use sessions_modal::{SessionsModal, SessionsModalAction, SessionsModalState};
 pub use text_input::TextInput;
 pub use toast::{Toast, ToastLevel, Toasts};
