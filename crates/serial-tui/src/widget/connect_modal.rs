@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 use serial_core::{
-    DataBits, SerialConfig,
+    ChunkingStrategy, DataBits, LineDelimiter, SerialConfig,
     ui::{
         config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid, always_visible},
         serial_config::{
@@ -42,6 +42,13 @@ pub struct ConnectModalConfig {
     pub parity_index: usize,
     pub stop_bits_index: usize,
     pub flow_control_index: usize,
+    // Data handling settings
+    pub line_ending_index: usize,
+    // File saving settings
+    pub file_save_enabled: bool,
+    pub file_save_format_index: usize,
+    pub file_save_encoding_index: usize,
+    pub file_save_directory: String,
 }
 
 impl Default for ConnectModalConfig {
@@ -63,6 +70,15 @@ impl Default for ConnectModalConfig {
             stop_bits_index: 0,
             // Default to no flow control
             flow_control_index: 0,
+            // Default to LF line endings (same as config panel)
+            line_ending_index: 1, // LF
+            // File saving defaults
+            file_save_enabled: false,
+            file_save_format_index: 1, // Encoded
+            file_save_encoding_index: 1, // ASCII
+            file_save_directory: serial_core::buffer::default_cache_directory()
+                .to_string_lossy()
+                .into_owned(),
         }
     }
 }
@@ -78,6 +94,17 @@ impl ConnectModalConfig {
             flow_control: FLOW_CONTROL_VARIANTS[self.flow_control_index],
         }
     }
+
+    /// Get the RX chunking strategy based on line ending selection.
+    pub fn rx_chunking(&self) -> ChunkingStrategy {
+        match self.line_ending_index {
+            0 => ChunkingStrategy::Raw, // None (Raw)
+            1 => ChunkingStrategy::with_delimiter(LineDelimiter::Newline), // LF
+            2 => ChunkingStrategy::with_delimiter(LineDelimiter::Cr), // CR
+            3 => ChunkingStrategy::with_delimiter(LineDelimiter::CrLf), // CRLF
+            _ => ChunkingStrategy::Raw,
+        }
+    }
 }
 
 // Config panel field definitions
@@ -89,6 +116,13 @@ const DATA_BITS_OPTIONS: &[&str] = &["5", "6", "7", "8"];
 const PARITY_OPTIONS: &[&str] = &["None", "Odd", "Even"];
 const STOP_BITS_OPTIONS: &[&str] = &["1", "2"];
 const FLOW_CONTROL_OPTIONS: &[&str] = &["None", "Software (XON/XOFF)", "Hardware (RTS/CTS)"];
+
+// Data handling options
+const RX_CHUNKING_OPTIONS: &[&str] = &["None (Raw)", "LF (\\n)", "CR (\\r)", "CRLF (\\r\\n)"];
+
+// File saving options
+const FILE_SAVE_FORMAT_OPTIONS: &[&str] = &["Raw Binary", "Encoded Text"];
+const FILE_SAVE_ENCODING_OPTIONS: &[&str] = &["UTF-8", "ASCII", "Hex", "Binary"];
 
 static CONNECT_MODAL_SECTIONS: &[Section<ConnectModalConfig>] = &[
     Section {
@@ -181,6 +215,100 @@ static CONNECT_MODAL_SECTIONS: &[Section<ConnectModalConfig>] = &[
             },
         ],
     },
+    Section {
+        header: Some("Data Handling"),
+        fields: &[
+            FieldDef {
+                id: "rx_chunking",
+                label: "RX Chunking",
+                kind: FieldKind::Select {
+                    options: RX_CHUNKING_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.line_ending_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.line_ending_index = i;
+                    }
+                },
+                visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
+                validate: always_valid,
+            },
+        ],
+    },
+    Section {
+        header: Some("File Saving"),
+        fields: &[
+            FieldDef {
+                id: "file_save_enabled",
+                label: "Save to File",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.file_save_enabled),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.file_save_enabled = b;
+                    }
+                },
+                visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_format",
+                label: "Format",
+                kind: FieldKind::Select {
+                    options: FILE_SAVE_FORMAT_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.file_save_format_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.file_save_format_index = i;
+                    }
+                },
+                visible: always_visible,
+                enabled: |c| c.file_save_enabled,
+                parent_id: Some("file_save_enabled"),
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_encoding",
+                label: "Encoding",
+                kind: FieldKind::Select {
+                    options: FILE_SAVE_ENCODING_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.file_save_encoding_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.file_save_encoding_index = i;
+                    }
+                },
+                // Only visible when format is Encoded (index 1)
+                visible: |c| c.file_save_format_index == 1,
+                enabled: |c| c.file_save_enabled,
+                parent_id: Some("file_save_format"),
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "file_save_directory",
+                label: "Directory",
+                kind: FieldKind::TextInput {
+                    placeholder: "Enter directory path...",
+                },
+                get: |c| FieldValue::string(c.file_save_directory.clone()),
+                set: |c, v| {
+                    if let FieldValue::String(s) = v {
+                        c.file_save_directory = s.into_owned();
+                    }
+                },
+                visible: always_visible,
+                enabled: |c| c.file_save_enabled,
+                parent_id: Some("file_save_enabled"),
+                validate: always_valid,
+            },
+        ],
+    },
 ];
 
 /// State for the connect modal.
@@ -228,6 +356,11 @@ impl ConnectModalState {
             return ConnectModalAction::None;
         }
 
+        // Handle text editing mode
+        if self.nav.is_text_editing() {
+            return self.handle_text_edit_key(key);
+        }
+
         // Handle dropdown mode separately
         if self.nav.is_dropdown_open() {
             return self.handle_dropdown_key(key);
@@ -244,12 +377,16 @@ impl ConnectModalState {
             // Ctrl+g ("go") to connect
             // Note: Don't call hide() here - let caller extract port_path first
             KeyCode::Char('g') if has_ctrl => ConnectModalAction::Connect,
-            KeyCode::Enter => {
-                // Open dropdown for select fields
-                if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config)
-                    && field.kind.is_select()
-                {
-                    self.nav.open_dropdown(CONNECT_MODAL_SECTIONS, &self.config);
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                // Open dropdown for select fields, toggle for toggles, text edit for text inputs
+                if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config) {
+                    if field.kind.is_select() {
+                        self.nav.open_dropdown(CONNECT_MODAL_SECTIONS, &self.config);
+                    } else if matches!(field.kind, FieldKind::Toggle) {
+                        let _ = self.nav.toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
+                    } else if field.kind.is_editable() {
+                        self.nav.start_text_edit(CONNECT_MODAL_SECTIONS, &self.config);
+                    }
                 }
                 ConnectModalAction::None
             }
@@ -262,29 +399,24 @@ impl ConnectModalState {
                 ConnectModalAction::None
             }
             KeyCode::Char('h') | KeyCode::Left => {
-                if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config)
-                    && field.kind.is_select()
-                {
-                    self.nav.dropdown_prev(CONNECT_MODAL_SECTIONS, &self.config);
-                    let _ = self.nav.apply_dropdown_selection(CONNECT_MODAL_SECTIONS, &mut self.config);
+                if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config) {
+                    if matches!(field.kind, FieldKind::Toggle) {
+                        let _ = self.nav.toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
+                    } else if field.kind.is_select() {
+                        self.nav.dropdown_prev(CONNECT_MODAL_SECTIONS, &self.config);
+                        let _ = self.nav.apply_dropdown_selection(CONNECT_MODAL_SECTIONS, &mut self.config);
+                    }
                 }
                 ConnectModalAction::None
             }
             KeyCode::Char('l') | KeyCode::Right => {
-                if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config)
-                    && field.kind.is_select()
-                {
-                    self.nav.dropdown_next(CONNECT_MODAL_SECTIONS, &self.config);
-                    let _ = self.nav.apply_dropdown_selection(CONNECT_MODAL_SECTIONS, &mut self.config);
-                }
-                ConnectModalAction::None
-            }
-            KeyCode::Char(' ') => {
-                // Open dropdown for select fields
-                if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config)
-                    && field.kind.is_select()
-                {
-                    self.nav.open_dropdown(CONNECT_MODAL_SECTIONS, &self.config);
+                if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config) {
+                    if matches!(field.kind, FieldKind::Toggle) {
+                        let _ = self.nav.toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
+                    } else if field.kind.is_select() {
+                        self.nav.dropdown_next(CONNECT_MODAL_SECTIONS, &self.config);
+                        let _ = self.nav.apply_dropdown_selection(CONNECT_MODAL_SECTIONS, &mut self.config);
+                    }
                 }
                 ConnectModalAction::None
             }
@@ -292,6 +424,49 @@ impl ConnectModalState {
                 self.nav.sync_dropdown_index(CONNECT_MODAL_SECTIONS, &self.config);
                 ConnectModalAction::None
             }
+        }
+    }
+
+    fn handle_text_edit_key(&mut self, key: KeyEvent) -> ConnectModalAction {
+        match key.code {
+            KeyCode::Enter => {
+                let _ = self.nav.apply_text_edit(CONNECT_MODAL_SECTIONS, &mut self.config);
+                ConnectModalAction::None
+            }
+            KeyCode::Esc => {
+                self.nav.cancel_text_edit();
+                ConnectModalAction::None
+            }
+            KeyCode::Char(c) => {
+                // Handle Ctrl+<key> sequences
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    match c {
+                        'u' => {
+                            // Ctrl+U: clear line
+                            self.nav.text_buffer_mut().clear();
+                        }
+                        'w' => {
+                            // Ctrl+W: delete word backward
+                            let buf = self.nav.text_buffer_mut();
+                            let trimmed = buf.trim_end();
+                            if let Some(last_space) = trimmed.rfind(' ') {
+                                buf.truncate(last_space + 1);
+                            } else {
+                                buf.clear();
+                            }
+                        }
+                        _ => {}
+                    }
+                } else {
+                    self.nav.text_buffer_mut().push(c);
+                }
+                ConnectModalAction::None
+            }
+            KeyCode::Backspace => {
+                self.nav.text_buffer_mut().pop();
+                ConnectModalAction::None
+            }
+            _ => ConnectModalAction::None,
         }
     }
 
@@ -337,8 +512,8 @@ impl Widget for ConnectModal<'_> {
         }
 
         // Calculate overlay area (centered, reasonable size for serial config)
-        let width = (area.width * 60 / 100).clamp(40, 50);
-        let height = (area.height * 60 / 100).clamp(14, 18);
+        let width = (area.width * 60 / 100).clamp(40, 55);
+        let height = (area.height * 80 / 100).clamp(22, 30);
         let x = area.x + (area.width - width) / 2;
         let y = area.y + (area.height - height) / 2;
         let overlay_area = Rect::new(x, y, width, height);

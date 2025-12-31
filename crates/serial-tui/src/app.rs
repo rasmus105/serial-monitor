@@ -648,13 +648,18 @@ impl App {
                         ConnectModalAction::Connect => {
                             let port_path = self.connect_modal.port_path.clone();
                             let serial_config = self.connect_modal.config.to_serial_config();
+                            let rx_chunking = self.connect_modal.config.rx_chunking();
+                            let file_save_enabled = self.connect_modal.config.file_save_enabled;
+                            let file_save_format_index = self.connect_modal.config.file_save_format_index;
+                            let file_save_encoding_index = self.connect_modal.config.file_save_encoding_index;
+                            let file_save_directory = self.connect_modal.config.file_save_directory.clone();
                             self.connect_modal.hide();
                             self.needs_clear = true;
                             
                             // Build session config from global settings
                             let settings = &self.help.settings;
                             let session_config = SessionConfig {
-                                rx_chunking: ChunkingStrategy::Raw,
+                                rx_chunking,
                                 tx_chunking: ChunkingStrategy::Raw,
                                 buffer_size: settings.buffer_size(),
                                 auto_save: settings.to_auto_save_config(),
@@ -664,10 +669,10 @@ impl App {
                                 serial_config,
                                 session_config,
                                 settings.keep_awake,
-                                false, // file_save_enabled
-                                1,     // file_save_format_index
-                                1,     // file_save_encoding_index
-                                serial_core::buffer::default_cache_directory().to_string_lossy().into_owned(),
+                                file_save_enabled,
+                                file_save_format_index,
+                                file_save_encoding_index,
+                                file_save_directory,
                             ).await;
                         }
                         ConnectModalAction::None => {}
