@@ -2,6 +2,8 @@
 
 use std::time::SystemTime;
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
@@ -119,6 +121,38 @@ impl TrafficConfig {
             _ => TimestampFormat::Relative,
         }
     }
+}
+
+/// Slice a string by display width positions, returning byte indices.
+///
+/// Given a start and end display column, returns the byte range that covers
+/// those columns. Handles multi-byte UTF-8 characters and wide characters correctly.
+///
+/// Returns `(byte_start, byte_end)` where the slice `&s[byte_start..byte_end]`
+/// contains the characters that fall within the display range.
+fn slice_by_display_width(s: &str, display_start: usize, display_end: usize) -> (usize, usize) {
+    let mut current_width = 0;
+    let mut byte_start = None;
+    let mut byte_end = s.len();
+
+    for (byte_idx, ch) in s.char_indices() {
+        let char_width = ch.width().unwrap_or(0);
+
+        // Found the start position
+        if byte_start.is_none() && current_width + char_width > display_start {
+            byte_start = Some(byte_idx);
+        }
+
+        // Found the end position
+        if current_width >= display_end {
+            byte_end = byte_idx;
+            break;
+        }
+
+        current_width += char_width;
+    }
+
+    (byte_start.unwrap_or(s.len()), byte_end)
 }
 
 // Config panel definitions
@@ -636,9 +670,10 @@ impl TrafficView {
         let mut display_lines: Vec<(usize, usize)> = Vec::new(); // (chunk_index, line_within_chunk)
         
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
-            let content_len = chunk.encoded.len();
+            // Use display width, not byte length, for line wrapping calculations
+            let content_display_width = chunk.encoded.width();
             let num_lines = if content_width > 0 {
-                (content_len + content_width - 1) / content_width.max(1)
+                (content_display_width + content_width - 1) / content_width.max(1)
             } else {
                 1
             }.max(1); // At least one line per chunk
@@ -712,9 +747,10 @@ impl TrafficView {
             // Get matches for this chunk
             let matches: Vec<_> = buffer.matches_in_chunk(chunk_idx).cloned().collect();
             
-            // Calculate which part of content to show
-            let start = line_within_chunk * content_width;
-            let end = (start + content_width).min(content.len());
+            // Calculate which part of content to show (using display width, not bytes)
+            let display_start = line_within_chunk * content_width;
+            let display_end = display_start + content_width;
+            let (start, end) = slice_by_display_width(content, display_start, display_end);
 
             let line_area = Rect::new(inner.x, y, inner.width, 1);
 
@@ -776,10 +812,13 @@ impl TrafficView {
         }
 
         let content = &chunk.encoded;
+        let content_display_width = content.width();
         
-        // Calculate display bounds
-        let byte_end = if truncate && content.len() > content_width {
-            content_width.saturating_sub(3)
+        // Calculate display bounds - use display width for comparison, then convert to bytes
+        let byte_end = if truncate && content_display_width > content_width {
+            // Truncate to content_width - 3 (for "...") display columns
+            let (_, end) = slice_by_display_width(content, 0, content_width.saturating_sub(3));
+            end
         } else {
             content.len()
         };
@@ -789,7 +828,7 @@ impl TrafficView {
         spans.extend(content_spans);
         
         // Add ellipsis if truncated
-        if truncate && content.len() > content_width {
+        if truncate && content_display_width > content_width {
             spans.push(Span::raw("...".to_string()));
         }
 
@@ -1033,11 +1072,11 @@ impl TrafficView {
         
         // Calculate total scrollable items based on wrap mode
         let total = if self.config.wrap_text {
-            // Count display lines (wrapped)
+            // Count display lines (wrapped) using display width
             let content_width = self.last_content_width.max(1);
             buffer.chunks().map(|chunk| {
-                let content_len = chunk.encoded.len();
-                ((content_len + content_width - 1) / content_width).max(1)
+                let content_display_width = chunk.encoded.width();
+                ((content_display_width + content_width - 1) / content_width).max(1)
             }).sum()
         } else {
             // Count chunks
@@ -1117,12 +1156,12 @@ impl TrafficView {
                 // Lock mode still allows navigating to search matches
                 let scroll_pos = if self.config.wrap_text {
                     let content_width = self.last_content_width.max(1);
-                    // Pre-calculate display line offsets for each chunk
+                    // Pre-calculate display line offsets for each chunk using display width
                     let display_offsets: Vec<usize> = buffer.chunks()
                         .scan(0usize, |acc, chunk| {
                             let offset = *acc;
-                            let content_len = chunk.encoded.len();
-                            let num_lines = ((content_len + content_width - 1) / content_width).max(1);
+                            let content_display_width = chunk.encoded.width();
+                            let num_lines = ((content_display_width + content_width - 1) / content_width).max(1);
                             *acc += num_lines;
                             Some(offset)
                         })
@@ -1150,12 +1189,12 @@ impl TrafficView {
                 // Previous search match - need to calculate scroll position while we have buffer access
                 let scroll_pos = if self.config.wrap_text {
                     let content_width = self.last_content_width.max(1);
-                    // Pre-calculate display line offsets for each chunk
+                    // Pre-calculate display line offsets for each chunk using display width
                     let display_offsets: Vec<usize> = buffer.chunks()
                         .scan(0usize, |acc, chunk| {
                             let offset = *acc;
-                            let content_len = chunk.encoded.len();
-                            let num_lines = ((content_len + content_width - 1) / content_width).max(1);
+                            let content_display_width = chunk.encoded.width();
+                            let num_lines = ((content_display_width + content_width - 1) / content_width).max(1);
                             *acc += num_lines;
                             Some(offset)
                         })
