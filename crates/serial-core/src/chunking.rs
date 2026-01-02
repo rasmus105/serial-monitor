@@ -5,7 +5,7 @@
 
 use crate::buffer::Direction;
 
-/// Strategy for chunking incoming serial data
+/// Strategy for chunking serial data
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ChunkingStrategy {
     /// Raw chunking - chunks are created based on OS read timing.

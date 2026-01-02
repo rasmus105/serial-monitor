@@ -21,6 +21,9 @@ use crate::port::SerialConfig;
 ///
 /// All counters are cumulative and never decrease, even when the buffer
 /// truncates old data.
+///
+/// Atomic integers are used for simplicity, so that we can easily share
+/// statistics between threads (core and UI).
 #[derive(Debug)]
 pub struct Statistics {
     /// Total bytes received from the device
@@ -114,7 +117,8 @@ impl Statistics {
 pub enum SessionEvent {
     /// New data received from the device
     DataReceived { data: Vec<u8>, direction: Direction },
-    /// Data was sent to the device
+    /// Data was sent to the device (otherwise UI doesn't know
+    /// if the data operation succeeded)
     DataSent { data: Vec<u8>, direction: Direction },
     /// Connection established
     Connected,
@@ -434,7 +438,7 @@ async fn io_task(
                     Ok(n) => {
                         // Record raw bytes received before chunking
                         statistics.record_rx(n);
-                        
+
                         // Process through chunker - may produce 0, 1, or many chunks
                         let chunks = rx_chunker.process(&read_buf[..n]);
                         let direction = rx_chunker.direction();
@@ -481,7 +485,7 @@ async fn io_task(
                             Ok(()) => {
                                 // Record bytes sent
                                 statistics.record_tx(data.len());
-                                
+
                                 // Process through TX chunker
                                 let chunks = tx_chunker.process(&data);
                                 let direction = tx_chunker.direction();

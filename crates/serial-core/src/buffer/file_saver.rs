@@ -175,77 +175,48 @@ impl DirectionFilter {
 
 /// Configuration for automatic crash-recovery saving.
 ///
-/// Auto-save runs in the background and saves all session data to a cache directory.
-/// Files are rotated by session (one file per connection).
-#[derive(Debug, Clone)]
+/// When this is enabled, received serial data will always be saved to a cache directory,
+/// with a ringbuffer-like rotation to only save a configurable number of sessions (to
+/// taking up too much space)
+///
+/// This ensures no data is lost, even when the app crashes. Can easily be disabled if
+/// not wanted, as it does add "uneccessary" computation.
+#[derive(Debug, Clone, bon::Builder)]
+#[builder(on(String, into), on(PathBuf, into))]
 pub struct AutoSaveConfig {
     /// Directory for crash recovery files.
     /// Default: `~/.cache/serial-monitor/` or `/tmp/serial-monitor/` (if `~/.cache` not found)
+    #[builder(default = default_cache_directory())]
     pub directory: PathBuf,
 
     /// Maximum number of session files to keep.
     /// Oldest files are deleted when this limit is exceeded.
+    #[builder(default = 10)]
     pub max_sessions: usize,
 
     /// Whether auto-save is enabled.
+    #[builder(default = true)]
     pub enabled: bool,
 
     /// Format for auto-saved data.
+    #[builder(default)]
     pub format: SaveFormat,
 
     /// Which directions to save.
+    #[builder(default)]
     pub directions: DirectionFilter,
 }
 
 impl Default for AutoSaveConfig {
     fn default() -> Self {
-        Self {
-            directory: default_cache_directory(),
-            max_sessions: 10,
-            enabled: true,
-            format: SaveFormat::default(), // ASCII with timestamps
-            directions: DirectionFilter::default(), // RX only
-        }
+        Self::builder().build()
     }
 }
 
 impl AutoSaveConfig {
     /// Create config with auto-save disabled
     pub fn disabled() -> Self {
-        Self {
-            enabled: false,
-            ..Default::default()
-        }
-    }
-
-    /// Set the directory
-    pub fn with_directory(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.directory = dir.into();
-        self
-    }
-
-    /// Set max sessions to keep
-    pub fn with_max_sessions(mut self, max: usize) -> Self {
-        self.max_sessions = max;
-        self
-    }
-
-    /// Set the save format
-    pub fn with_format(mut self, format: SaveFormat) -> Self {
-        self.format = format;
-        self
-    }
-
-    /// Set direction filter
-    pub fn with_directions(mut self, directions: DirectionFilter) -> Self {
-        self.directions = directions;
-        self
-    }
-
-    /// Enable or disable
-    pub fn with_enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
-        self
+        Self::builder().enabled(false).build()
     }
 }
 
@@ -262,49 +233,23 @@ pub fn default_cache_directory() -> PathBuf {
 // ============================================================================
 
 /// Configuration for user-initiated file saving.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, bon::Builder)]
+#[builder(on(PathBuf, into))]
 pub struct UserSaveConfig {
     /// Full path to save to (including filename)
     pub path: PathBuf,
 
     /// What data to include
+    #[builder(default)]
     pub scope: SaveScope,
 
     /// Format for saved data
+    #[builder(default)]
     pub format: SaveFormat,
 
     /// Which directions to save
+    #[builder(default = DirectionFilter::all())]
     pub directions: DirectionFilter,
-}
-
-impl UserSaveConfig {
-    /// Create a new user save config
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-            scope: SaveScope::default(),
-            format: SaveFormat::default(),
-            directions: DirectionFilter::all(),
-        }
-    }
-
-    /// Set the scope
-    pub fn with_scope(mut self, scope: SaveScope) -> Self {
-        self.scope = scope;
-        self
-    }
-
-    /// Set the format
-    pub fn with_format(mut self, format: SaveFormat) -> Self {
-        self.format = format;
-        self
-    }
-
-    /// Set direction filter
-    pub fn with_directions(mut self, directions: DirectionFilter) -> Self {
-        self.directions = directions;
-        self
-    }
 }
 
 // ============================================================================

@@ -661,15 +661,19 @@ impl DataBuffer {
     ///
     /// // Snapshot existing buffer
     /// buffer.save(
-    ///     UserSaveConfig::new("/tmp/capture.txt")
-    ///         .with_scope(SaveScope::ExistingOnly),
+    ///     UserSaveConfig::builder()
+    ///         .path("/tmp/capture.txt")
+    ///         .scope(SaveScope::ExistingOnly)
+    ///         .build(),
     ///     &runtime,
     /// )?;
     ///
     /// // Stream new data
     /// buffer.save(
-    ///     UserSaveConfig::new("/tmp/stream.txt")
-    ///         .with_scope(SaveScope::NewOnly),
+    ///     UserSaveConfig::builder()
+    ///         .path("/tmp/stream.txt")
+    ///         .scope(SaveScope::NewOnly)
+    ///         .build(),
     ///     &runtime,
     /// )?;
     /// // ... later ...

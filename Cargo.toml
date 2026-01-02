@@ -28,6 +28,9 @@ unicode-width = "0.2"
 
 # Enum utilities
 strum = { version = "0.26", features = ["derive"] }
+
+# Builder pattern
+bon = "3.8.1"
 enum_dispatch = "0.3.13"
 
 # Pattern matching
