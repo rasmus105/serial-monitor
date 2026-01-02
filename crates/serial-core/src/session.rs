@@ -138,53 +138,24 @@ pub enum SessionCommand {
 }
 
 /// Configuration for a session (beyond serial port settings)
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct SessionConfig {
     /// Strategy for chunking received data
+    #[builder(default)]
     pub rx_chunking: ChunkingStrategy,
     /// Strategy for chunking transmitted data (usually Raw is fine)
+    #[builder(default)]
     pub tx_chunking: ChunkingStrategy,
     /// Maximum buffer size in bytes
     pub buffer_size: Option<usize>,
     /// Auto-save configuration for crash recovery
+    #[builder(default)]
     pub auto_save: AutoSaveConfig,
 }
 
-impl SessionConfig {
-    /// Set the RX chunking strategy
-    pub fn with_rx_chunking(mut self, strategy: ChunkingStrategy) -> Self {
-        self.rx_chunking = strategy;
-        self
-    }
-
-    /// Set the TX chunking strategy
-    pub fn with_tx_chunking(mut self, strategy: ChunkingStrategy) -> Self {
-        self.tx_chunking = strategy;
-        self
-    }
-
-    /// Set the buffer size
-    pub fn with_buffer_size(mut self, size: usize) -> Self {
-        self.buffer_size = Some(size);
-        self
-    }
-
-    /// Use line-delimited chunking for RX (convenience method)
-    pub fn line_delimited(mut self) -> Self {
-        self.rx_chunking = ChunkingStrategy::line_delimited();
-        self
-    }
-
-    /// Set auto-save configuration
-    pub fn with_auto_save(mut self, config: AutoSaveConfig) -> Self {
-        self.auto_save = config;
-        self
-    }
-
-    /// Disable auto-save
-    pub fn without_auto_save(mut self) -> Self {
-        self.auto_save.enabled = false;
-        self
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self::builder().build()
     }
 }
 
@@ -307,7 +278,7 @@ impl Session {
         Self::connect_with_config(
             port_name,
             config,
-            SessionConfig::default().with_buffer_size(buffer_size),
+            SessionConfig::builder().buffer_size(buffer_size).build(),
         )
         .await
     }

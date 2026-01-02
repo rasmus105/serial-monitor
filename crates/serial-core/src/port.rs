@@ -46,39 +46,28 @@ impl From<tokio_serial::SerialPortInfo> for PortInfo {
 }
 
 /// Configuration for a serial port connection
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct SerialConfig {
     /// Baud rate
+    #[builder(default = 115200)]
     pub baud_rate: u32,
     /// Data bits
+    #[builder(default = DataBits::Eight)]
     pub data_bits: DataBits,
     /// Parity
+    #[builder(default = Parity::None)]
     pub parity: Parity,
     /// Stop bits
+    #[builder(default = StopBits::One)]
     pub stop_bits: StopBits,
     /// Flow control
+    #[builder(default = FlowControl::None)]
     pub flow_control: FlowControl,
 }
 
 impl Default for SerialConfig {
     fn default() -> Self {
-        Self {
-            baud_rate: 115200,
-            data_bits: DataBits::Eight,
-            parity: Parity::None,
-            stop_bits: StopBits::One,
-            flow_control: FlowControl::None,
-        }
-    }
-}
-
-impl SerialConfig {
-    /// Create a new config with the given baud rate, using defaults for other settings
-    pub fn with_baud_rate(baud_rate: u32) -> Self {
-        Self {
-            baud_rate,
-            ..Default::default()
-        }
+        Self::builder().build()
     }
 }
 

@@ -174,33 +174,31 @@ impl SizeUnit {
 }
 
 /// Configuration for file sending
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct FileSendConfig {
     /// How to divide the file into chunks
+    #[builder(default)]
     pub chunk_mode: ChunkMode,
     /// Whether to include the delimiter in sent chunks (only for delimiter mode)
+    #[builder(default = true)]
     pub include_delimiter: bool,
     /// Number of delimiter-separated units to send per chunk (only for delimiter mode)
     /// e.g., if set to 2 and delimiter is '\n', sends 2 lines at a time
+    #[builder(default = 1)]
     pub lines_per_chunk: usize,
     /// Optional suffix to append to each chunk (e.g., line ending)
     pub chunk_suffix: Option<Cow<'static, [u8]>>,
     /// Delay between chunks
+    #[builder(default = Duration::from_millis(10))]
     pub chunk_delay: Duration,
     /// Whether to loop the file continuously
+    #[builder(default)]
     pub repeat: bool,
 }
 
 impl Default for FileSendConfig {
     fn default() -> Self {
-        Self {
-            chunk_mode: ChunkMode::default(),
-            include_delimiter: true,
-            lines_per_chunk: 1,
-            chunk_suffix: None,
-            chunk_delay: Duration::from_millis(10),
-            repeat: false,
-        }
+        Self::builder().build()
     }
 }
 
