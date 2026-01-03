@@ -5,6 +5,7 @@
 use std::borrow::Cow;
 use std::path::Path;
 use std::time::Duration;
+use strum::{IntoStaticStr, VariantArray};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
@@ -28,14 +29,17 @@ impl Default for ChunkMode {
 }
 
 /// Predefined delimiters for chunking
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum Delimiter {
     /// Line feed (`\n`)
     #[default]
+    #[strum(serialize = "LF (\\n)")]
     Lf,
     /// Carriage return + line feed (`\r\n`)
+    #[strum(serialize = "CRLF (\\r\\n)")]
     CrLf,
     /// Carriage return (`\r`)
+    #[strum(serialize = "CR (\\r)")]
     Cr,
 }
 
@@ -51,125 +55,12 @@ impl Delimiter {
 
     /// Display name for this delimiter
     pub fn display_name(&self) -> &'static str {
-        match self {
-            Delimiter::Lf => "LF (\\n)",
-            Delimiter::CrLf => "CRLF (\\r\\n)",
-            Delimiter::Cr => "CR (\\r)",
-        }
+        self.into()
     }
 
-    /// All delimiter variants
-    pub const ALL: &'static [Delimiter] = &[Delimiter::Lf, Delimiter::CrLf, Delimiter::Cr];
-
-    /// Option strings for UI dropdown
-    pub const OPTIONS: &'static [&'static str] = &["LF (\\n)", "CRLF (\\r\\n)", "CR (\\r)"];
-
-    /// Create from index
+    /// Create from index into VARIANTS
     pub fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or_default()
-    }
-
-    /// Get index of this delimiter
-    pub fn index(&self) -> usize {
-        Self::ALL.iter().position(|d| d == self).unwrap_or(0)
-    }
-}
-
-/// Time unit for delay configuration
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TimeUnit {
-    #[default]
-    Milliseconds,
-    Seconds,
-    Minutes,
-    Hours,
-}
-
-impl TimeUnit {
-    /// Convert a value in this unit to Duration
-    pub fn to_duration(&self, value: u64) -> Duration {
-        match self {
-            TimeUnit::Milliseconds => Duration::from_millis(value),
-            TimeUnit::Seconds => Duration::from_secs(value),
-            TimeUnit::Minutes => Duration::from_secs(value * 60),
-            TimeUnit::Hours => Duration::from_secs(value * 3600),
-        }
-    }
-
-    /// Display name
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            TimeUnit::Milliseconds => "ms",
-            TimeUnit::Seconds => "s",
-            TimeUnit::Minutes => "min",
-            TimeUnit::Hours => "h",
-        }
-    }
-
-    /// All variants
-    pub const ALL: &'static [TimeUnit] = &[
-        TimeUnit::Milliseconds,
-        TimeUnit::Seconds,
-        TimeUnit::Minutes,
-        TimeUnit::Hours,
-    ];
-
-    /// Option strings for UI dropdown
-    pub const OPTIONS: &'static [&'static str] = &["ms", "s", "min", "h"];
-
-    /// Create from index
-    pub fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or_default()
-    }
-
-    /// Get index
-    pub fn index(&self) -> usize {
-        Self::ALL.iter().position(|u| u == self).unwrap_or(0)
-    }
-}
-
-/// Size unit for byte-based chunking
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SizeUnit {
-    #[default]
-    Bytes,
-    Kilobytes,
-    Megabytes,
-}
-
-impl SizeUnit {
-    /// Convert a value in this unit to bytes
-    pub fn to_bytes(&self, value: usize) -> usize {
-        match self {
-            SizeUnit::Bytes => value,
-            SizeUnit::Kilobytes => value * 1024,
-            SizeUnit::Megabytes => value * 1024 * 1024,
-        }
-    }
-
-    /// Display name
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            SizeUnit::Bytes => "B",
-            SizeUnit::Kilobytes => "KB",
-            SizeUnit::Megabytes => "MB",
-        }
-    }
-
-    /// All variants
-    pub const ALL: &'static [SizeUnit] = &[SizeUnit::Bytes, SizeUnit::Kilobytes, SizeUnit::Megabytes];
-
-    /// Option strings for UI dropdown
-    pub const OPTIONS: &'static [&'static str] = &["B", "KB", "MB"];
-
-    /// Create from index
-    pub fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or_default()
-    }
-
-    /// Get index
-    pub fn index(&self) -> usize {
-        Self::ALL.iter().position(|u| u == self).unwrap_or(0)
+        Self::VARIANTS.get(index).copied().unwrap_or_default()
     }
 }
 

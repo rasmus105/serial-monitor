@@ -13,8 +13,9 @@ use ratatui::{
 };
 use serial_core::{
     ChunkMode, Delimiter, FileSendConfig, FileSendHandle, FileSendProgress, SerialConfig,
-    SessionHandle, SizeUnit, TimeUnit, send_file,
+    SessionHandle, send_file,
     ui::{
+        SizeUnit, TimeUnit,
         config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
     },
 };
@@ -129,7 +130,12 @@ impl Default for FileSenderConfig {
 }
 
 const CHUNK_MODE_OPTIONS: &[&str] = &["Delimiter", "Bytes"];
-const PREVIEW_LIMIT_UNIT_OPTIONS: &[&str] = &["KB", "MB"];
+const PREVIEW_LIMIT_UNIT_OPTIONS: &[&str] = &["KiB", "MiB"];
+
+// These must match the display_name() output from serial-core enums
+const DELIMITER_OPTIONS: &[&str] = &["LF (\\n)", "CRLF (\\r\\n)", "CR (\\r)"];
+const TIME_UNIT_OPTIONS: &[&str] = &["ms", "s", "min", "h"];
+const SIZE_UNIT_OPTIONS: &[&str] = &["B", "KiB", "MiB"];
 
 static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
     Section {
@@ -178,7 +184,7 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
                 id: "delimiter",
                 label: "Delimiter",
                 kind: FieldKind::Select {
-                    options: Delimiter::OPTIONS,
+                    options: DELIMITER_OPTIONS,
                 },
                 get: |c| FieldValue::OptionIndex(c.delimiter_index),
                 set: |c, v| {
@@ -254,7 +260,7 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
                 id: "byte_unit",
                 label: "Unit",
                 kind: FieldKind::Select {
-                    options: SizeUnit::OPTIONS,
+                    options: SIZE_UNIT_OPTIONS,
                 },
                 get: |c| FieldValue::OptionIndex(c.byte_unit_index),
                 set: |c, v| {
@@ -291,7 +297,7 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
                 id: "suffix_delimiter",
                 label: "Suffix",
                 kind: FieldKind::Select {
-                    options: Delimiter::OPTIONS,
+                    options: DELIMITER_OPTIONS,
                 },
                 get: |c| FieldValue::OptionIndex(c.suffix_delimiter_index),
                 set: |c, v| {
@@ -323,7 +329,7 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
                 id: "delay_unit",
                 label: "Unit",
                 kind: FieldKind::Select {
-                    options: TimeUnit::OPTIONS,
+                    options: TIME_UNIT_OPTIONS,
                 },
                 get: |c| FieldValue::OptionIndex(c.delay_unit_index),
                 set: |c, v| {

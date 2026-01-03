@@ -37,8 +37,7 @@ pub use buffer::{
 pub use chunking::{Chunker, ChunkingStrategy, LineDelimiter};
 pub use error::{Error, Result};
 pub use file_sender::{
-    send_file, ChunkMode, Delimiter, FileSendConfig, FileSendHandle, FileSendProgress, SizeUnit,
-    TimeUnit,
+    send_file, ChunkMode, Delimiter, FileSendConfig, FileSendHandle, FileSendProgress,
 };
 pub use keep_awake::KeepAwake;
 pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};

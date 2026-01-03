@@ -1,4 +1,4 @@
-//! Keep-awake functionality to prevent system sleep during serial sessions.
+//! Simple keep-awake functionality to prevent system sleep during serial sessions.
 
 use keepawake::KeepAwake as KeepAwakeInner;
 

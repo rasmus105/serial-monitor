@@ -9,7 +9,7 @@ use crate::buffer::Direction;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ChunkingStrategy {
     /// Raw chunking - chunks are created based on OS read timing.
-    /// Each `read()` call creates one chunk with whatever bytes were available.
+    /// Each `read()`/`write()` call creates one chunk with whatever bytes were available.
     /// Fast and low overhead, but chunk boundaries are unpredictable.
     #[default]
     Raw,

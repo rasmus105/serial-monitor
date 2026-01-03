@@ -9,8 +9,8 @@
 pub mod config;
 pub mod encoding;
 pub mod serial_config;
-mod size;
 mod timestamp;
+mod units;
 
-pub use size::SizeUnit;
 pub use timestamp::TimestampFormat;
+pub use units::{SizeUnit, TimeUnit};
