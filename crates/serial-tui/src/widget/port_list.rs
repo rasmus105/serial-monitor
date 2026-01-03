@@ -247,10 +247,10 @@ impl StatefulWidget for PortList<'_> {
                 if let Some(ref manufacturer) = port.manufacturer {
                     details.push(format!("({})", manufacturer));
                 }
-                if let Some(vid) = port.vid {
-                    if let Some(pid) = port.pid {
-                        details.push(format!("[{:04x}:{:04x}]", vid, pid));
-                    }
+                if let Some(vid) = port.vid
+                    && let Some(pid) = port.pid
+                {
+                    details.push(format!("[{:04x}:{:04x}]", vid, pid));
                 }
 
                 if !details.is_empty() {

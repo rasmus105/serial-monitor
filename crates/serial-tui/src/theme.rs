@@ -41,7 +41,7 @@ impl Theme {
     pub const GAUGE_BG: Color = Color::Indexed(238);
 
     // Styles
-    pub fn default() -> Style {
+    pub fn base() -> Style {
         Style::default()
     }
 

@@ -226,10 +226,10 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
                 enabled: |c| !c.is_sending,
                 parent_id: Some("delimiter"),
                 validate: |v| {
-                    if let FieldValue::Usize(n) = v {
-                        if *n == 0 {
-                            return Err(Cow::Borrowed("Must be >= 1"));
-                        }
+                    if let FieldValue::Usize(n) = v
+                        && *n == 0
+                    {
+                        return Err(Cow::Borrowed("Must be >= 1"));
                     }
                     Ok(())
                 },
@@ -248,10 +248,10 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
                 enabled: |c| !c.is_sending,
                 parent_id: Some("chunk_mode"),
                 validate: |v| {
-                    if let FieldValue::Usize(n) = v {
-                        if *n == 0 {
-                            return Err(Cow::Borrowed("Size must be > 0"));
-                        }
+                    if let FieldValue::Usize(n) = v
+                        && *n == 0
+                    {
+                        return Err(Cow::Borrowed("Size must be > 0"));
                     }
                     Ok(())
                 },
@@ -376,10 +376,10 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
                 enabled: |c| !c.is_sending,
                 parent_id: None,
                 validate: |v| {
-                    if let FieldValue::Usize(n) = v {
-                        if *n == 0 {
-                            return Err(Cow::Borrowed("Max size must be > 0"));
-                        }
+                    if let FieldValue::Usize(n) = v
+                        && *n == 0
+                    {
+                        return Err(Cow::Borrowed("Max size must be > 0"));
                     }
                     Ok(())
                 },
@@ -1082,14 +1082,14 @@ impl FileSenderView {
             KeyCode::Enter | KeyCode::Char(' ')
         );
 
-        if is_toggle_key && !self.config_nav.is_dropdown_open() {
-            if let Some(field) = self.config_nav.current_field(FILE_SENDER_CONFIG_SECTIONS, &self.config) {
-                // Handle text input field (file path)
-                if field.kind.is_text_input() && field.id == "file_path" {
-                    self.file_path_input.set_content(&self.config.file_path);
-                    self.file_path_focused = true;
-                    return None;
-                }
+        if is_toggle_key && !self.config_nav.is_dropdown_open()
+            && let Some(field) = self.config_nav.current_field(FILE_SENDER_CONFIG_SECTIONS, &self.config)
+        {
+            // Handle text input field (file path)
+            if field.kind.is_text_input() && field.id == "file_path" {
+                self.file_path_input.set_content(&self.config.file_path);
+                self.file_path_focused = true;
+                return None;
             }
         }
 

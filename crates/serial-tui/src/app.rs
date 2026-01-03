@@ -107,6 +107,7 @@ pub struct SessionEntry {
 }
 
 /// State of a session.
+#[allow(clippy::large_enum_variant)]
 pub enum SessionState {
     /// Pre-connection state.
     PreConnect(PreConnectView),
@@ -299,8 +300,10 @@ impl App {
         pre_connect.apply_settings(&settings.pre_connect);
         
         // Create help overlay with saved global settings
-        let mut help = HelpOverlayState::default();
-        help.settings = settings.global.clone().into();
+        let help = HelpOverlayState {
+            settings: settings.global.clone().into(),
+            ..Default::default()
+        };
         
         // Create session manager with initial PreConnect session
         let mut sessions = SessionManager::new();
@@ -439,11 +442,11 @@ impl App {
         }
 
         // Draw loading overlay (from graph view if reparsing)
-        if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
-            if let Some(ref mut loading) = state.graph.loading {
-                loading.mark_visible();
-                crate::widget::LoadingOverlay::new(loading).render(area, buf);
-            }
+        if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut()
+            && let Some(ref mut loading) = state.graph.loading
+        {
+            loading.mark_visible();
+            crate::widget::LoadingOverlay::new(loading).render(area, buf);
         }
 
         // Draw toasts overlay
@@ -495,11 +498,11 @@ impl App {
 
         // Draw cursor
         let cursor_x = inner.x + 1 + self.command_input.cursor_display_pos() as u16;
-        if cursor_x < inner.x + inner.width {
-            if let Some(cell) = buf.cell_mut((cursor_x, inner.y)) {
-                cell.set_bg(if is_disconnected { Theme::DISCONNECTED } else { Theme::PRIMARY });
-                cell.set_fg(Theme::BG);
-            }
+        if cursor_x < inner.x + inner.width
+            && let Some(cell) = buf.cell_mut((cursor_x, inner.y))
+        {
+            cell.set_bg(if is_disconnected { Theme::DISCONNECTED } else { Theme::PRIMARY });
+            cell.set_fg(Theme::BG);
         }
     }
 
@@ -862,7 +865,7 @@ impl App {
     }
 
     async fn execute_command(&mut self, cmd: &str) {
-        let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
             return;
         }
@@ -1010,10 +1013,10 @@ impl App {
     async fn handle_traffic_action(&mut self, action: TrafficAction) {
         match action {
             TrafficAction::Send(data) => {
-                if let Some(SessionState::Connected(state)) = self.sessions.active_state() {
-                    if let Err(e) = state.handle.send(data).await {
-                        self.toasts.error(format!("Send failed: {}", e));
-                    }
+                if let Some(SessionState::Connected(state)) = self.sessions.active_state()
+                    && let Err(e) = state.handle.send(data).await
+                {
+                    self.toasts.error(format!("Send failed: {}", e));
                 }
                 // Layout changed (send bar closed) - request clear to avoid artifacts
                 self.needs_clear = true;
@@ -1090,6 +1093,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn connect(
         &mut self,
         port: &str,
@@ -1173,10 +1177,10 @@ impl App {
                 
                 // Remove the current PreConnect session (if any) and add the connected session
                 // This replaces the current session rather than adding a new one
-                if let Some(active_idx) = self.sessions.active_index() {
-                    if matches!(self.sessions.active_state(), Some(SessionState::PreConnect(_))) {
-                        self.sessions.remove(active_idx);
-                    }
+                if let Some(active_idx) = self.sessions.active_index()
+                    && matches!(self.sessions.active_state(), Some(SessionState::PreConnect(_)))
+                {
+                    self.sessions.remove(active_idx);
                 }
                 self.sessions.add_connected(state);
                 self.needs_clear = true;
@@ -1191,11 +1195,11 @@ impl App {
         // Get the current active index
         if let Some(active_idx) = self.sessions.active_index() {
             // Remove the active session (this will disconnect it)
-            if let Some(entry) = self.sessions.remove(active_idx) {
-                if let SessionState::Connected(state) = entry.state {
-                    let _ = state.handle.disconnect().await;
-                    self.toasts.info("Disconnected");
-                }
+            if let Some(entry) = self.sessions.remove(active_idx)
+                && let SessionState::Connected(state) = entry.state
+            {
+                let _ = state.handle.disconnect().await;
+                self.toasts.info("Disconnected");
             }
         }
         
@@ -1211,11 +1215,11 @@ impl App {
 
     /// Disconnect a specific session by index.
     async fn disconnect_session(&mut self, index: usize) {
-        if let Some(entry) = self.sessions.remove(index) {
-            if let SessionState::Connected(state) = entry.state {
-                let _ = state.handle.disconnect().await;
-                self.toasts.info("Session disconnected");
-            }
+        if let Some(entry) = self.sessions.remove(index)
+            && let SessionState::Connected(state) = entry.state
+        {
+            let _ = state.handle.disconnect().await;
+            self.toasts.info("Session disconnected");
         }
         
         // If no sessions left, create a fresh PreConnect session
@@ -1321,7 +1325,7 @@ impl App {
     fn apply_completion(&mut self) {
         if let Some(value) = self.completion.selected_value() {
             let input = &self.command_input.content;
-            let parts: Vec<&str> = input.trim().split_whitespace().collect();
+            let parts: Vec<&str> = input.split_whitespace().collect();
 
             // Use the stored kind to determine how to apply the completion
             let new_content = match self.completion.kind {

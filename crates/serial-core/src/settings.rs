@@ -32,7 +32,7 @@
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -92,7 +92,7 @@ pub enum SettingsError {
 /// * `directory` - The directory containing the settings file
 /// * `filename` - The name of the settings file (e.g., "settings.toml")
 pub fn load<T: DeserializeOwned>(
-    directory: &PathBuf,
+    directory: &Path,
     filename: &str,
 ) -> Result<Option<T>, SettingsError> {
     let path = directory.join(filename);
@@ -116,7 +116,7 @@ pub fn load<T: DeserializeOwned>(
 /// * `directory` - The directory containing the settings file
 /// * `filename` - The name of the settings file (e.g., "settings.toml")
 pub fn load_or_default<T: DeserializeOwned + Default>(
-    directory: &PathBuf,
+    directory: &Path,
     filename: &str,
 ) -> Result<T, SettingsError> {
     match load(directory, filename)? {

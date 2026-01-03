@@ -185,7 +185,7 @@ const FILE_SAVE_SCOPE_OPTIONS: &[&str] = &["Existing Only", "New Only", "Existin
 
 /// Buffer sizes in bytes corresponding to BUFFER_SIZE_OPTIONS
 pub const BUFFER_SIZES: &[usize] = &[
-    1 * 1024 * 1024,
+    1024 * 1024,
     5 * 1024 * 1024,
     10 * 1024 * 1024,
     50 * 1024 * 1024,
@@ -802,30 +802,29 @@ fn render_settings(area: Rect, buf: &mut Buffer, settings: &AppSettings, nav: &C
 }
 
 fn render_commands(area: Rect, buf: &mut Buffer, scroll: usize) {
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Usage section
-    lines.push(Line::from(vec![Span::styled("Command Mode", Theme::title())]));
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::raw("Press "),
-        Span::styled(":", Theme::keybind()),
-        Span::raw(" to enter command mode. Use "),
-        Span::styled("Tab", Theme::keybind()),
-        Span::raw(" for completion."),
-    ]));
-    lines.push(Line::from(vec![
-        Span::raw("Press "),
-        Span::styled("Enter", Theme::keybind()),
-        Span::raw(" to execute, "),
-        Span::styled("Esc", Theme::keybind()),
-        Span::raw(" to cancel."),
-    ]));
-    lines.push(Line::from(""));
-
-    // Commands section
-    lines.push(Line::from(vec![Span::styled("Available Commands", Theme::title())]));
-    lines.push(Line::from(""));
+    let mut lines: Vec<Line> = vec![
+        // Usage section
+        Line::from(vec![Span::styled("Command Mode", Theme::title())]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Press "),
+            Span::styled(":", Theme::keybind()),
+            Span::raw(" to enter command mode. Use "),
+            Span::styled("Tab", Theme::keybind()),
+            Span::raw(" for completion."),
+        ]),
+        Line::from(vec![
+            Span::raw("Press "),
+            Span::styled("Enter", Theme::keybind()),
+            Span::raw(" to execute, "),
+            Span::styled("Esc", Theme::keybind()),
+            Span::raw(" to cancel."),
+        ]),
+        Line::from(""),
+        // Commands section
+        Line::from(vec![Span::styled("Available Commands", Theme::title())]),
+        Line::from(""),
+    ];
 
     // Command list: (command, alias, description)
     let commands = [

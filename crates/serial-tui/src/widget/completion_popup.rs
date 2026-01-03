@@ -222,7 +222,7 @@ impl Widget for CompletionPopup<'_> {
         for y in popup_area.y..popup_area.y + popup_area.height {
             for x in popup_area.x..popup_area.x + popup_area.width {
                 if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_style(Theme::default());
+                    cell.set_style(Theme::base());
                 }
             }
         }
@@ -245,7 +245,7 @@ impl Widget for CompletionPopup<'_> {
             let style = if is_selected {
                 Theme::selected()
             } else {
-                Theme::default()
+                Theme::base()
             };
 
             // Check if we need scroll indicators

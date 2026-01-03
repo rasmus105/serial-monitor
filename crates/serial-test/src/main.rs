@@ -593,7 +593,7 @@ async fn run_flood(
         writer.write_all(buffer.as_bytes()).await?;
 
         // Print stats every 10000 lines
-        if line_count % 10000 == 0 {
+        if line_count.is_multiple_of(10000) {
             let elapsed = start.elapsed().as_secs_f64();
             let lines_per_sec = line_count as f64 / elapsed;
             let kb_per_sec = (byte_count as f64 / 1024.0) / elapsed;

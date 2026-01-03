@@ -407,10 +407,10 @@ impl ConfigPanelNav {
         loop {
             self.selected = (self.selected + 1) % total;
             // Check if this field is enabled
-            if let Some(field) = sections.nth_visible_field(state, self.selected) {
-                if field.is_enabled(state) {
-                    break;
-                }
+            if let Some(field) = sections.nth_visible_field(state, self.selected)
+                && field.is_enabled(state)
+            {
+                break;
             }
             // If we wrapped all the way around, stay on current (all disabled)
             if self.selected == start {
@@ -435,10 +435,10 @@ impl ConfigPanelNav {
                 self.selected - 1
             };
             // Check if this field is enabled
-            if let Some(field) = sections.nth_visible_field(state, self.selected) {
-                if field.is_enabled(state) {
-                    break;
-                }
+            if let Some(field) = sections.nth_visible_field(state, self.selected)
+                && field.is_enabled(state)
+            {
+                break;
             }
             // If we wrapped all the way around, stay on current (all disabled)
             if self.selected == start {
@@ -469,20 +469,20 @@ impl ConfigPanelNav {
     ///
     /// Call this when entering edit mode on a Select field
     pub fn sync_dropdown_index<T: 'static>(&mut self, sections: &[Section<T>], state: &T) {
-        if let Some(field) = self.current_field(sections, state) {
-            if let FieldValue::OptionIndex(idx) = field.get_value(state) {
-                self.dropdown_index = idx;
-            }
+        if let Some(field) = self.current_field(sections, state)
+            && let FieldValue::OptionIndex(idx) = field.get_value(state)
+        {
+            self.dropdown_index = idx;
         }
     }
 
     /// Open the dropdown for the current Select field
     pub fn open_dropdown<T: 'static>(&mut self, sections: &[Section<T>], state: &T) {
-        if let Some(field) = self.current_field(sections, state) {
-            if field.kind.is_select() {
-                self.sync_dropdown_index(sections, state);
-                self.dropdown_open = true;
-            }
+        if let Some(field) = self.current_field(sections, state)
+            && field.kind.is_select()
+        {
+            self.sync_dropdown_index(sections, state);
+            self.dropdown_open = true;
         }
     }
 
@@ -648,12 +648,11 @@ impl ConfigPanelNav {
         sections: &[Section<T>],
         state: &mut T,
     ) -> ValidationResult {
-        if let Some(field) = sections.nth_visible_field(state, self.selected) {
-            if matches!(field.kind, FieldKind::Toggle) {
-                if let FieldValue::Bool(current) = field.get_value(state) {
-                    return field.set_value(state, FieldValue::Bool(!current));
-                }
-            }
+        if let Some(field) = sections.nth_visible_field(state, self.selected)
+            && matches!(field.kind, FieldKind::Toggle)
+            && let FieldValue::Bool(current) = field.get_value(state)
+        {
+            return field.set_value(state, FieldValue::Bool(!current));
         }
         Ok(())
     }
@@ -671,16 +670,16 @@ impl ConfigPanelNav {
         }
         
         // If current field is disabled, find an enabled one
-        if let Some(field) = sections.nth_visible_field(state, self.selected) {
-            if !field.is_enabled(state) {
-                // Try to find first enabled field
-                for i in 0..total {
-                    if let Some(f) = sections.nth_visible_field(state, i) {
-                        if f.is_enabled(state) {
-                            self.selected = i;
-                            return;
-                        }
-                    }
+        if let Some(field) = sections.nth_visible_field(state, self.selected)
+            && !field.is_enabled(state)
+        {
+            // Try to find first enabled field
+            for i in 0..total {
+                if let Some(f) = sections.nth_visible_field(state, i)
+                    && f.is_enabled(state)
+                {
+                    self.selected = i;
+                    return;
                 }
             }
         }

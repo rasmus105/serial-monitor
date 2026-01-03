@@ -21,7 +21,12 @@ pub trait GraphParser: Send + Sync + std::fmt::Debug {
     ///
     /// The timestamp and direction are provided for context but most parsers
     /// only need the text content.
-    fn parse_str(&self, text: &str, timestamp: SystemTime, direction: Direction) -> Vec<ParsedValue>;
+    fn parse_str(
+        &self,
+        text: &str,
+        timestamp: SystemTime,
+        direction: Direction,
+    ) -> Vec<ParsedValue>;
 }
 
 #[enum_dispatch(GraphParser)]
@@ -94,7 +99,12 @@ impl Regex {
 }
 
 impl GraphParser for Regex {
-    fn parse_str(&self, text: &str, _timestamp: SystemTime, _direction: Direction) -> Vec<ParsedValue> {
+    fn parse_str(
+        &self,
+        text: &str,
+        _timestamp: SystemTime,
+        _direction: Direction,
+    ) -> Vec<ParsedValue> {
         let mut results = Vec::with_capacity(8);
 
         for caps in self.regex.captures_iter(text) {
@@ -149,7 +159,12 @@ impl Default for Csv {
 }
 
 impl GraphParser for Csv {
-    fn parse_str(&self, text: &str, _timestamp: SystemTime, _direction: Direction) -> Vec<ParsedValue> {
+    fn parse_str(
+        &self,
+        text: &str,
+        _timestamp: SystemTime,
+        _direction: Direction,
+    ) -> Vec<ParsedValue> {
         let data = text.as_bytes();
 
         // Only support ASCII delimiters for byte-level parsing
@@ -231,7 +246,11 @@ impl Csv {
             .map(|p| p + 1)
             .unwrap_or(0);
 
-        if start >= end { &[] } else { &data[start..end] }
+        if start >= end {
+            &[]
+        } else {
+            &data[start..end]
+        }
     }
 }
 
@@ -289,7 +308,12 @@ impl Json {
 }
 
 impl GraphParser for Json {
-    fn parse_str(&self, text: &str, _timestamp: SystemTime, _direction: Direction) -> Vec<ParsedValue> {
+    fn parse_str(
+        &self,
+        text: &str,
+        _timestamp: SystemTime,
+        _direction: Direction,
+    ) -> Vec<ParsedValue> {
         let value: serde_json::Value = match serde_json::from_str(text) {
             Ok(v) => v,
             Err(_) => return Vec::new(),
@@ -362,18 +386,18 @@ impl Smart {
         }
 
         // Handle lone minus or dot - need at least one digit
-        if b == b'-' || b == b'.' {
-            if start + 1 >= data.len() || !data[start + 1].is_ascii_digit() {
-                // Special case: "-.5" pattern
-                if b == b'-'
-                    && start + 2 < data.len()
-                    && data[start + 1] == b'.'
-                    && data[start + 2].is_ascii_digit()
-                {
-                    // Continue to parse
-                } else {
-                    return None;
-                }
+        if (b == b'-' || b == b'.')
+            && (start + 1 >= data.len() || !data[start + 1].is_ascii_digit())
+        {
+            // Special case: "-.5" pattern
+            if b == b'-'
+                && start + 2 < data.len()
+                && data[start + 1] == b'.'
+                && data[start + 2].is_ascii_digit()
+            {
+                // Continue to parse
+            } else {
+                return None;
             }
         }
 
@@ -398,7 +422,8 @@ impl Smart {
 
         while i < data.len() {
             // Look for a label (word starting with letter or underscore)
-            if !Self::is_label_char(data[i]) || (!data[i].is_ascii_alphabetic() && data[i] != b'_') {
+            if !Self::is_label_char(data[i]) || (!data[i].is_ascii_alphabetic() && data[i] != b'_')
+            {
                 i += 1;
                 continue;
             }
@@ -439,7 +464,9 @@ impl Smart {
             // Collect numbers until we find another label
             while j < data.len() {
                 // Check if we're at another label
-                if Self::is_label_char(data[j]) && (data[j].is_ascii_alphabetic() || data[j] == b'_') {
+                if Self::is_label_char(data[j])
+                    && (data[j].is_ascii_alphabetic() || data[j] == b'_')
+                {
                     // Look ahead to see if this is a label with separator or followed by number
                     let mut k = j;
                     while k < data.len() && Self::is_label_char(data[k]) {
@@ -505,7 +532,12 @@ impl Smart {
 }
 
 impl GraphParser for Smart {
-    fn parse_str(&self, text: &str, _timestamp: SystemTime, _direction: Direction) -> Vec<ParsedValue> {
+    fn parse_str(
+        &self,
+        text: &str,
+        _timestamp: SystemTime,
+        _direction: Direction,
+    ) -> Vec<ParsedValue> {
         let data = text.as_bytes();
         let mut results = Vec::with_capacity(8);
 

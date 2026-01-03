@@ -168,7 +168,7 @@ impl Widget for ToastsWidget<'_> {
         for toast in visible {
             // Calculate toast dimensions based on message length
             // Minimum width: 30, Maximum width: 70% of screen or 60 chars
-            let max_width = (area.width * 70 / 100).max(30).min(60) as usize;
+            let max_width = (area.width * 70 / 100).clamp(30, 60) as usize;
             let msg_len = toast.message.len();
             
             // Toast width: message length + borders (2) + padding (2), clamped
@@ -178,11 +178,11 @@ impl Widget for ToastsWidget<'_> {
             // Calculate how many lines we need for the message
             // Inner width is toast_width - 2 (borders)
             let inner_width = toast_width.saturating_sub(2) as usize;
-            let num_lines = if inner_width > 0 {
-                (msg_len + inner_width - 1) / inner_width // ceiling division
+            let num_lines = (if inner_width > 0 {
+                msg_len.div_ceil(inner_width)
             } else {
                 1
-            }.max(1).min(4); // max 4 lines of text
+            }).clamp(1, 4); // max 4 lines of text
             
             // Toast height: lines + borders (2)
             let toast_height = (num_lines as u16) + 2;

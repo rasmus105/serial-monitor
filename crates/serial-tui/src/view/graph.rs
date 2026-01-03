@@ -517,7 +517,7 @@ impl GraphView {
                 series
                     .points
                     .iter()
-                    .filter(|p| cutoff.map_or(true, |c| p.timestamp >= c))
+                    .filter(|p| cutoff.is_none_or(|c| p.timestamp >= c))
                     .map(|p| (time_to_secs(p.timestamp, reference_time), p.value)),
             );
         }
@@ -640,7 +640,7 @@ impl GraphView {
         let window_secs = packet_rate.window_size.as_secs_f64();
         for sample in packet_rate.samples.iter() {
             let sample_time = sample.window_start();
-            if cutoff.map_or(true, |c| sample_time >= c) {
+            if cutoff.is_none_or(|c| sample_time >= c) {
                 let t = time_to_secs(sample_time, reference_time);
                 if show_rx {
                     // Packets per second
@@ -804,7 +804,7 @@ impl GraphView {
 
         // Series visibility section (only for Parsed Data mode)
         if self.config.mode_index == 0 && series_height > 0 {
-            self.draw_series_section(chunks[3], buf, &buffer, focus);
+            self.draw_series_section(chunks[3], buf, buffer, focus);
         }
     }
 
@@ -912,27 +912,24 @@ impl GraphView {
     }
 
     fn handle_main_key(&mut self, key: KeyEvent, handle: &SessionHandle) {
-        match key.code {
-            KeyCode::Char('g') => {
-                // Toggle graph enable/disable
-                let mut buffer = handle.buffer_mut();
-                if buffer.graph_enabled() {
-                    buffer.disable_graph();
-                    self.last_applied_parser = None;
+        if let KeyCode::Char('g') = key.code {
+            // Toggle graph enable/disable
+            let mut buffer = handle.buffer_mut();
+            if buffer.graph_enabled() {
+                buffer.disable_graph();
+                self.last_applied_parser = None;
+            } else {
+                // Enable with current parser config
+                if let Some(parser) = self.config.build_parser() {
+                    buffer.enable_graph_with_parser(parser);
                 } else {
-                    // Enable with current parser config
-                    if let Some(parser) = self.config.build_parser() {
-                        buffer.enable_graph_with_parser(parser);
-                    } else {
-                        // Fallback to default if parser can't be built (e.g., invalid regex)
-                        buffer.enable_graph();
-                    }
-                    // Apply parse direction settings
-                    buffer.set_graph_parse_directions(self.config.parse_rx, self.config.parse_tx);
-                    self.last_applied_parser = Some(AppliedParserConfig::from_config(&self.config));
+                    // Fallback to default if parser can't be built (e.g., invalid regex)
+                    buffer.enable_graph();
                 }
+                // Apply parse direction settings
+                buffer.set_graph_parse_directions(self.config.parse_rx, self.config.parse_tx);
+                self.last_applied_parser = Some(AppliedParserConfig::from_config(&self.config));
             }
-            _ => {}
         }
     }
 
@@ -1030,10 +1027,10 @@ impl GraphView {
                         let mut buffer = handle.buffer_mut();
                         if let Some(graph) = buffer.graph_mut() {
                             let series_names: Vec<String> = graph.series.keys().cloned().collect();
-                            if let Some(name) = series_names.get(self.selected_series) {
-                                if let Some(series) = graph.series.get_mut(name) {
-                                    series.visible = !series.visible;
-                                }
+                            if let Some(name) = series_names.get(self.selected_series)
+                                && let Some(series) = graph.series.get_mut(name)
+                            {
+                                series.visible = !series.visible;
                             }
                         }
                     }
@@ -1067,14 +1064,14 @@ impl GraphView {
         }
         
         // Check what kind of update is needed
-        let parser_changed = self.last_applied_parser.as_ref().map_or(true, |last| {
+        let parser_changed = self.last_applied_parser.as_ref().is_none_or(|last| {
             last.parser_type_index != current.parser_type_index
                 || last.regex_pattern != current.regex_pattern
                 || last.csv_delimiter_index != current.csv_delimiter_index
                 || last.csv_columns != current.csv_columns
         });
         
-        let direction_changed = self.last_applied_parser.as_ref().map_or(false, |last| {
+        let direction_changed = self.last_applied_parser.as_ref().is_some_and(|last| {
             last.parse_rx != current.parse_rx || last.parse_tx != current.parse_tx
         });
         
@@ -1100,10 +1097,10 @@ impl GraphView {
         // Clear loading (in a real async scenario, this would be done on completion)
         // For now, since set_graph_parser is synchronous, we clear it
         // but mark_visible won't have been called yet, so it won't flash
-        if let Some(ref loading) = self.loading {
-            if loading.can_dismiss() {
-                self.loading = None;
-            }
+        if let Some(ref loading) = self.loading
+            && loading.can_dismiss()
+        {
+            self.loading = None;
         }
     }
     
@@ -1148,10 +1145,10 @@ impl GraphView {
     
     /// Dismiss the loading overlay if it can be dismissed.
     pub fn dismiss_loading_if_ready(&mut self) {
-        if let Some(ref loading) = self.loading {
-            if loading.can_dismiss() {
-                self.loading = None;
-            }
+        if let Some(ref loading) = self.loading
+            && loading.can_dismiss()
+        {
+            self.loading = None;
         }
     }
 }

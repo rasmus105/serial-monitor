@@ -555,6 +555,7 @@ impl TrafficView {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_traffic_truncated(
         &mut self,
         area: Rect,
@@ -651,6 +652,7 @@ impl TrafficView {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_traffic_wrapped(
         &mut self,
         area: Rect,
@@ -787,6 +789,7 @@ impl TrafficView {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn format_chunk_line_highlighted(
         &self,
         chunk: &serial_core::buffer::ChunkView,
@@ -835,6 +838,7 @@ impl TrafficView {
         Line::from(spans)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn format_chunk_line_with_content_highlighted(
         &self,
         chunk: &serial_core::buffer::ChunkView,
@@ -1076,7 +1080,7 @@ impl TrafficView {
             let content_width = self.last_content_width.max(1);
             buffer.chunks().map(|chunk| {
                 let content_display_width = chunk.encoded.width();
-                ((content_display_width + content_width - 1) / content_width).max(1)
+                content_display_width.div_ceil(content_width).max(1)
             }).sum()
         } else {
             // Count chunks
@@ -1161,7 +1165,7 @@ impl TrafficView {
                         .scan(0usize, |acc, chunk| {
                             let offset = *acc;
                             let content_display_width = chunk.encoded.width();
-                            let num_lines = ((content_display_width + content_width - 1) / content_width).max(1);
+                            let num_lines = content_display_width.div_ceil(content_width).max(1);
                             *acc += num_lines;
                             Some(offset)
                         })
@@ -1194,7 +1198,7 @@ impl TrafficView {
                         .scan(0usize, |acc, chunk| {
                             let offset = *acc;
                             let content_display_width = chunk.encoded.width();
-                            let num_lines = ((content_display_width + content_width - 1) / content_width).max(1);
+                            let num_lines = content_display_width.div_ceil(content_width).max(1);
                             *acc += num_lines;
                             Some(offset)
                         })
@@ -1235,27 +1239,27 @@ impl TrafficView {
         let mut toggling_file_save = false;
         let file_save_was_enabled = self.config.file_save_enabled;
         
-        if is_toggle_key && !self.config_nav.is_dropdown_open() {
-            if let Some(field) = self.config_nav.current_field(TRAFFIC_CONFIG_SECTIONS, &self.config) {
-                // Handle text input field (directory)
-                if field.kind.is_text_input() && field.id == "file_save_directory" {
-                    if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
-                        self.dir_path_input.set_content(&self.config.file_save_directory);
-                        self.dir_path_focused = true;
-                        return Some(TrafficAction::RequestClear);
+        if is_toggle_key && !self.config_nav.is_dropdown_open()
+            && let Some(field) = self.config_nav.current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
+        {
+            // Handle text input field (directory)
+            if field.kind.is_text_input() && field.id == "file_save_directory"
+                && matches!(key.code, KeyCode::Enter | KeyCode::Char(' '))
+            {
+                self.dir_path_input.set_content(&self.config.file_save_directory);
+                self.dir_path_focused = true;
+                return Some(TrafficAction::RequestClear);
+            }
+            
+            // Intercept file_save_enabled toggle
+            if field.id == "file_save_enabled" && matches!(field.kind, FieldKind::Toggle) {
+                if !self.config.file_save_enabled {
+                    // About to enable - validate directory first
+                    if let Some(error) = self.validate_save_directory() {
+                        return Some(TrafficAction::Toast(crate::widget::Toast::error(error)));
                     }
                 }
-                
-                // Intercept file_save_enabled toggle
-                if field.id == "file_save_enabled" && matches!(field.kind, FieldKind::Toggle) {
-                    if !self.config.file_save_enabled {
-                        // About to enable - validate directory first
-                        if let Some(error) = self.validate_save_directory() {
-                            return Some(TrafficAction::Toast(crate::widget::Toast::error(error)));
-                        }
-                    }
-                    toggling_file_save = true;
-                }
+                toggling_file_save = true;
             }
         }
 

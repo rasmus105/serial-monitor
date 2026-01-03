@@ -240,7 +240,7 @@ fn build_session_line(
             let name_style = if is_selected {
                 Theme::highlight()
             } else {
-                Theme::default()
+                Theme::base()
             };
             spans.push(Span::styled(port_name.to_string(), name_style));
 

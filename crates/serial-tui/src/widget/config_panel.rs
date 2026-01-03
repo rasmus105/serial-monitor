@@ -297,10 +297,10 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
                     continue;
                 }
 
-                if self.nav.selected == field_index {
-                    if let FieldKind::Select { options } = &field.kind {
-                        return Some((y, options, self.nav.dropdown_index, self.disconnected));
-                    }
+                if self.nav.selected == field_index
+                    && let FieldKind::Select { options } = &field.kind
+                {
+                    return Some((y, options, self.nav.dropdown_index, self.disconnected));
                 }
 
                 y += 1;
@@ -410,7 +410,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                         Theme::highlight(),
                     )
                 } else {
-                    (Theme::default(), Theme::default())
+                    (Theme::base(), Theme::base())
                 };
 
                 // Format field based on kind
@@ -489,7 +489,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 let padding = available.saturating_sub(tree_prefix_width + label_display.len() + value_str.len());
 
                 // Build line with tree prefix
-                let tree_prefix_style = if is_enabled { Theme::muted() } else { Theme::muted() };
+                let tree_prefix_style = Theme::muted();
                 let line = Line::from(vec![
                     Span::styled(tree_prefix.clone(), tree_prefix_style),
                     Span::styled(label_display, label_style),
@@ -602,7 +602,7 @@ fn render_dropdown_overlay(
         let style = if is_selected {
             Style::default().fg(Theme::BG).add_modifier(Modifier::BOLD)
         } else {
-            Theme::default()
+            Theme::base()
         };
 
         Paragraph::new(line)
@@ -666,7 +666,7 @@ fn calculate_tree_prefix<T>(
                     // Check if this field is a direct child of the ancestor
                     // but NOT in our current branch
                     f.parent_id == Some(ancestor_id) && 
-                    child_ancestor.map_or(true, |&child| !is_descendant_of(f, child, visible_fields))
+                    child_ancestor.is_none_or(|&child| !is_descendant_of(f, child, visible_fields))
                 });
             
             if ancestor_has_more_children {

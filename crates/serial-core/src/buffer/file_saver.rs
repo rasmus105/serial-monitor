@@ -182,7 +182,7 @@ impl DirectionFilter {
 /// This ensures no data is lost, even when the app crashes. Can easily be disabled if
 /// not wanted, as it does add "uneccessary" computation.
 #[derive(Debug, Clone, bon::Builder)]
-#[builder(on(String, into), on(PathBuf, into))]
+#[builder(on(String, into))]
 pub struct AutoSaveConfig {
     /// Directory for crash recovery files.
     /// Default: `~/.cache/serial-monitor/` or `/tmp/serial-monitor/` (if `~/.cache` not found)
