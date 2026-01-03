@@ -169,9 +169,9 @@ impl AppSettings {
         }
     }
 
-    /// Get the buffer size in bytes (or None for unlimited).
-    pub fn buffer_size(&self) -> Option<usize> {
-        BUFFER_SIZES.get(self.buffer_size_index).copied().flatten()
+    /// Get the buffer size in bytes (usize::MAX for unlimited).
+    pub fn buffer_size(&self) -> usize {
+        BUFFER_SIZES.get(self.buffer_size_index).copied().unwrap_or(usize::MAX)
     }
 }
 
@@ -184,13 +184,13 @@ const MAX_SESSIONS_OPTIONS: &[&str] = &["5", "10", "20", "50", "100"];
 const FILE_SAVE_SCOPE_OPTIONS: &[&str] = &["Existing Only", "New Only", "Existing + Continue"];
 
 /// Buffer sizes in bytes corresponding to BUFFER_SIZE_OPTIONS
-pub const BUFFER_SIZES: &[Option<usize>] = &[
-    Some(1 * 1024 * 1024),
-    Some(5 * 1024 * 1024),
-    Some(10 * 1024 * 1024),
-    Some(50 * 1024 * 1024),
-    Some(100 * 1024 * 1024),
-    None, // Unlimited
+pub const BUFFER_SIZES: &[usize] = &[
+    1 * 1024 * 1024,
+    5 * 1024 * 1024,
+    10 * 1024 * 1024,
+    50 * 1024 * 1024,
+    100 * 1024 * 1024,
+    usize::MAX, // Unlimited
 ];
 
 /// Max sessions values corresponding to MAX_SESSIONS_OPTIONS

@@ -146,8 +146,9 @@ pub struct SessionConfig {
     /// Strategy for chunking transmitted data (usually Raw is fine)
     #[builder(default)]
     pub tx_chunking: ChunkingStrategy,
-    /// Maximum buffer size in bytes
-    pub buffer_size: Option<usize>,
+    /// Maximum buffer size in bytes (default: 10 MB)
+    #[builder(default = 10 * 1024 * 1024)]
+    pub buffer_size: usize,
     /// Auto-save configuration for crash recovery
     #[builder(default)]
     pub auto_save: AutoSaveConfig,
@@ -190,6 +191,10 @@ impl SessionHandle {
     /// Get a read lock on the data buffer
     ///
     /// The UI should use this to access data for display.
+    ///
+    /// TODO this is an area for some optimizations.
+    /// (note: for typical usage, e.g. baudrate=115200, it probably wouldn't
+    /// be a problem regardless, however, it could be fun to try and optimize this)
     pub fn buffer(&self) -> std::sync::RwLockReadGuard<'_, DataBuffer> {
         self.buffer.read().unwrap()
     }
@@ -269,20 +274,6 @@ impl Session {
         Self::connect_with_config(port_name, config, SessionConfig::default()).await
     }
 
-    /// Connect with a custom buffer size (legacy API, use connect_with_config for new code)
-    pub async fn connect_with_buffer_size(
-        port_name: &str,
-        config: SerialConfig,
-        buffer_size: usize,
-    ) -> Result<SessionHandle> {
-        Self::connect_with_config(
-            port_name,
-            config,
-            SessionConfig::builder().buffer_size(buffer_size).build(),
-        )
-        .await
-    }
-
     /// Connect with full session configuration
     pub async fn connect_with_config(
         port_name: &str,
@@ -302,9 +293,7 @@ impl Session {
 
         // Create shared buffer
         let mut buffer = DataBuffer::default();
-        if let Some(size) = session_config.buffer_size {
-            buffer.max_size = size;
-        }
+        buffer.max_size = session_config.buffer_size;
         let buffer = Arc::new(RwLock::new(buffer));
 
         // Create channels
