@@ -57,7 +57,6 @@
 pub(crate) mod chunk;
 mod encoding;
 pub(crate) mod file_saver;
-mod filter;
 pub mod graph;
 mod pattern;
 mod search;
@@ -79,7 +78,6 @@ use std::time::SystemTime;
 
 use chunk::RawChunk;
 use file_saver::FileSaverHandle;
-use filter::FilterState;
 use graph::GraphEngine;
 use search::SearchState;
 
@@ -125,9 +123,9 @@ pub struct DataBuffer {
     #[builder(skip)]
     filtered_indices: Vec<usize>,
 
-    /// Filter state (pattern matcher + settings)
+    /// Filter pattern matcher
     #[builder(skip)]
-    filter: FilterState,
+    filter: PatternMatcher,
 
     /// Show TX chunks
     #[builder(default = true)]
@@ -378,7 +376,7 @@ impl DataBuffer {
 
     /// Check if any filter is active
     fn is_filter_active(&self) -> bool {
-        self.filter.pattern.has_pattern() || !self.show_tx || !self.show_rx
+        self.filter.has_pattern() || !self.show_tx || !self.show_rx
     }
 
     /// Check if a chunk passes the current filter
@@ -391,42 +389,42 @@ impl DataBuffer {
         }
 
         // Pattern check
-        self.filter.pattern.is_match(encoded)
+        self.filter.is_match(encoded)
     }
 
     /// Set filter pattern
     pub fn set_filter_pattern(&mut self, pattern: &str, mode: PatternMode) -> Result<(), String> {
-        self.filter.pattern.set_pattern(pattern, mode)?;
+        self.filter.set_pattern(pattern, mode)?;
         self.rebuild_filter();
         Ok(())
     }
 
     /// Set filter mode
     pub fn set_filter_mode(&mut self, mode: PatternMode) -> Result<(), String> {
-        self.filter.pattern.set_mode(mode)?;
+        self.filter.set_mode(mode)?;
         self.rebuild_filter();
         Ok(())
     }
 
     /// Clear filter pattern
     pub fn clear_filter(&mut self) {
-        self.filter.pattern.clear();
+        self.filter.clear();
         self.rebuild_filter();
     }
 
     /// Get filter pattern
     pub fn filter_pattern(&self) -> Option<&str> {
-        self.filter.pattern.pattern()
+        self.filter.pattern()
     }
 
     /// Get filter mode
     pub fn filter_mode(&self) -> PatternMode {
-        self.filter.pattern.mode
+        self.filter.mode
     }
 
     /// Get filter error
     pub fn filter_error(&self) -> Option<&str> {
-        self.filter.pattern.error()
+        self.filter.error()
     }
 
     /// Rebuild filtered indices from scratch

@@ -48,7 +48,19 @@ impl Default for BinaryFormat {
 }
 
 /// Encoding mode for displaying raw bytes
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Display, EnumMessage, AsRefStr, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Display,
+    EnumMessage,
+    AsRefStr,
+    Serialize,
+    Deserialize,
+)]
 pub enum Encoding {
     /// UTF-8 with replacement character for invalid sequences
     #[default]
@@ -310,7 +322,7 @@ mod tests {
         // Mixed
         assert_eq!(encode_ascii(&[b'H', 0x00, b'i', 0xFF]), "H\\0i\\xFF");
         // Common escapes
-        assert_eq!(encode_ascii(&[b'\n', b'\r', b'\t']), "\\n\\r\\t");
+        assert_eq!(encode_ascii(b"\n\r\t"), "\\n\\r\\t");
     }
 
     #[test]
