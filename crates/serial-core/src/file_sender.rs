@@ -5,13 +5,19 @@
 use std::borrow::Cow;
 use std::path::Path;
 use std::time::Duration;
+
+use memchr::memmem;
 use strum::{IntoStaticStr, VariantArray};
 use tokio::fs::File;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::error::Result;
 use crate::session::SessionHandle;
+
+/// Channel capacity for progress updates. Sized to allow brief bursts
+/// without blocking the sender, while not consuming excessive memory.
+const PROGRESS_CHANNEL_CAPACITY: usize = 32;
 
 /// How to divide the file into chunks
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,11 +57,6 @@ impl Delimiter {
             Delimiter::CrLf => b"\r\n",
             Delimiter::Cr => b"\r",
         }
-    }
-
-    /// Display name for this delimiter
-    pub fn display_name(&self) -> &'static str {
-        self.into()
     }
 
     /// Create from index into VARIANTS
@@ -158,20 +159,19 @@ pub async fn send_file(
 ) -> Result<FileSendHandle> {
     let path = path.as_ref().to_path_buf();
 
-    // Open file and get size
-    let file = File::open(&path).await?;
-    let metadata = file.metadata().await?;
+    // Get file size without opening the file
+    let metadata = tokio::fs::metadata(&path).await?;
     let total_bytes = metadata.len();
 
     // For delimiter mode, we don't know exact chunk count upfront
     // For byte mode, we can calculate it
     let total_chunks = match &config.chunk_mode {
         ChunkMode::Bytes(size) => (total_bytes as usize).div_ceil(*size),
-        ChunkMode::Delimiter(_) => 0, // Unknown until we scan the file
+        ChunkMode::Delimiter(_) => 0, // Unknown until we stream the file
     };
 
     // Create channels
-    let (progress_tx, progress_rx) = mpsc::channel(32);
+    let (progress_tx, progress_rx) = mpsc::channel(PROGRESS_CHANNEL_CAPACITY);
     let (cancel_tx, cancel_rx) = mpsc::channel(1);
 
     // Clone what we need for the task
@@ -325,7 +325,10 @@ async fn send_bytes_chunked(
     true
 }
 
-/// Send file using delimiter-based chunks
+/// Default buffer size for streaming delimiter search (64 KB)
+const STREAM_BUFFER_SIZE: usize = 64 * 1024;
+
+/// Send file using delimiter-based streaming chunks
 /// Returns false if should stop (error or cancel), true to continue
 async fn send_delimiter_chunked(
     session: &mpsc::Sender<crate::session::SessionCommand>,
@@ -336,10 +339,8 @@ async fn send_delimiter_chunked(
     progress_tx: &mpsc::Sender<FileSendProgress>,
     cancel_rx: &mut mpsc::Receiver<()>,
 ) -> bool {
-    // Read entire file into memory for delimiter splitting
-    // (For very large files, a streaming approach would be better, but this is simpler)
-    let content = match tokio::fs::read(path).await {
-        Ok(c) => c,
+    let file = match File::open(path).await {
+        Ok(f) => f,
         Err(e) => {
             progress.error = Some(e.to_string());
             progress.complete = true;
@@ -348,20 +349,20 @@ async fn send_delimiter_chunked(
         }
     };
 
+    let mut reader = BufReader::with_capacity(STREAM_BUFFER_SIZE, file);
     let delimiter_bytes = delimiter.as_bytes();
-    let individual_chunks = split_by_delimiter(&content, delimiter_bytes, config.include_delimiter);
-
-    // Group chunks according to lines_per_chunk
+    let finder = memmem::Finder::new(delimiter_bytes);
     let lines_per_chunk = config.lines_per_chunk.max(1);
-    let grouped_chunks: Vec<Vec<u8>> = individual_chunks
-        .chunks(lines_per_chunk)
-        .map(|group| group.concat())
-        .collect();
 
-    // Now we know the total number of chunks
-    progress.total_chunks = grouped_chunks.len();
+    // Buffer to accumulate data until we find delimiters
+    let mut pending = Vec::new();
+    let mut read_buf = [0u8; STREAM_BUFFER_SIZE];
 
-    for chunk_data in grouped_chunks {
+    // Buffer to accumulate multiple delimiter-separated units before sending
+    let mut chunk_buffer = Vec::new();
+    let mut units_in_buffer = 0;
+
+    loop {
         // Check for cancellation
         if cancel_rx.try_recv().is_ok() {
             progress.complete = true;
@@ -370,18 +371,76 @@ async fn send_delimiter_chunked(
             return false;
         }
 
-        let bytes_in_chunk = chunk_data.len();
+        // Read more data
+        let n = match reader.read(&mut read_buf).await {
+            Ok(0) => {
+                // EOF - send any remaining data as final chunk
+                // First, add any pending data to chunk_buffer
+                if !pending.is_empty() {
+                    chunk_buffer.extend_from_slice(&pending);
+                }
+                if !chunk_buffer.is_empty() {
+                    let bytes_in_chunk = chunk_buffer.len();
+                    let chunk = build_chunk(&chunk_buffer, config);
+                    if !send_chunk(session, chunk, progress, progress_tx, bytes_in_chunk).await {
+                        return false;
+                    }
+                }
+                break;
+            }
+            Ok(n) => n,
+            Err(e) => {
+                progress.complete = true;
+                progress.error = Some(e.to_string());
+                let _ = progress_tx.send(progress.clone()).await;
+                return false;
+            }
+        };
 
-        // Build chunk with optional suffix
-        let chunk = build_chunk(&chunk_data, config);
+        pending.extend_from_slice(&read_buf[..n]);
 
-        if !send_chunk(session, chunk, progress, progress_tx, bytes_in_chunk).await {
-            return false;
-        }
+        // Process all complete delimiter-separated units in pending buffer
+        loop {
+            let Some(pos) = finder.find(&pending) else {
+                // No delimiter found, need more data
+                break;
+            };
 
-        // Delay between chunks
-        if config.chunk_delay > Duration::ZERO {
-            tokio::time::sleep(config.chunk_delay).await;
+            // Found a delimiter at `pos`
+            let unit_end = if config.include_delimiter {
+                pos + delimiter_bytes.len()
+            } else {
+                pos
+            };
+
+            // Add this unit to chunk_buffer
+            if unit_end > 0 {
+                chunk_buffer.extend_from_slice(&pending[..unit_end]);
+            }
+            units_in_buffer += 1;
+
+            // Remove processed data (including delimiter) from pending
+            let drain_end = pos + delimiter_bytes.len();
+            pending.drain(..drain_end);
+
+            // If we've accumulated enough units, send the chunk
+            if units_in_buffer >= lines_per_chunk {
+                let bytes_in_chunk = chunk_buffer.len();
+                let chunk = build_chunk(&chunk_buffer, config);
+
+                if !send_chunk(session, chunk, progress, progress_tx, bytes_in_chunk).await {
+                    return false;
+                }
+
+                // Delay between chunks
+                if config.chunk_delay > Duration::ZERO {
+                    tokio::time::sleep(config.chunk_delay).await;
+                }
+
+                // Reset for next chunk
+                chunk_buffer.clear();
+                units_in_buffer = 0;
+            }
         }
     }
 
@@ -389,14 +448,14 @@ async fn send_delimiter_chunked(
 }
 
 /// Build a chunk with optional suffix
-fn build_chunk(data: &[u8], config: &FileSendConfig) -> Vec<u8> {
+fn build_chunk<'a>(data: &'a [u8], config: &FileSendConfig) -> Cow<'a, [u8]> {
     match &config.chunk_suffix {
         Some(suffix) => {
             let mut chunk = data.to_vec();
             chunk.extend_from_slice(suffix);
-            chunk
+            Cow::Owned(chunk)
         }
-        None => data.to_vec(),
+        None => Cow::Borrowed(data),
     }
 }
 
@@ -404,13 +463,13 @@ fn build_chunk(data: &[u8], config: &FileSendConfig) -> Vec<u8> {
 /// Returns false if session closed
 async fn send_chunk(
     session: &mpsc::Sender<crate::session::SessionCommand>,
-    chunk: Vec<u8>,
+    chunk: Cow<'_, [u8]>,
     progress: &mut FileSendProgress,
     progress_tx: &mpsc::Sender<FileSendProgress>,
     bytes_count: usize,
 ) -> bool {
     if session
-        .send(crate::session::SessionCommand::Send(chunk))
+        .send(crate::session::SessionCommand::Send(chunk.into_owned()))
         .await
         .is_err()
     {
@@ -429,45 +488,4 @@ async fn send_chunk(
     true
 }
 
-/// Split data by delimiter
-fn split_by_delimiter(data: &[u8], delimiter: &[u8], include_delimiter: bool) -> Vec<Vec<u8>> {
-    let mut chunks = Vec::new();
-    let mut start = 0;
 
-    while start < data.len() {
-        // Find next delimiter
-        let end = find_subsequence(&data[start..], delimiter)
-            .map(|pos| start + pos)
-            .unwrap_or(data.len());
-
-        if end > start || (end == start && end < data.len()) {
-            let chunk_end = if include_delimiter && end < data.len() {
-                // Include the delimiter
-                (end + delimiter.len()).min(data.len())
-            } else {
-                end
-            };
-
-            if chunk_end > start {
-                chunks.push(data[start..chunk_end].to_vec());
-            }
-        }
-
-        // Move past the delimiter (or to end if not found)
-        if end < data.len() {
-            start = end + delimiter.len();
-        } else {
-            break;
-        }
-    }
-
-    // Handle trailing data after last delimiter (if not ending with delimiter)
-    // This is already handled by the unwrap_or(data.len()) above
-
-    chunks
-}
-
-/// Find subsequence in data
-fn find_subsequence(data: &[u8], pattern: &[u8]) -> Option<usize> {
-    data.windows(pattern.len()).position(|w| w == pattern)
-}

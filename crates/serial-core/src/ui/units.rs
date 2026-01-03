@@ -43,11 +43,6 @@ impl SizeUnit {
         }
     }
 
-    /// Display name for this unit
-    pub fn display_name(self) -> &'static str {
-        self.into()
-    }
-
     /// Create from index into VARIANTS
     pub fn from_index(index: usize) -> Self {
         Self::VARIANTS.get(index).copied().unwrap_or_default()
@@ -84,11 +79,6 @@ impl TimeUnit {
             TimeUnit::Minutes => Duration::from_secs(value.saturating_mul(60)),
             TimeUnit::Hours => Duration::from_secs(value.saturating_mul(3600)),
         }
-    }
-
-    /// Display name for this unit
-    pub fn display_name(self) -> &'static str {
-        self.into()
     }
 
     /// Create from index into VARIANTS
