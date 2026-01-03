@@ -291,9 +291,10 @@ impl Session {
         // Flush buffers to discard any stale data from before we connected.
         port.clear(ClearBuffer::All)?;
 
-        // Create shared buffer
-        let mut buffer = DataBuffer::default();
-        buffer.max_size = session_config.buffer_size;
+        // Create shared buffer (shared between core and UI)
+        let buffer = DataBuffer::builder()
+            .max_size(session_config.buffer_size)
+            .build();
         let buffer = Arc::new(RwLock::new(buffer));
 
         // Create channels
@@ -314,8 +315,13 @@ impl Session {
             match file_saver::start_auto_save(&session_config.auto_save, port_name, &runtime) {
                 Ok(handle) => Some(handle),
                 Err(e) => {
-                    // Log but don't fail the connection if auto-save fails
-                    eprintln!("Warning: Failed to start auto-save: {}", e);
+                    // Notify but don't fail the connection if auto-save fails
+                    let _ = event_tx
+                        .send(SessionEvent::Error(format!(
+                            "Failed to start auto-save: {}",
+                            e
+                        )))
+                        .await;
                     None
                 }
             }
@@ -332,16 +338,16 @@ impl Session {
 
         // Spawn the I/O task
         tokio::spawn(async move {
-            io_task(
-                port,
-                buffer_clone,
+            IoTask {
+                buffer: buffer_clone,
                 event_tx,
                 command_rx,
                 rx_chunker,
                 tx_chunker,
-                auto_save_tx,
-                statistics_clone,
-            )
+                auto_save: auto_save_tx,
+                statistics: statistics_clone,
+            }
+            .io_loop(port)
             .await;
         });
 
@@ -356,147 +362,123 @@ impl Session {
     }
 }
 
-/// The async I/O task that handles serial communication
-async fn io_task(
-    port: tokio_serial::SerialStream,
+struct IoTask {
     buffer: Arc<RwLock<DataBuffer>>,
     event_tx: mpsc::Sender<SessionEvent>,
-    mut command_rx: mpsc::Receiver<SessionCommand>,
-    mut rx_chunker: Chunker,
-    mut tx_chunker: Chunker,
+    command_rx: mpsc::Receiver<SessionCommand>,
+    rx_chunker: Chunker,
+    tx_chunker: Chunker,
     auto_save: Option<AutoSaveSender>,
     statistics: Arc<Statistics>,
-) {
-    let (mut reader, mut writer) = tokio::io::split(port);
-    let mut read_buf = [0u8; 1024];
+}
 
-    // Send connected event
-    let _ = event_tx.send(SessionEvent::Connected).await;
+impl IoTask {
+    fn save_data(&self, data: &[u8], direction: Direction) {
+        {
+            self.buffer.write().unwrap().push(data.to_vec(), direction);
+        }
+        if let Some(ref saver) = self.auto_save {
+            saver.write_new(data.to_vec(), direction);
+        }
+    }
 
-    loop {
-        tokio::select! {
-            // Handle incoming data from serial port
-            result = reader.read(&mut read_buf) => {
-                match result {
-                    Ok(0) => {
-                        // EOF - port closed
-                        // Flush any pending data
-                        if let Some(data) = rx_chunker.flush() {
-                            let direction = rx_chunker.direction();
-                            {
-                                let mut buf = buffer.write().unwrap();
-                                buf.push(data.clone(), direction);
-                            }
-                            if let Some(ref saver) = auto_save {
-                                saver.write_new(data.clone(), direction);
-                            }
-                            let _ = event_tx.send(SessionEvent::DataReceived { data, direction }).await;
+    async fn save_and_notify_rx(&mut self, data: Vec<u8>, direction: Direction) {
+        self.save_data(&data, direction);
+        let _ = self
+            .event_tx
+            .send(SessionEvent::DataReceived { data, direction })
+            .await;
+    }
+
+    async fn save_and_notify_tx(&mut self, data: Vec<u8>, direction: Direction) {
+        self.save_data(&data, direction);
+        let _ = self
+            .event_tx
+            .send(SessionEvent::DataSent { data, direction })
+            .await;
+    }
+
+    async fn disconnect(&mut self, e: Option<String>) {
+        if let Some(data) = self.rx_chunker.flush() {
+            self.save_and_notify_rx(data, self.rx_chunker.direction())
+                .await;
+        }
+        let _ = self
+            .event_tx
+            .send(SessionEvent::Disconnected { error: e })
+            .await;
+    }
+
+    async fn io_loop(mut self, port: tokio_serial::SerialStream) {
+        let (mut reader, mut writer) = tokio::io::split(port);
+        let mut read_buf = [0u8; 1024];
+
+        // Send connected event
+        let _ = self.event_tx.send(SessionEvent::Connected).await;
+
+        loop {
+            tokio::select! {
+                // Handle incoming data from serial port
+                result = reader.read(&mut read_buf) => {
+                    match result {
+                        Ok(0) => {
+                            // EOF - port closed
+                            self.disconnect(None).await;
+                            break;
                         }
-                        let _ = event_tx.send(SessionEvent::Disconnected { error: None }).await;
-                        break;
-                    }
-                    Ok(n) => {
-                        // Record raw bytes received before chunking
-                        statistics.record_rx(n);
+                        Ok(n) => {
+                            // Record raw bytes received before chunking
+                            self.statistics.record_rx(n);
 
-                        // Process through chunker - may produce 0, 1, or many chunks
-                        let chunks = rx_chunker.process(&read_buf[..n]);
-                        let direction = rx_chunker.direction();
+                            // Process through chunker - may produce 0, 1, or many chunks
+                            let chunks = self.rx_chunker.process(&read_buf[..n]);
+                            let direction = self.rx_chunker.direction();
 
-                        for data in chunks {
-                            // Store in buffer
-                            {
-                                let mut buf = buffer.write().unwrap();
-                                buf.push(data.clone(), direction);
+                            for data in chunks {
+                                // Store in buffer
+                                self.save_and_notify_rx(data, direction).await;
                             }
-                            if let Some(ref saver) = auto_save {
-                                saver.write_new(data.clone(), direction);
-                            }
-                            // Notify UI
-                            let _ = event_tx.send(SessionEvent::DataReceived { data, direction }).await;
                         }
-                    }
-                    Err(e) => {
-                        // Flush any pending data before disconnecting
-                        if let Some(data) = rx_chunker.flush() {
-                            let direction = rx_chunker.direction();
-                            {
-                                let mut buf = buffer.write().unwrap();
-                                buf.push(data.clone(), direction);
-                            }
-                            if let Some(ref saver) = auto_save {
-                                saver.write_new(data.clone(), direction);
-                            }
-                            let _ = event_tx.send(SessionEvent::DataReceived { data, direction }).await;
+                        Err(e) => {
+                            // Flush any pending data before disconnecting
+                            self.disconnect(Some(e.to_string())).await;
+                            break;
                         }
-                        let _ = event_tx.send(SessionEvent::Disconnected {
-                            error: Some(e.to_string())
-                        }).await;
-                        break;
                     }
                 }
-            }
 
-            // Handle commands from the UI
-            cmd = command_rx.recv() => {
-                match cmd {
-                    Some(SessionCommand::Send(data)) => {
-                        match writer.write_all(&data).await {
-                            Ok(()) => {
-                                // Record bytes sent
-                                statistics.record_tx(data.len());
+                // Handle commands from the UI
+                cmd = self.command_rx.recv() => {
+                    match cmd {
+                        Some(SessionCommand::Send(data)) => {
+                            match writer.write_all(&data).await {
+                                Ok(()) => {
+                                    // Record bytes sent
+                                    self.statistics.record_tx(data.len());
 
-                                // Process through TX chunker
-                                let chunks = tx_chunker.process(&data);
-                                let direction = tx_chunker.direction();
+                                    // Process through TX chunker
+                                    let chunks = self.tx_chunker.process(&data);
+                                    let direction = self.tx_chunker.direction();
 
-                                for chunk_data in chunks {
-                                    // Store in buffer
-                                    {
-                                        let mut buf = buffer.write().unwrap();
-                                        buf.push(chunk_data.clone(), direction);
+                                    for chunk_data in chunks {
+                                        self.save_and_notify_tx(chunk_data, direction).await;
                                     }
-                                    if let Some(ref saver) = auto_save {
-                                        saver.write_new(chunk_data.clone(), direction);
+
+                                    // For TX, we might want to flush immediately if using line-delimited
+                                    // (since the user's send is a complete "message")
+                                    if let Some(chunk_data) = self.tx_chunker.flush() {
+                                        self.save_and_notify_tx(chunk_data, self.tx_chunker.direction()).await;
                                     }
-                                    // Notify UI
-                                    let _ = event_tx.send(SessionEvent::DataSent { data: chunk_data, direction }).await;
                                 }
-
-                                // For TX, we might want to flush immediately if using line-delimited
-                                // (since the user's send is a complete "message")
-                                if let Some(chunk_data) = tx_chunker.flush() {
-                                    let direction = tx_chunker.direction();
-                                    {
-                                        let mut buf = buffer.write().unwrap();
-                                        buf.push(chunk_data.clone(), direction);
-                                    }
-                                    if let Some(ref saver) = auto_save {
-                                        saver.write_new(chunk_data.clone(), direction);
-                                    }
-                                    let _ = event_tx.send(SessionEvent::DataSent { data: chunk_data, direction }).await;
+                                Err(e) => {
+                                    let _ = self.event_tx.send(SessionEvent::Error(e.to_string())).await;
                                 }
                             }
-                            Err(e) => {
-                                let _ = event_tx.send(SessionEvent::Error(e.to_string())).await;
-                            }
                         }
-                    }
-                    Some(SessionCommand::Disconnect) | None => {
-                        // Flush any pending data
-                        if let Some(data) = rx_chunker.flush() {
-                            let direction = rx_chunker.direction();
-                            {
-                                let mut buf = buffer.write().unwrap();
-                                buf.push(data.clone(), direction);
-                            }
-                            if let Some(ref saver) = auto_save {
-                                saver.write_new(data.clone(), direction);
-                            }
-                            let _ = event_tx.send(SessionEvent::DataReceived { data, direction }).await;
+                        Some(SessionCommand::Disconnect) | None => {
+                            self.disconnect(None).await;
+                            break;
                         }
-                        let _ = event_tx.send(SessionEvent::Disconnected { error: None }).await;
-                        break;
                     }
                 }
             }

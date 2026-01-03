@@ -67,8 +67,7 @@ pub use chunk::{ChunkView, Direction};
 pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8};
 pub use encoding::{BinaryFormat, Encoding, HexFormat};
 pub use file_saver::{
-    default_cache_directory, AutoSaveConfig, DirectionFilter, SaveFormat, SaveScope,
-    UserSaveConfig,
+    default_cache_directory, AutoSaveConfig, DirectionFilter, SaveFormat, SaveScope, UserSaveConfig,
 };
 pub use pattern::{PatternMatcher, PatternMode};
 pub use search::SearchMatch;
@@ -108,61 +107,60 @@ const DEFAULT_MAX_SIZE: usize = 10 * 1024 * 1024;
 ///     println!("{}: {}", chunk.direction, chunk.encoded);
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, bon::Builder)]
 pub struct DataBuffer {
     /// Raw chunks - source of truth (hidden from frontends)
+    #[builder(skip)]
     raw_chunks: VecDeque<RawChunk>,
 
     /// Encoded strings - 1:1 with raw_chunks
+    #[builder(skip)]
     encoded: VecDeque<String>,
 
     /// Current encoding setting
+    #[builder(default)]
     pub encoding: Encoding,
 
     /// Indices into raw_chunks/encoded that pass the filter
+    #[builder(skip)]
     filtered_indices: Vec<usize>,
 
     /// Filter state (pattern matcher + settings)
+    #[builder(skip)]
     filter: FilterState,
 
     /// Show TX chunks
+    #[builder(default = true)]
     pub show_tx: bool,
 
     /// Show RX chunks
+    #[builder(default = true)]
     pub show_rx: bool,
 
     /// Search state
+    #[builder(skip)]
     search: SearchState,
 
     /// Current total size in bytes (raw data)
+    #[builder(skip)]
     current_size: usize,
 
     /// Maximum size in bytes
+    #[builder(default = DEFAULT_MAX_SIZE)]
     pub max_size: usize,
 
     /// Graph engine (lazy initialized)
+    #[builder(skip)]
     graph: Option<GraphEngine>,
 
     /// File saver handle (when saving is active)
+    #[builder(skip)]
     file_saver: Option<FileSaverHandle>,
 }
 
 impl Default for DataBuffer {
     fn default() -> Self {
-        Self {
-            raw_chunks: VecDeque::new(),
-            encoded: VecDeque::new(),
-            encoding: Encoding::default(),
-            filtered_indices: Vec::new(),
-            filter: FilterState::default(),
-            show_tx: true,
-            show_rx: true,
-            search: SearchState::default(),
-            current_size: 0,
-            max_size: DEFAULT_MAX_SIZE,
-            graph: None,
-            file_saver: None,
-        }
+        Self::builder().build()
     }
 }
 
@@ -212,11 +210,12 @@ impl DataBuffer {
             } else {
                 chunk_index // Same as raw index when no filter
             };
-            
+
             self.filtered_indices.push(chunk_index);
-            
+
             // Incrementally add matches from this chunk instead of invalidating
-            self.search.add_chunk(visible_index, self.encoded.back().unwrap());
+            self.search
+                .add_chunk(visible_index, self.encoded.back().unwrap());
         }
 
         // Feed to graph if enabled
@@ -514,7 +513,7 @@ impl DataBuffer {
         self.ensure_search_updated();
         self.search.goto_prev()
     }
-    
+
     /// Ensure search results are up-to-date (internal helper)
     fn ensure_search_updated(&mut self) {
         let indices: &[usize] = if self.is_filter_active() {
@@ -607,14 +606,14 @@ impl DataBuffer {
             if engine.parse_rx == parse_rx && engine.parse_tx == parse_tx {
                 return;
             }
-            
+
             engine.parse_rx = parse_rx;
             engine.parse_tx = parse_tx;
-            
+
             // Clear parsed series data (but keep packet rate)
             engine.series.clear();
             engine.chunks_processed = 0;
-            
+
             // Re-process all raw chunks with new direction settings
             for raw in &self.raw_chunks {
                 engine.process_raw_chunk(raw);
