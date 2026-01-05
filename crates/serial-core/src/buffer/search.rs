@@ -33,9 +33,6 @@ pub(crate) struct SearchState {
     /// Current match index for navigation
     pub(crate) current_match: Option<usize>,
 
-    /// Number of visible chunks that have been searched
-    searched_count: usize,
-
     /// Whether search results are valid
     valid: bool,
 }
@@ -66,7 +63,6 @@ impl SearchState {
         self.pattern.clear();
         self.matches.clear();
         self.current_match = None;
-        self.searched_count = 0;
         self.valid = false;
     }
 
@@ -80,7 +76,6 @@ impl SearchState {
     pub fn invalidate(&mut self) {
         self.matches.clear();
         self.current_match = None;
-        self.searched_count = 0;
         self.valid = false;
     }
 
@@ -125,11 +120,6 @@ impl SearchState {
             }
         }
 
-        self.searched_count = if is_filtered {
-            filtered_indices.len()
-        } else {
-            encoded.len()
-        };
         self.valid = true;
 
         &self.matches
@@ -156,7 +146,6 @@ impl SearchState {
             return;
         }
         self.search_chunk(visible_index, content);
-        self.searched_count += 1;
     }
 
     /// Called when the oldest chunk is dropped from the buffer.
@@ -189,10 +178,6 @@ impl SearchState {
                 self.current_match = Some(current - removed_count);
             }
         }
-
-        if self.searched_count > 0 {
-            self.searched_count -= 1;
-        }
     }
 
     // -------------------------------------------------------------------------
@@ -205,10 +190,20 @@ impl SearchState {
     }
 
     /// Get matches in a specific visible chunk
-    pub fn matches_in_chunk(&self, visible_index: usize) -> impl Iterator<Item = &SearchMatch> {
-        self.matches
-            .iter()
-            .filter(move |m| m.visible_index == visible_index)
+    ///
+    /// Uses binary search for O(log n) lookup since matches are ordered by `visible_index`.
+    pub fn matches_in_chunk(&self, visible_index: usize) -> &[SearchMatch] {
+        // Find first match with visible_index >= target
+        let start = self
+            .matches
+            .partition_point(|m| m.visible_index < visible_index);
+
+        // Find end of matches with this visible_index
+        let end = self.matches[start..]
+            .partition_point(|m| m.visible_index == visible_index)
+            + start;
+
+        &self.matches[start..end]
     }
 
     /// Check if a match is the current one
@@ -461,5 +456,33 @@ mod tests {
         assert_eq!(search.current_match, Some(3)); // New match!
         search.goto_next(); // Wraps to beginning
         assert_eq!(search.current_match, Some(0));
+    }
+
+    #[test]
+    fn matches_in_chunk_binary_search() {
+        let mut search = SearchState::default();
+        search.set_pattern("x", PatternMode::Normal).unwrap();
+
+        // Create chunks with varying numbers of matches
+        let encoded: VecDeque<String> = vec![
+            "x x x".to_string(),    // chunk 0: 3 matches
+            "no match".to_string(), // chunk 1: 0 matches
+            "x".to_string(),        // chunk 2: 1 match
+            "x x".to_string(),      // chunk 3: 2 matches
+        ]
+        .into();
+        search.update(&[], &encoded);
+
+        // Verify total matches
+        assert_eq!(search.matches.len(), 6);
+
+        // Test binary search retrieval
+        assert_eq!(search.matches_in_chunk(0).len(), 3);
+        assert_eq!(search.matches_in_chunk(1).len(), 0);
+        assert_eq!(search.matches_in_chunk(2).len(), 1);
+        assert_eq!(search.matches_in_chunk(3).len(), 2);
+
+        // Non-existent chunk
+        assert_eq!(search.matches_in_chunk(99).len(), 0);
     }
 }

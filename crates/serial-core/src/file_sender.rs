@@ -5,6 +5,8 @@
 //! Notes:
 //! - Could optimize by not updating progress each time a chunk is sent (though would only really
 //!   matter for high-frequency sending)
+//! - An object oriented style could make the code slightly cleaner, however, the API already feels
+//!   quite nice.
 
 use std::borrow::Cow;
 use std::path::Path;
@@ -382,15 +384,7 @@ async fn send_delimiter_chunked(
                 }
                 if !chunk_buffer.is_empty() {
                     let chunk = build_chunk(&chunk_buffer, config);
-                    if !send_chunk(
-                        session,
-                        chunk,
-                        progress,
-                        progress_tx,
-                        bytes_consumed,
-                    )
-                    .await
-                    {
+                    if !send_chunk(session, chunk, progress, progress_tx, bytes_consumed).await {
                         return false;
                     }
                 }
@@ -442,9 +436,7 @@ async fn send_delimiter_chunked(
             if units_in_buffer >= units_per_chunk {
                 let chunk = build_chunk(&chunk_buffer, config);
 
-                if !send_chunk(session, chunk, progress, progress_tx, bytes_consumed)
-                    .await
-                {
+                if !send_chunk(session, chunk, progress, progress_tx, bytes_consumed).await {
                     return false;
                 }
 

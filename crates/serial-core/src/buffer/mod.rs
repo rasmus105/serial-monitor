@@ -534,7 +534,9 @@ impl DataBuffer {
     }
 
     /// Get matches in a specific visible chunk
-    pub fn matches_in_chunk(&self, visible_index: usize) -> impl Iterator<Item = &SearchMatch> {
+    ///
+    /// Uses binary search for O(log n) lookup.
+    pub fn matches_in_chunk(&self, visible_index: usize) -> &[SearchMatch] {
         self.search.matches_in_chunk(visible_index)
     }
 

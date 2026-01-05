@@ -628,10 +628,10 @@ impl TrafficView {
             }
 
             // Get matches for this chunk
-            let matches: Vec<_> = buffer.matches_in_chunk(visible_idx).cloned().collect();
+            let matches = buffer.matches_in_chunk(visible_idx);
             let line = self.format_chunk_line_highlighted(
                 &chunk, timestamp_width, content_width, prefix_width, true,
-                &matches, current_match,
+                matches, current_match,
             );
             let line_area = Rect::new(inner.x, y, inner.width, 1);
             Paragraph::new(line).render(line_area, buf);
@@ -747,7 +747,7 @@ impl TrafficView {
             let content = &chunk.encoded;
             
             // Get matches for this chunk
-            let matches: Vec<_> = buffer.matches_in_chunk(chunk_idx).cloned().collect();
+            let matches = buffer.matches_in_chunk(chunk_idx);
             
             // Calculate which part of content to show (using display width, not bytes)
             let display_start = line_within_chunk * content_width;
@@ -759,13 +759,13 @@ impl TrafficView {
             // Only show prefix on first line of chunk
             if line_within_chunk == 0 {
                 let line = self.format_chunk_line_with_content_highlighted(
-                    chunk, timestamp_width, content, start, end, &matches, current_match
+                    chunk, timestamp_width, content, start, end, matches, current_match
                 );
                 Paragraph::new(line).render(line_area, buf);
             } else {
                 // Continuation line - indent to align with content
                 let indent = " ".repeat(prefix_width);
-                let content_spans = self.create_highlighted_spans(content, start, end, &matches, current_match);
+                let content_spans = self.create_highlighted_spans(content, start, end, matches, current_match);
                 let mut spans = vec![Span::raw(indent)];
                 spans.extend(content_spans);
                 let line = Line::from(spans);
