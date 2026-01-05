@@ -99,8 +99,6 @@ pub struct FileSendProgress {
     pub bytes_sent: u64,
     /// Number of chunks sent
     pub chunks_sent: usize,
-    /// Total number of chunks
-    pub total_chunks: usize,
     /// Whether sending is complete
     pub complete: bool,
     /// Error message if failed
@@ -154,17 +152,9 @@ pub async fn send_file(
     let metadata = tokio::fs::metadata(&path).await?;
     let total_bytes = metadata.len();
 
-    // For delimiter mode, we don't know exact chunk count upfront
-    // For byte mode, we can calculate it
-    let total_chunks = match &config.chunk_mode {
-        ChunkMode::Bytes(size) => (total_bytes as usize).div_ceil(*size),
-        ChunkMode::Delimiter(_) => 0, // Unknown until we stream the file
-    };
-
     // Create channels
     let (progress_tx, progress_rx) = watch::channel(FileSendProgress {
         total_bytes,
-        total_chunks,
         ..Default::default()
     });
     let (cancel_tx, cancel_rx) = mpsc::channel(1);

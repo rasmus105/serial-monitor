@@ -590,32 +590,20 @@ impl FileSenderView {
         stats_block.render(main_chunks[1], buf);
 
         // Calculate progress values (use preview size if no progress yet)
-        let (bytes_sent, total_bytes, chunks_sent, total_chunks, loops, percentage) =
+        let (bytes_sent, total_bytes, chunks_sent, loops, percentage) =
             if let Some(progress) = &self.progress {
                 (
                     progress.bytes_sent,
                     progress.total_bytes,
                     progress.chunks_sent,
-                    progress.total_chunks,
                     progress.loops_completed,
                     (progress.percentage() * 100.0) as u16,
                 )
             } else if let Some(preview) = &self.preview {
-                // Preload with file info
-                let total = preview.size;
-                // For bytes mode, we can estimate chunks. For delimiter mode, we show 0 (unknown).
-                let chunks = if self.config.chunk_mode_index == 1 {
-                    let chunk_bytes = SizeUnit::from_index(self.config.byte_unit_index)
-                        .to_bytes(self.config.byte_chunk_value);
-                    (total as usize).div_ceil(chunk_bytes.max(1))
-                } else {
-                    // Delimiter mode: unknown until we scan
-                    0
-                };
-                (0, total, 0, chunks, 0, 0)
+                (0, preview.size, 0, 0, 0)
             } else {
                 // No file selected
-                (0, 0, 0, 0, 0, 0)
+                (0, 0, 0, 0, 0)
             };
 
         // Row 1: Progress bar with percentage inside
@@ -640,7 +628,7 @@ impl FileSenderView {
                     format_bytes(bytes_sent),
                     format_bytes(total_bytes)
                 ),
-                format!("Chunks: {} / {}", chunks_sent, total_chunks),
+                format!("Chunks: {}", chunks_sent),
             ];
 
             // Only show loops if repeat is enabled
