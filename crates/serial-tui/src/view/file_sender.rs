@@ -1250,7 +1250,7 @@ impl FileSenderView {
             let config = FileSendConfig {
                 chunk_mode,
                 include_delimiter: self.config.include_delimiter,
-                lines_per_chunk: self.config.lines_per_chunk,
+                units_per_chunk: self.config.lines_per_chunk,
                 chunk_suffix,
                 chunk_delay,
                 repeat: self.config.repeat,

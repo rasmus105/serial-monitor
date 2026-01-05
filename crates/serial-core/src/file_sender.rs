@@ -1,6 +1,10 @@
 //! File sending functionality with chunking and progress reporting
 //!
 //! Supports sending files with configurable chunk sizes and delays between chunks.
+//!
+//! Notes:
+//! - Could optimize by not updating progress each time a chunk is sent (though would only really
+//!   matter for high-frequency sending)
 
 use std::borrow::Cow;
 use std::path::Path;
@@ -9,11 +13,11 @@ use std::time::Duration;
 use memchr::memmem;
 use strum::{IntoStaticStr, VariantArray};
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, BufReader};
+use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, watch};
 
 use crate::error::Result;
-use crate::session::SessionHandle;
+use crate::session::{SessionCommand, SessionHandle};
 
 /// How to divide the file into chunks
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +77,7 @@ pub struct FileSendConfig {
     /// Number of delimiter-separated units to send per chunk (only for delimiter mode)
     /// e.g., if set to 2 and delimiter is '\n', sends 2 lines at a time
     #[builder(default = 1)]
-    pub lines_per_chunk: usize,
+    pub units_per_chunk: usize,
     /// Optional suffix to append to each chunk (e.g., line ending)
     pub chunk_suffix: Option<Cow<'static, [u8]>>,
     /// Delay between chunks
@@ -269,6 +273,7 @@ async fn send_bytes_chunked(
     };
 
     let mut buffer = vec![0u8; chunk_size];
+    let mut bytes_consumed: u64 = 0;
 
     loop {
         // Check for cancellation
@@ -291,10 +296,12 @@ async fn send_bytes_chunked(
             }
         };
 
-        // Build chunk with optional suffix
+        bytes_consumed += n as u64;
+
+        // Add optional suffix
         let chunk = build_chunk(&buffer[..n], config);
 
-        if !send_chunk(session, chunk, progress, progress_tx, n).await {
+        if !send_chunk(session, chunk, progress, progress_tx, bytes_consumed).await {
             return false;
         }
 
@@ -321,7 +328,7 @@ async fn send_delimiter_chunked(
     progress_tx: &watch::Sender<FileSendProgress>,
     cancel_rx: &mut mpsc::Receiver<()>,
 ) -> bool {
-    let file = match File::open(path).await {
+    let mut file = match File::open(path).await {
         Ok(f) => f,
         Err(e) => {
             progress.error = Some(e.to_string());
@@ -331,18 +338,22 @@ async fn send_delimiter_chunked(
         }
     };
 
-    let mut reader = BufReader::with_capacity(STREAM_BUFFER_SIZE, file);
     let delimiter_bytes = delimiter.as_bytes();
     let finder = memmem::Finder::new(delimiter_bytes);
-    let lines_per_chunk = config.lines_per_chunk.max(1);
+    let units_per_chunk = config.units_per_chunk.max(1);
 
-    // Buffer to accumulate data until we find delimiters
-    let mut pending = Vec::new();
-    let mut read_buf = [0u8; STREAM_BUFFER_SIZE];
+    // Main buffer for reading data. After processing, any incomplete unit (data after
+    // the last delimiter) is moved to `remainder`, then `pending` is cleared and we
+    // start fresh with `remainder` prepended to the next read.
+    let mut pending = Vec::with_capacity(STREAM_BUFFER_SIZE);
+    let mut remainder: Vec<u8> = Vec::new();
 
     // Buffer to accumulate multiple delimiter-separated units before sending
     let mut chunk_buffer = Vec::new();
     let mut units_in_buffer = 0;
+
+    // Track bytes consumed from file (for accurate progress)
+    let mut bytes_consumed: u64 = 0;
 
     loop {
         // Check for cancellation
@@ -353,18 +364,33 @@ async fn send_delimiter_chunked(
             return false;
         }
 
-        // Read more data
-        let n = match reader.read(&mut read_buf).await {
+        // Prepare pending buffer: start with any remainder from previous iteration
+        pending.clear();
+        pending.append(&mut remainder);
+
+        // Read directly into pending buffer
+        let prev_len = pending.len();
+        pending.resize(prev_len + STREAM_BUFFER_SIZE, 0);
+
+        let n = match file.read(&mut pending[prev_len..]).await {
             Ok(0) => {
-                // EOF - send any remaining data as final chunk
-                // First, add any pending data to chunk_buffer
+                // EOF - remove unwritten portion and send any remaining data as final chunk
+                pending.truncate(prev_len);
                 if !pending.is_empty() {
                     chunk_buffer.extend_from_slice(&pending);
+                    bytes_consumed += pending.len() as u64;
                 }
                 if !chunk_buffer.is_empty() {
-                    let bytes_in_chunk = chunk_buffer.len();
                     let chunk = build_chunk(&chunk_buffer, config);
-                    if !send_chunk(session, chunk, progress, progress_tx, bytes_in_chunk).await {
+                    if !send_chunk(
+                        session,
+                        chunk,
+                        progress,
+                        progress_tx,
+                        bytes_consumed,
+                    )
+                    .await
+                    {
                         return false;
                     }
                 }
@@ -379,38 +405,46 @@ async fn send_delimiter_chunked(
             }
         };
 
-        pending.extend_from_slice(&read_buf[..n]);
+        // Trim to actual bytes read
+        pending.truncate(prev_len + n);
 
         // Process all complete delimiter-separated units in pending buffer
+        let mut search_start = 0;
         loop {
-            let Some(pos) = finder.find(&pending) else {
-                // No delimiter found, need more data
+            let search_slice = &pending[search_start..];
+            let Some(pos) = finder.find(search_slice) else {
+                // No delimiter found - remaining data is incomplete unit
                 break;
             };
 
-            // Found a delimiter at `pos`
+            // Found a delimiter at `pos` (relative to search_start)
+            let abs_pos = search_start + pos;
             let unit_end = if config.include_delimiter {
-                pos + delimiter_bytes.len()
+                abs_pos + delimiter_bytes.len()
             } else {
-                pos
+                abs_pos
             };
 
             // Add this unit to chunk_buffer
-            if unit_end > 0 {
-                chunk_buffer.extend_from_slice(&pending[..unit_end]);
+            if unit_end > search_start {
+                chunk_buffer.extend_from_slice(&pending[search_start..unit_end]);
             }
             units_in_buffer += 1;
 
-            // Remove processed data (including delimiter) from pending
-            let drain_end = pos + delimiter_bytes.len();
-            pending.drain(..drain_end);
+            // Track bytes consumed (always include delimiter since it's read from file)
+            let consumed_end = abs_pos + delimiter_bytes.len();
+            bytes_consumed += (consumed_end - search_start) as u64;
+
+            // Advance past the delimiter for next search
+            search_start = consumed_end;
 
             // If we've accumulated enough units, send the chunk
-            if units_in_buffer >= lines_per_chunk {
-                let bytes_in_chunk = chunk_buffer.len();
+            if units_in_buffer >= units_per_chunk {
                 let chunk = build_chunk(&chunk_buffer, config);
 
-                if !send_chunk(session, chunk, progress, progress_tx, bytes_in_chunk).await {
+                if !send_chunk(session, chunk, progress, progress_tx, bytes_consumed)
+                    .await
+                {
                     return false;
                 }
 
@@ -423,6 +457,11 @@ async fn send_delimiter_chunked(
                 chunk_buffer.clear();
                 units_in_buffer = 0;
             }
+        }
+
+        // Save incomplete data (after last delimiter) for next iteration
+        if search_start < pending.len() {
+            remainder.extend_from_slice(&pending[search_start..]);
         }
     }
 
@@ -441,17 +480,17 @@ fn build_chunk<'a>(data: &'a [u8], config: &FileSendConfig) -> Cow<'a, [u8]> {
     }
 }
 
-/// Send a single chunk and update progress
+/// Send a single chunk and set progress to absolute bytes consumed
 /// Returns false if session closed
 async fn send_chunk(
-    session: &mpsc::Sender<crate::session::SessionCommand>,
+    session: &mpsc::Sender<SessionCommand>,
     chunk: Cow<'_, [u8]>,
     progress: &mut FileSendProgress,
     progress_tx: &watch::Sender<FileSendProgress>,
-    bytes_count: usize,
+    bytes_consumed: u64,
 ) -> bool {
     if session
-        .send(crate::session::SessionCommand::Send(chunk.into_owned()))
+        .send(SessionCommand::Send(chunk.into_owned()))
         .await
         .is_err()
     {
@@ -461,7 +500,7 @@ async fn send_chunk(
         return false;
     }
 
-    progress.bytes_sent += bytes_count as u64;
+    progress.bytes_sent = bytes_consumed;
     progress.chunks_sent += 1;
 
     // Send progress update
