@@ -467,46 +467,45 @@ impl FileSenderView {
         self.send_handle.is_some()
     }
 
-    pub fn tick(&mut self) {
-        // Collect all progress updates first to avoid borrow conflicts
-        let mut updates = Vec::new();
-        let mut should_stop = false;
-        
-        if let Some(ref mut handle) = self.send_handle {
-            while let Some(progress) = handle.try_recv_progress() {
-                let complete = progress.complete;
-                updates.push(progress);
-                if complete {
-                    should_stop = true;
-                    break;
-                }
+    pub fn tick(&mut self) -> Option<FileSenderAction> {
+        let Some(ref handle) = self.send_handle else {
+            return None;
+        };
+
+        let progress = handle.progress();
+        let complete = progress.complete;
+        let bytes_sent = progress.bytes_sent;
+        let error = progress.error.clone();
+
+        // Auto-follow: scroll to keep current chunk visible
+        if self.config.auto_follow && !complete {
+            let current_line = self.byte_offset_to_line(bytes_sent);
+            let visible_height = self.last_visible_height;
+
+            // Keep current chunk roughly centered or at least visible
+            if current_line >= self.scroll + visible_height.saturating_sub(2) {
+                // Scroll down to keep current chunk visible
+                self.scroll = current_line.saturating_sub(visible_height / 3);
             }
         }
-        
-        // Now process updates without borrowing handle
-        for progress in updates {
-            let complete = progress.complete;
-            let bytes_sent = progress.bytes_sent;
-            
-            // Auto-follow: scroll to keep current chunk visible
-            if self.config.auto_follow && !complete {
-                let current_line = self.byte_offset_to_line(bytes_sent);
-                let visible_height = self.last_visible_height;
-                
-                // Keep current chunk roughly centered or at least visible
-                if current_line >= self.scroll + visible_height.saturating_sub(2) {
-                    // Scroll down to keep current chunk visible
-                    self.scroll = current_line.saturating_sub(visible_height / 3);
-                }
-            }
-            
-            self.progress = Some(progress);
-        }
-        
-        if should_stop {
+
+        self.progress = Some(progress);
+
+        if complete {
             self.send_handle = None;
             self.config.is_sending = false;
+
+            // Return error toast if there was an error (but not for cancellation)
+            if let Some(err) = error {
+                if err != "Cancelled" {
+                    return Some(FileSenderAction::Toast(Toast::error(format!(
+                        "File send failed: {err}"
+                    ))));
+                }
+            }
         }
+
+        None
     }
 
     pub fn draw(

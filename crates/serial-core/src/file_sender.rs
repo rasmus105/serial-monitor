@@ -10,14 +10,10 @@ use memchr::memmem;
 use strum::{IntoStaticStr, VariantArray};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::error::Result;
 use crate::session::SessionHandle;
-
-/// Channel capacity for progress updates. Sized to allow brief bursts
-/// without blocking the sender, while not consuming excessive memory.
-const PROGRESS_CHANNEL_CAPACITY: usize = 32;
 
 /// How to divide the file into chunks
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,21 +122,16 @@ impl FileSendProgress {
 
 /// Handle for controlling an ongoing file send operation
 pub struct FileSendHandle {
-    /// Channel to receive progress updates
-    progress_rx: mpsc::Receiver<FileSendProgress>,
+    /// Channel to receive progress updates (latest value semantics)
+    progress_rx: watch::Receiver<FileSendProgress>,
     /// Channel to send cancel signal
     cancel_tx: mpsc::Sender<()>,
 }
 
 impl FileSendHandle {
-    /// Try to receive a progress update (non-blocking)
-    pub fn try_recv_progress(&mut self) -> Option<FileSendProgress> {
-        self.progress_rx.try_recv().ok()
-    }
-
-    /// Receive a progress update (async, blocking)
-    pub async fn recv_progress(&mut self) -> Option<FileSendProgress> {
-        self.progress_rx.recv().await
+    /// Get the current progress (non-blocking, always returns latest)
+    pub fn progress(&self) -> FileSendProgress {
+        self.progress_rx.borrow().clone()
     }
 
     /// Cancel the file send operation
@@ -171,7 +162,11 @@ pub async fn send_file(
     };
 
     // Create channels
-    let (progress_tx, progress_rx) = mpsc::channel(PROGRESS_CHANNEL_CAPACITY);
+    let (progress_tx, progress_rx) = watch::channel(FileSendProgress {
+        total_bytes,
+        total_chunks,
+        ..Default::default()
+    });
     let (cancel_tx, cancel_rx) = mpsc::channel(1);
 
     // Clone what we need for the task
@@ -184,7 +179,6 @@ pub async fn send_file(
             path,
             config,
             total_bytes,
-            total_chunks,
             progress_tx,
             cancel_rx,
         )
@@ -203,13 +197,11 @@ async fn send_file_task(
     path: std::path::PathBuf,
     config: FileSendConfig,
     total_bytes: u64,
-    total_chunks: usize,
-    progress_tx: mpsc::Sender<FileSendProgress>,
+    progress_tx: watch::Sender<FileSendProgress>,
     mut cancel_rx: mpsc::Receiver<()>,
 ) {
     let mut progress = FileSendProgress {
         total_bytes,
-        total_chunks,
         ..Default::default()
     };
 
@@ -256,12 +248,12 @@ async fn send_file_task(
         // Send completion or loop progress
         if !config.repeat {
             progress.complete = true;
-            let _ = progress_tx.send(progress).await;
+            let _ = progress_tx.send(progress);
             return;
         }
 
         // In repeat mode, send progress and continue
-        let _ = progress_tx.send(progress.clone()).await;
+        let _ = progress_tx.send(progress.clone());
     }
 }
 
@@ -273,7 +265,7 @@ async fn send_bytes_chunked(
     chunk_size: usize,
     config: &FileSendConfig,
     progress: &mut FileSendProgress,
-    progress_tx: &mpsc::Sender<FileSendProgress>,
+    progress_tx: &watch::Sender<FileSendProgress>,
     cancel_rx: &mut mpsc::Receiver<()>,
 ) -> bool {
     let mut file = match File::open(path).await {
@@ -281,7 +273,7 @@ async fn send_bytes_chunked(
         Err(e) => {
             progress.error = Some(e.to_string());
             progress.complete = true;
-            let _ = progress_tx.send(progress.clone()).await;
+            let _ = progress_tx.send(progress.clone());
             return false;
         }
     };
@@ -293,7 +285,7 @@ async fn send_bytes_chunked(
         if cancel_rx.try_recv().is_ok() {
             progress.complete = true;
             progress.error = Some("Cancelled".to_string());
-            let _ = progress_tx.send(progress.clone()).await;
+            let _ = progress_tx.send(progress.clone());
             return false;
         }
 
@@ -304,7 +296,7 @@ async fn send_bytes_chunked(
             Err(e) => {
                 progress.complete = true;
                 progress.error = Some(e.to_string());
-                let _ = progress_tx.send(progress.clone()).await;
+                let _ = progress_tx.send(progress.clone());
                 return false;
             }
         };
@@ -336,7 +328,7 @@ async fn send_delimiter_chunked(
     delimiter: &Delimiter,
     config: &FileSendConfig,
     progress: &mut FileSendProgress,
-    progress_tx: &mpsc::Sender<FileSendProgress>,
+    progress_tx: &watch::Sender<FileSendProgress>,
     cancel_rx: &mut mpsc::Receiver<()>,
 ) -> bool {
     let file = match File::open(path).await {
@@ -344,7 +336,7 @@ async fn send_delimiter_chunked(
         Err(e) => {
             progress.error = Some(e.to_string());
             progress.complete = true;
-            let _ = progress_tx.send(progress.clone()).await;
+            let _ = progress_tx.send(progress.clone());
             return false;
         }
     };
@@ -367,7 +359,7 @@ async fn send_delimiter_chunked(
         if cancel_rx.try_recv().is_ok() {
             progress.complete = true;
             progress.error = Some("Cancelled".to_string());
-            let _ = progress_tx.send(progress.clone()).await;
+            let _ = progress_tx.send(progress.clone());
             return false;
         }
 
@@ -392,7 +384,7 @@ async fn send_delimiter_chunked(
             Err(e) => {
                 progress.complete = true;
                 progress.error = Some(e.to_string());
-                let _ = progress_tx.send(progress.clone()).await;
+                let _ = progress_tx.send(progress.clone());
                 return false;
             }
         };
@@ -465,7 +457,7 @@ async fn send_chunk(
     session: &mpsc::Sender<crate::session::SessionCommand>,
     chunk: Cow<'_, [u8]>,
     progress: &mut FileSendProgress,
-    progress_tx: &mpsc::Sender<FileSendProgress>,
+    progress_tx: &watch::Sender<FileSendProgress>,
     bytes_count: usize,
 ) -> bool {
     if session
@@ -475,7 +467,7 @@ async fn send_chunk(
     {
         progress.complete = true;
         progress.error = Some("Session closed".to_string());
-        let _ = progress_tx.send(progress.clone()).await;
+        let _ = progress_tx.send(progress.clone());
         return false;
     }
 
@@ -483,9 +475,7 @@ async fn send_chunk(
     progress.chunks_sent += 1;
 
     // Send progress update
-    let _ = progress_tx.send(progress.clone()).await;
+    let _ = progress_tx.send(progress.clone());
 
     true
 }
-
-

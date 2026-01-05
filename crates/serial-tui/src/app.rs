@@ -855,10 +855,18 @@ impl App {
             }
             AppEvent::Tick => {
                 // Update file sender progress if active
-                if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
-                    state.file_sender.tick();
+                let action = if let Some(SessionState::Connected(state)) =
+                    self.sessions.active_state_mut()
+                {
+                    let action = state.file_sender.tick();
                     // Dismiss loading overlay if it can be dismissed
                     state.graph.dismiss_loading_if_ready();
+                    action
+                } else {
+                    None
+                };
+                if let Some(action) = action {
+                    self.handle_file_sender_action(action).await;
                 }
             }
         }

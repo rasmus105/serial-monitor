@@ -384,6 +384,8 @@ impl IoTask {
 
     async fn save_and_notify_rx(&mut self, data: Vec<u8>, direction: Direction) {
         self.save_data(&data, direction);
+        // note: we aren't actually using the `DataReceived` in the front-end at the moment (just
+        // always assuming it works)
         let _ = self
             .event_tx
             .send(SessionEvent::DataReceived { data, direction })
@@ -392,6 +394,8 @@ impl IoTask {
 
     async fn save_and_notify_tx(&mut self, data: Vec<u8>, direction: Direction) {
         self.save_data(&data, direction);
+        // note: we aren't actually using the `DataSent` in the front-end at the moment (just
+        // always assuming it works)
         let _ = self
             .event_tx
             .send(SessionEvent::DataSent { data, direction })
