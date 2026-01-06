@@ -129,7 +129,6 @@ pub struct DirectionFilter {
 }
 
 impl Default for DirectionFilter {
-    /// Default: RX only (matching your preference for auto-save)
     fn default() -> Self {
         Self {
             rx: true,
@@ -284,6 +283,12 @@ impl std::fmt::Debug for FileSaverHandle {
     }
 }
 
+impl Drop for FileSaverHandle {
+    fn drop(&mut self) {
+        let _ = self.command_tx.try_send(FileSaverCommand::Stop);
+    }
+}
+
 impl FileSaverHandle {
     /// Write a raw chunk to the file (if it passes the direction filter)
     pub fn write(&self, chunk: &RawChunk) -> Result<(), crate::Error> {
@@ -341,20 +346,14 @@ impl AutoSaveSender {
 
     /// Write new data to auto-save, automatically timestamping it.
     ///
-    /// This is a convenience method for writing freshly received/sent data
+    /// This is a convenience method for writing received/sent data
     /// without manually constructing a `RawChunk`.
-    pub fn write_new(&self, data: Vec<u8>, direction: Direction) {
+    pub fn write_new(&self, data: Vec<u8>, direction: Direction, timestamp: SystemTime) {
         self.write(&RawChunk {
             data,
             direction,
-            timestamp: SystemTime::now(),
+            timestamp,
         });
-    }
-}
-
-impl Drop for FileSaverHandle {
-    fn drop(&mut self) {
-        let _ = self.command_tx.try_send(FileSaverCommand::Stop);
     }
 }
 
@@ -377,26 +376,15 @@ fn write_chunk<W: Write>(
         } => {
             let encoded = encode(&chunk.data, *encoding);
 
-            // Build the line with optional metadata
-            let mut line = String::new();
-
-            if *include_timestamps {
-                let dt: DateTime<Utc> = chunk.timestamp.into();
-                line.push('[');
-                line.push_str(&dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
-                line.push_str("] ");
-            }
-
-            if *include_direction {
-                line.push('[');
-                line.push_str(match chunk.direction {
-                    Direction::Tx => "TX",
-                    Direction::Rx => "RX",
-                });
-                line.push_str("] ");
-            }
-
-            line.push_str(&encoded);
+            let dt: DateTime<Utc> = chunk.timestamp.into();
+            let timestamp = &dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+            let direction = chunk.direction.to_string();
+            let line = match (include_timestamps, include_direction) {
+                (true, true) => format!("[{timestamp}] [{direction}] {encoded}"),
+                (true, false) => format!("[{timestamp}] {encoded}"),
+                (false, true) => format!("[{direction}] {encoded}"),
+                (false, false) => encoded,
+            };
             writeln!(writer, "{}", line)
         }
     }

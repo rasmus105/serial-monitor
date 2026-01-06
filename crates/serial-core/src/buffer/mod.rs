@@ -171,8 +171,7 @@ impl DataBuffer {
     ///
     /// This is called by the Session I/O task when data arrives.
     /// Handles encoding, filtering, size management, and graph feeding.
-    pub fn push(&mut self, data: Vec<u8>, direction: Direction) {
-        let timestamp = SystemTime::now();
+    pub fn push(&mut self, data: Vec<u8>, direction: Direction, timestamp: SystemTime) {
         let size = data.len();
 
         // Encode the data

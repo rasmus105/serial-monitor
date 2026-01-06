@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -374,11 +374,15 @@ struct IoTask {
 
 impl IoTask {
     fn save_data(&self, data: &[u8], direction: Direction) {
+        let timestamp = SystemTime::now();
         {
-            self.buffer.write().unwrap().push(data.to_vec(), direction);
+            self.buffer
+                .write()
+                .unwrap()
+                .push(data.to_vec(), direction, timestamp);
         }
         if let Some(ref saver) = self.auto_save {
-            saver.write_new(data.to_vec(), direction);
+            saver.write_new(data.to_vec(), direction, timestamp);
         }
     }
 

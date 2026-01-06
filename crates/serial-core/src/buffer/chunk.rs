@@ -7,10 +7,10 @@
 
 use std::time::SystemTime;
 
-use strum::{AsRefStr, Display};
+use strum::{AsRefStr, Display, EnumString};
 
 /// Direction of data transmission
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, AsRefStr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, AsRefStr, EnumString)]
 pub enum Direction {
     /// Data transmitted (sent by user)
     #[default]
