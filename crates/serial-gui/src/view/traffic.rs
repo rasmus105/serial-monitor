@@ -6,7 +6,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Fill, Length};
 use serial_core::ui::descriptions;
-use serial_core::ui::encoding::{encoding_display, ENCODING_VARIANTS};
+use serial_core::ui::encoding::encoding_display;
 use serial_core::ui::TimestampFormat;
 use serial_core::{Direction, Encoding};
 use std::fmt;
@@ -16,6 +16,40 @@ use std::time::{Duration, SystemTime};
 const ROW_HEIGHT: f32 = 20.0;
 /// Number of extra rows to render above and below the viewport as buffer
 const RENDER_BUFFER: usize = 10;
+
+/// Static option lists to avoid allocations every frame
+const LINE_ENDING_OPTIONS: &[LineEndingOption] = &[
+    LineEndingOption(0),
+    LineEndingOption(1),
+    LineEndingOption(2),
+    LineEndingOption(3),
+];
+
+const TIMESTAMP_FORMAT_OPTIONS: &[TimestampFormatOption] = &[
+    TimestampFormatOption(0),
+    TimestampFormatOption(1),
+    TimestampFormatOption(2),
+];
+
+const SCROLL_MODE_OPTIONS: &[ScrollModeOption] = &[
+    ScrollModeOption::Auto,
+    ScrollModeOption::Locked,
+];
+
+/// Static encoding options - wraps ENCODING_VARIANTS
+const ENCODING_OPTIONS: &[EncodingOption] = &[
+    EncodingOption(Encoding::Utf8),
+    EncodingOption(Encoding::Ascii),
+    EncodingOption(Encoding::Hex(serial_core::HexFormat {
+        group_size: 1,
+        separator: ' ',
+        uppercase: true,
+    })),
+    EncodingOption(Encoding::Binary(serial_core::BinaryFormat {
+        group_size: 8,
+        separator: ' ',
+    })),
+];
 
 use crate::app::{ConnectedState, Message, ScrollState};
 use crate::theme::Theme;
@@ -168,8 +202,12 @@ pub fn view(state: &ConnectedState) -> Element<'_, Message> {
 
 /// Build the main traffic display area (data lines + send input)
 fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
+    // Borrow buffer directly - no intermediate storage needed
+    let buffer = state.handle.buffer();
+    let total_lines = buffer.len();
+    
     // Data display with virtual scrolling
-    let data_content: Element<'_, Message> = if state.display_lines.is_empty() {
+    let data_content: Element<'_, Message> = if total_lines == 0 {
         container(text("No data yet...").color(Theme::MUTED).size(14))
             .width(Fill)
             .height(Fill)
@@ -183,8 +221,6 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
             0
         };
 
-        let total_lines = state.display_lines.len();
-        
         // Calculate visible range based on scroll state
         let (visible_start, visible_end) = match &state.scroll_state {
             ScrollState::LockedToBottom => {
@@ -211,14 +247,24 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
         // Top spacer to maintain scroll position
         let top_spacer_height = visible_start as f32 * ROW_HEIGHT;
         
-        // Only render visible lines
-        let visible_lines: Vec<Element<'_, Message>> = state
-            .display_lines
-            .iter()
+        // Collect visible chunk data - we need to clone only the visible lines
+        // because Iced widgets need to own their data (unlike ratatui which renders directly).
+        // This is MUCH better than cloning ALL lines every 50ms tick.
+        let visible_chunk_data: Vec<_> = buffer
+            .chunks()
             .skip(visible_start)
             .take(visible_end - visible_start)
-            .map(|line| {
-                let (prefix, color) = match line.direction {
+            .map(|chunk| (chunk.direction, chunk.encoded.to_string(), chunk.timestamp))
+            .collect();
+        
+        // Drop the buffer guard before building widgets
+        drop(buffer);
+        
+        // Build visible lines from collected data
+        let visible_lines: Vec<Element<'_, Message>> = visible_chunk_data
+            .into_iter()
+            .map(|(direction, content, timestamp)| {
+                let (prefix, color) = match direction {
                     Direction::Tx => ("TX", Theme::TX),
                     Direction::Rx => ("RX", Theme::RX),
                 };
@@ -226,15 +272,15 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                 let mut line_row = row![text(prefix).color(color).size(14), Space::new().width(8),];
 
                 if state.show_timestamps {
-                    let timestamp =
-                        format_timestamp(line.timestamp, state.session_start, state.timestamp_format_index);
+                    let ts_str =
+                        format_timestamp(timestamp, state.session_start, state.timestamp_format_index);
                     // Right-align timestamp within fixed width
-                    let padded_timestamp = format!("{:>width$}", timestamp, width = timestamp_width);
+                    let padded_timestamp = format!("{:>width$}", ts_str, width = timestamp_width);
                     line_row = line_row.push(text(padded_timestamp).color(Theme::MUTED).size(12));
                     line_row = line_row.push(Space::new().width(10));
                 }
 
-                line_row = line_row.push(text(&line.content).size(14));
+                line_row = line_row.push(text(content).size(14));
                 line_row.into()
             })
             .collect();
@@ -270,10 +316,9 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
         scrollable_widget.into()
     };
 
-    // Line ending selector
-    let line_ending_options: Vec<LineEndingOption> = (0..4).map(LineEndingOption).collect();
+    // Line ending selector - use static options to avoid allocation
     let current_line_ending = LineEndingOption(state.send_line_ending_index);
-    let line_ending_picker = pick_list(line_ending_options, Some(current_line_ending), |opt| {
+    let line_ending_picker = pick_list(LINE_ENDING_OPTIONS, Some(current_line_ending), |opt| {
         Message::SelectSendLineEnding(opt.0)
     })
     .width(120);
@@ -432,10 +477,8 @@ fn config_panel(state: &ConnectedState) -> Element<'_, Message> {
     };
 
     // === Display/Options Section (at the bottom) ===
-    let encoding_options: Vec<EncodingOption> =
-        ENCODING_VARIANTS.iter().copied().map(EncodingOption).collect();
     let current_encoding = EncodingOption(state.encoding);
-    let encoding_picker = pick_list(encoding_options, Some(current_encoding), |opt| {
+    let encoding_picker = pick_list(ENCODING_OPTIONS, Some(current_encoding), |opt| {
         Message::SelectEncoding(opt.0)
     })
     .width(Length::Fixed(100.0))
@@ -477,10 +520,9 @@ fn config_panel(state: &ConnectedState) -> Element<'_, Message> {
     );
 
     // Timestamp format - always visible but grayed out when disabled
-    let format_options: Vec<TimestampFormatOption> = (0..3).map(TimestampFormatOption).collect();
     let current_format = TimestampFormatOption(state.timestamp_format_index);
     let format_picker: Element<'_, Message> = if state.show_timestamps {
-        pick_list(format_options, Some(current_format), |opt| {
+        pick_list(TIMESTAMP_FORMAT_OPTIONS, Some(current_format), |opt| {
             Message::SelectTimestampFormat(opt.0)
         })
         .width(Length::Fixed(120.0))
@@ -508,8 +550,7 @@ fn config_panel(state: &ConnectedState) -> Element<'_, Message> {
         ScrollState::LockedToBottom => ScrollModeOption::Locked,
         ScrollState::AutoScroll { .. } | ScrollState::Manual { .. } => ScrollModeOption::Auto,
     };
-    let scroll_mode_options = vec![ScrollModeOption::Auto, ScrollModeOption::Locked];
-    let scroll_mode_picker = pick_list(scroll_mode_options, Some(current_scroll_mode), |opt| {
+    let scroll_mode_picker = pick_list(SCROLL_MODE_OPTIONS, Some(current_scroll_mode), |opt| {
         Message::SelectScrollMode(opt)
     })
     .width(Length::Fixed(120.0))

@@ -91,8 +91,6 @@ pub struct ConnectedState {
     pub encoding: Encoding,
     /// Session start time for relative timestamps.
     pub session_start: std::time::SystemTime,
-    /// Cached display lines from buffer.
-    pub display_lines: Vec<DisplayLine>,
     /// Send input text.
     pub send_input: String,
     /// Whether to show TX data.
@@ -113,14 +111,6 @@ pub struct ConnectedState {
     pub viewport_height: Option<f32>,
     /// Collapsed sections in the config panel (by section name).
     pub collapsed_sections: HashSet<String>,
-}
-
-/// A line to display in the traffic view.
-#[derive(Clone)]
-pub struct DisplayLine {
-    pub direction: serial_core::Direction,
-    pub content: String,
-    pub timestamp: std::time::SystemTime,
 }
 
 
@@ -317,7 +307,6 @@ impl App {
                         config: result.config,
                         encoding: Encoding::Utf8,
                         session_start: std::time::SystemTime::now(),
-                        display_lines: Vec::new(),
                         send_input: String::new(),
                         show_tx: true,
                         show_rx: true,
@@ -416,7 +405,6 @@ impl App {
             Message::ClearBuffer => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.handle.buffer_mut().clear();
-                    state.display_lines.clear();
                 }
             }
             Message::ToggleConfigPanel => {
@@ -492,7 +480,8 @@ impl App {
             }
             Message::Tick => {
                 if let SessionState::Connected(state) = &mut self.state {
-                    // Poll for session events
+                    // Poll for session events - no need to copy buffer data,
+                    // the view will borrow directly from the buffer
                     while let Some(event) = state.handle.try_recv_event() {
                         match event {
                             SessionEvent::Disconnected { error } => {
@@ -514,17 +503,6 @@ impl App {
                             _ => {}
                         }
                     }
-
-                    // Update display lines from buffer (already encoded)
-                    let buffer = state.handle.buffer();
-                    state.display_lines = buffer
-                        .chunks()
-                        .map(|chunk| DisplayLine {
-                            direction: chunk.direction,
-                            content: chunk.encoded.to_string(),
-                            timestamp: chunk.timestamp,
-                        })
-                        .collect();
                 }
             }
         }
