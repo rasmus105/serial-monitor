@@ -267,3 +267,6 @@ serial-tui:
    correctly or that basic boolean/arithmetic logic works. Tests like `assert!(!filter.is_active())`
    after setting fields to their "inactive" values just test that `||` and `!` work as expected.
    Tests should verify meaningful behavior, edge cases, or complex interactions - not obvious logic.
+
+9. **Narrating comments:** Avoid comments that restate code; comments must add intent/why, invariants,
+   constraints, or non-obvious side effects.

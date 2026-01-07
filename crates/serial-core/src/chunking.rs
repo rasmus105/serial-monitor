@@ -142,36 +142,26 @@ impl Chunker {
     /// In LineDelimited mode, may return 0, 1, or many chunks depending on delimiters.
     pub fn process(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
         match &self.strategy {
-            ChunkingStrategy::Raw => {
-                // Raw mode: one chunk per process() call
-                vec![data.to_vec()]
-            }
+            ChunkingStrategy::Raw => vec![data.to_vec()],
             ChunkingStrategy::LineDelimited {
                 delimiter,
                 max_line_length,
             } => {
                 let mut chunks = Vec::new();
 
-                // Add new data to pending buffer
                 self.pending.extend_from_slice(data);
 
-                // Extract complete lines
                 loop {
-                    // Check for max line length first (safety valve)
                     if self.pending.len() >= *max_line_length {
-                        // Force emit what we have
                         let data = std::mem::take(&mut self.pending);
                         chunks.push(data);
                         break;
                     }
 
-                    // Look for delimiter
                     if let Some(end) = delimiter.find_end(&self.pending) {
-                        // Found delimiter - emit chunk including delimiter
                         let line: Vec<u8> = self.pending.drain(..end).collect();
                         chunks.push(line);
                     } else {
-                        // No delimiter found, wait for more data
                         break;
                     }
                 }

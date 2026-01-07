@@ -1,4 +1,4 @@
-//! File sending functionality with chunking and progress reporting
+//! File sending with chunking and progress reporting.
 //!
 //! Supports sending files with configurable chunk sizes and delays between chunks.
 //!
@@ -21,12 +21,9 @@ use tokio::sync::{mpsc, watch};
 use crate::error::Result;
 use crate::session::{SessionCommand, SessionHandle};
 
-/// How to divide the file into chunks
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChunkMode {
-    /// Fixed number of bytes per chunk
     Bytes(usize),
-    /// Split on a delimiter (e.g., newline)
     Delimiter(Delimiter),
 }
 
@@ -36,23 +33,18 @@ impl Default for ChunkMode {
     }
 }
 
-/// Predefined delimiters for chunking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, VariantArray, IntoStaticStr)]
 pub enum Delimiter {
-    /// Line feed (`\n`)
     #[default]
     #[strum(serialize = "LF (\\n)")]
     Lf,
-    /// Carriage return + line feed (`\r\n`)
     #[strum(serialize = "CRLF (\\r\\n)")]
     CrLf,
-    /// Carriage return (`\r`)
     #[strum(serialize = "CR (\\r)")]
     Cr,
 }
 
 impl Delimiter {
-    /// Get the byte sequence for this delimiter
     pub fn as_bytes(&self) -> &'static [u8] {
         match self {
             Delimiter::Lf => b"\n",
@@ -61,31 +53,22 @@ impl Delimiter {
         }
     }
 
-    /// Create from index into VARIANTS
     pub fn from_index(index: usize) -> Self {
         Self::VARIANTS.get(index).copied().unwrap_or_default()
     }
 }
 
-/// Configuration for file sending
 #[derive(Debug, Clone, bon::Builder)]
 pub struct FileSendConfig {
-    /// How to divide the file into chunks
     #[builder(default)]
     pub chunk_mode: ChunkMode,
-    /// Whether to include the delimiter in sent chunks (only for delimiter mode)
     #[builder(default = true)]
     pub include_delimiter: bool,
-    /// Number of delimiter-separated units to send per chunk (only for delimiter mode)
-    /// e.g., if set to 2 and delimiter is '\n', sends 2 lines at a time
     #[builder(default = 1)]
     pub units_per_chunk: usize,
-    /// Optional suffix to append to each chunk (e.g., line ending)
     pub chunk_suffix: Option<Cow<'static, [u8]>>,
-    /// Delay between chunks
     #[builder(default = Duration::from_millis(10))]
     pub chunk_delay: Duration,
-    /// Whether to loop the file continuously
     #[builder(default)]
     pub repeat: bool,
 }
@@ -96,25 +79,17 @@ impl Default for FileSendConfig {
     }
 }
 
-/// Progress update during file sending
 #[derive(Default, Debug, Clone)]
 pub struct FileSendProgress {
-    /// Total bytes in the file
     pub total_bytes: u64,
-    /// Bytes sent so far
     pub bytes_sent: u64,
-    /// Number of chunks sent
     pub chunks_sent: usize,
-    /// Whether sending is complete
     pub complete: bool,
-    /// Error message if failed
     pub error: Option<String>,
-    /// Number of loops completed (for repeat mode)
     pub loops_completed: usize,
 }
 
 impl FileSendProgress {
-    /// Get progress as a percentage (0.0 to 1.0)
     pub fn percentage(&self) -> f64 {
         if self.total_bytes == 0 {
             1.0
@@ -154,21 +129,17 @@ pub async fn send_file(
 ) -> Result<FileSendHandle> {
     let path = path.as_ref().to_path_buf();
 
-    // Get file size without opening the file
     let metadata = tokio::fs::metadata(&path).await?;
     let total_bytes = metadata.len();
 
-    // Create channels
     let (progress_tx, progress_rx) = watch::channel(FileSendProgress {
         total_bytes,
         ..Default::default()
     });
     let (cancel_tx, cancel_rx) = mpsc::channel(1);
 
-    // Clone what we need for the task
     let session_clone = session.clone_sender();
 
-    // Spawn the sending task
     tokio::spawn(async move {
         send_file_task(
             session_clone,
@@ -187,7 +158,6 @@ pub async fn send_file(
     })
 }
 
-/// Internal task that performs the actual file sending
 async fn send_file_task(
     session: mpsc::Sender<crate::session::SessionCommand>,
     path: std::path::PathBuf,
@@ -202,7 +172,6 @@ async fn send_file_task(
     };
 
     loop {
-        // ensure reset
         progress.bytes_sent = 0;
         progress.chunks_sent = 0;
 
@@ -241,20 +210,16 @@ async fn send_file_task(
 
         progress.loops_completed += 1;
 
-        // Send completion or loop progress
         if !config.repeat {
             progress.complete = true;
             let _ = progress_tx.send(progress);
             return;
         }
 
-        // In repeat mode, send progress and continue
         let _ = progress_tx.send(progress.clone());
     }
 }
 
-/// Send file using fixed byte chunks
-/// Returns false if should stop (error or cancel), true to continue
 async fn send_bytes_chunked(
     session: &mpsc::Sender<crate::session::SessionCommand>,
     path: &std::path::Path,
@@ -278,7 +243,6 @@ async fn send_bytes_chunked(
     let mut bytes_consumed: u64 = 0;
 
     loop {
-        // Check for cancellation
         if cancel_rx.try_recv().is_ok() {
             progress.complete = true;
             progress.error = Some("Cancelled".to_string());
@@ -370,13 +334,11 @@ async fn send_delimiter_chunked(
         pending.clear();
         pending.append(&mut remainder);
 
-        // Read directly into pending buffer
         let prev_len = pending.len();
         pending.resize(prev_len + STREAM_BUFFER_SIZE, 0);
 
         let n = match file.read(&mut pending[prev_len..]).await {
             Ok(0) => {
-                // EOF - remove unwritten portion and send any remaining data as final chunk
                 pending.truncate(prev_len);
                 if !pending.is_empty() {
                     chunk_buffer.extend_from_slice(&pending);
@@ -399,19 +361,15 @@ async fn send_delimiter_chunked(
             }
         };
 
-        // Trim to actual bytes read
         pending.truncate(prev_len + n);
 
-        // Process all complete delimiter-separated units in pending buffer
         let mut search_start = 0;
         loop {
             let search_slice = &pending[search_start..];
             let Some(pos) = finder.find(search_slice) else {
-                // No delimiter found - remaining data is incomplete unit
                 break;
             };
 
-            // Found a delimiter at `pos` (relative to search_start)
             let abs_pos = search_start + pos;
             let unit_end = if config.include_delimiter {
                 abs_pos + delimiter_bytes.len()
@@ -419,20 +377,16 @@ async fn send_delimiter_chunked(
                 abs_pos
             };
 
-            // Add this unit to chunk_buffer
             if unit_end > search_start {
                 chunk_buffer.extend_from_slice(&pending[search_start..unit_end]);
             }
             units_in_buffer += 1;
 
-            // Track bytes consumed (always include delimiter since it's read from file)
             let consumed_end = abs_pos + delimiter_bytes.len();
             bytes_consumed += (consumed_end - search_start) as u64;
 
-            // Advance past the delimiter for next search
             search_start = consumed_end;
 
-            // If we've accumulated enough units, send the chunk
             if units_in_buffer >= units_per_chunk {
                 let chunk = build_chunk(&chunk_buffer, config);
 
@@ -440,18 +394,15 @@ async fn send_delimiter_chunked(
                     return false;
                 }
 
-                // Delay between chunks
                 if config.chunk_delay > Duration::ZERO {
                     tokio::time::sleep(config.chunk_delay).await;
                 }
 
-                // Reset for next chunk
                 chunk_buffer.clear();
                 units_in_buffer = 0;
             }
         }
 
-        // Save incomplete data (after last delimiter) for next iteration
         if search_start < pending.len() {
             remainder.extend_from_slice(&pending[search_start..]);
         }
@@ -460,7 +411,6 @@ async fn send_delimiter_chunked(
     true
 }
 
-/// Build a chunk with optional suffix
 fn build_chunk<'a>(data: &'a [u8], config: &FileSendConfig) -> Cow<'a, [u8]> {
     match &config.chunk_suffix {
         Some(suffix) => {
@@ -472,8 +422,6 @@ fn build_chunk<'a>(data: &'a [u8], config: &FileSendConfig) -> Cow<'a, [u8]> {
     }
 }
 
-/// Send a single chunk and set progress to absolute bytes consumed
-/// Returns false if session closed
 async fn send_chunk(
     session: &mpsc::Sender<SessionCommand>,
     chunk: Cow<'_, [u8]>,
@@ -495,7 +443,6 @@ async fn send_chunk(
     progress.bytes_sent = bytes_consumed;
     progress.chunks_sent += 1;
 
-    // Send progress update
     let _ = progress_tx.send(progress.clone());
 
     true

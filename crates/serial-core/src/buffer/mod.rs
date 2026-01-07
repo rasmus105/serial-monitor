@@ -174,10 +174,8 @@ impl DataBuffer {
     pub fn push(&mut self, data: Vec<u8>, direction: Direction, timestamp: SystemTime) {
         let size = data.len();
 
-        // Encode the data
         let encoded_str = encode(&data, self.encoding);
 
-        // Create raw chunk
         let raw = RawChunk {
             data,
             direction,
@@ -190,16 +188,13 @@ impl DataBuffer {
             let _ = saver.write(&raw);
         }
 
-        // Check if passes filter before adding
         let passes_filter = self.chunk_passes_filter(&raw, &encoded_str);
 
-        // Add to storage
         let chunk_index = self.raw_chunks.len();
         self.raw_chunks.push_back(raw);
         self.encoded.push_back(encoded_str);
         self.current_size += size;
 
-        // Update filtered indices and search
         if passes_filter {
             // Calculate visible index for search (position in filtered view)
             let visible_index = if self.is_filter_active() {
@@ -215,12 +210,10 @@ impl DataBuffer {
                 .add_chunk(visible_index, self.encoded.back().unwrap());
         }
 
-        // Feed to graph if enabled
         if let Some(ref mut graph) = self.graph {
             graph.process_raw_chunk(self.raw_chunks.back().unwrap());
         }
 
-        // Truncate if over size limit
         self.truncate_if_needed();
     }
 
@@ -231,7 +224,6 @@ impl DataBuffer {
         }
     }
 
-    /// Drop the oldest chunk
     fn drop_oldest(&mut self) {
         if let Some(raw) = self.raw_chunks.pop_front() {
             self.current_size -= raw.data.len();

@@ -280,7 +280,6 @@ impl Session {
         serial_config: SerialConfig,
         session_config: SessionConfig,
     ) -> Result<SessionHandle> {
-        // Open the serial port
         let port = tokio_serial::new(port_name, serial_config.baud_rate)
             .data_bits(serial_config.data_bits)
             .parity(serial_config.parity)
@@ -291,25 +290,20 @@ impl Session {
         // Flush buffers to discard any stale data from before we connected.
         port.clear(ClearBuffer::All)?;
 
-        // Create shared buffer (shared between core and UI)
         let buffer = DataBuffer::builder()
             .max_size(session_config.buffer_size)
             .build();
         let buffer = Arc::new(RwLock::new(buffer));
 
-        // Create channels
         let (event_tx, event_rx) = mpsc::channel(256);
         let (command_tx, command_rx) = mpsc::channel(64);
 
-        // Clone for the I/O task
         let buffer_clone = Arc::clone(&buffer);
         let port_name_owned = port_name.to_string();
 
-        // Create chunkers
         let rx_chunker = Chunker::rx(session_config.rx_chunking);
         let tx_chunker = Chunker::tx(session_config.tx_chunking);
 
-        // Start auto-save if enabled
         let runtime = tokio::runtime::Handle::current();
         let auto_save = if session_config.auto_save.enabled {
             match file_saver::start_auto_save(&session_config.auto_save, port_name, &runtime) {
@@ -329,14 +323,11 @@ impl Session {
             None
         };
 
-        // Clone auto-save sender for the I/O task
         let auto_save_tx = auto_save.as_ref().map(|h| h.clone_sender());
 
-        // Create statistics
         let statistics = Arc::new(Statistics::new());
         let statistics_clone = Arc::clone(&statistics);
 
-        // Spawn the I/O task
         tokio::spawn(async move {
             IoTask {
                 buffer: buffer_clone,
@@ -421,29 +412,23 @@ impl IoTask {
         let (mut reader, mut writer) = tokio::io::split(port);
         let mut read_buf = [0u8; 1024];
 
-        // Send connected event
         let _ = self.event_tx.send(SessionEvent::Connected).await;
 
         loop {
             tokio::select! {
-                // Handle incoming data from serial port
                 result = reader.read(&mut read_buf) => {
                     match result {
                         Ok(0) => {
-                            // EOF - port closed
                             self.disconnect(None).await;
                             break;
                         }
                         Ok(n) => {
-                            // Record raw bytes received before chunking
                             self.statistics.record_rx(n);
 
-                            // Process through chunker - may produce 0, 1, or many chunks
                             let chunks = self.rx_chunker.process(&read_buf[..n]);
                             let direction = self.rx_chunker.direction();
 
                             for data in chunks {
-                                // Store in buffer
                                 self.save_and_notify_rx(data, direction).await;
                             }
                         }
@@ -455,16 +440,13 @@ impl IoTask {
                     }
                 }
 
-                // Handle commands from the UI
                 cmd = self.command_rx.recv() => {
                     match cmd {
                         Some(SessionCommand::Send(data)) => {
                             match writer.write_all(&data).await {
                                 Ok(()) => {
-                                    // Record bytes sent
                                     self.statistics.record_tx(data.len());
 
-                                    // Process through TX chunker
                                     let chunks = self.tx_chunker.process(&data);
                                     let direction = self.tx_chunker.direction();
 
