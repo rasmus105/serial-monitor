@@ -377,6 +377,12 @@ impl Widget for TextInput<'_> {
 // =============================================================================
 
 /// Find all path completions for the given input.
+///
+/// Handles:
+/// - Tilde expansion (`~` and `~/...`)
+/// - Directory listing when input ends with `/`
+/// - Prefix matching for partial paths
+/// - Trailing slash appended to directory completions
 pub fn find_path_completions(input: &str) -> Vec<String> {
     if input.is_empty() {
         return Vec::new();
@@ -424,11 +430,7 @@ pub fn find_path_completions(input: &str) -> Vec<String> {
 
     let mut matches: Vec<String> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with(&prefix)
-        })
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
         .map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
             let full_path = parent.join(&name);
@@ -473,7 +475,7 @@ pub fn find_path_completions(input: &str) -> Vec<String> {
 }
 
 /// Find the longest common prefix among a set of strings.
-fn longest_common_prefix(strings: &[String]) -> String {
+pub fn longest_common_prefix(strings: &[String]) -> String {
     if strings.is_empty() {
         return String::new();
     }

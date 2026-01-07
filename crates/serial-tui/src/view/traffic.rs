@@ -2,7 +2,7 @@
 
 use std::time::SystemTime;
 
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -18,6 +18,7 @@ use serial_core::{
         TimestampFormat,
         config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
         encoding::{ENCODING_DISPLAY_NAMES, ENCODING_VARIANTS},
+        slice_by_display_width,
     },
 };
 
@@ -121,38 +122,6 @@ impl TrafficConfig {
             _ => TimestampFormat::Relative,
         }
     }
-}
-
-/// Slice a string by display width positions, returning byte indices.
-///
-/// Given a start and end display column, returns the byte range that covers
-/// those columns. Handles multi-byte UTF-8 characters and wide characters correctly.
-///
-/// Returns `(byte_start, byte_end)` where the slice `&s[byte_start..byte_end]`
-/// contains the characters that fall within the display range.
-fn slice_by_display_width(s: &str, display_start: usize, display_end: usize) -> (usize, usize) {
-    let mut current_width = 0;
-    let mut byte_start = None;
-    let mut byte_end = s.len();
-
-    for (byte_idx, ch) in s.char_indices() {
-        let char_width = ch.width().unwrap_or(0);
-
-        // Found the start position
-        if byte_start.is_none() && current_width + char_width > display_start {
-            byte_start = Some(byte_idx);
-        }
-
-        // Found the end position
-        if current_width >= display_end {
-            byte_end = byte_idx;
-            break;
-        }
-
-        current_width += char_width;
-    }
-
-    (byte_start.unwrap_or(s.len()), byte_end)
 }
 
 // Config panel definitions

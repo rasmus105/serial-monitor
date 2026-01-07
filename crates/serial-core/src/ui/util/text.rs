@@ -1,9 +1,13 @@
-//! Framework-agnostic text editing buffer.
+//! Framework-agnostic text editing utilities.
 //!
-//! This module provides a `TextBuffer` type that handles all the logic of
-//! text editing (cursor movement, insertion, deletion, word operations)
-//! without any UI framework dependencies. Frontends wrap this with their
-//! own scroll/rendering logic.
+//! This module provides:
+//! - `TextBuffer`: A text buffer type that handles all the logic of text editing
+//!   (cursor movement, insertion, deletion, word operations) without any UI
+//!   framework dependencies. Frontends wrap this with their own scroll/rendering logic.
+//! - `slice_by_display_width`: A function to slice strings by display column positions,
+//!   handling multi-byte UTF-8 and wide characters correctly.
+
+use unicode_width::UnicodeWidthChar;
 
 /// A text buffer with cursor support.
 ///
@@ -249,6 +253,54 @@ impl From<&str> for TextBuffer {
     fn from(content: &str) -> Self {
         Self::with_content(content)
     }
+}
+
+/// Slice a string by display width positions, returning byte indices.
+///
+/// Given a start and end display column, returns the byte range that covers
+/// those columns. Handles multi-byte UTF-8 characters and wide characters correctly.
+///
+/// Returns `(byte_start, byte_end)` where the slice `&s[byte_start..byte_end]`
+/// contains the characters that fall within the display range.
+///
+/// # Example
+///
+/// ```
+/// use serial_core::ui::text::slice_by_display_width;
+///
+/// let s = "hello世界";
+/// // 'h','e','l','l','o' each have width 1, '世','界' each have width 2
+/// // Total display width: 5 + 4 = 9
+///
+/// let (start, end) = slice_by_display_width(s, 0, 5);
+/// assert_eq!(&s[start..end], "hello");
+///
+/// let (start, end) = slice_by_display_width(s, 5, 9);
+/// assert_eq!(&s[start..end], "世界");
+/// ```
+pub fn slice_by_display_width(s: &str, display_start: usize, display_end: usize) -> (usize, usize) {
+    let mut current_width = 0;
+    let mut byte_start = None;
+    let mut byte_end = s.len();
+
+    for (byte_idx, ch) in s.char_indices() {
+        let char_width = ch.width().unwrap_or(0);
+
+        // Found the start position
+        if byte_start.is_none() && current_width + char_width > display_start {
+            byte_start = Some(byte_idx);
+        }
+
+        // Found the end position
+        if current_width >= display_end {
+            byte_end = byte_idx;
+            break;
+        }
+
+        current_width += char_width;
+    }
+
+    (byte_start.unwrap_or(s.len()), byte_end)
 }
 
 #[cfg(test)]

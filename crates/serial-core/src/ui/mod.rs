@@ -19,7 +19,13 @@ pub use util::config;
 pub use util::text;
 
 // Re-export commonly used types for convenience
-pub use util::{ConfigKeyResult, ConfigNav, EditMode, FieldDef, FieldValue, Section, TextBuffer};
+pub use util::{
+    ConfigKeyResult, ConfigNav, EditMode, FieldDef, FieldValue, Section, TextBuffer,
+    // Formatting utilities
+    format_bytes, format_duration, format_rate,
+    // Text display utilities
+    slice_by_display_width,
+};
 
 pub use timestamp::TimestampFormat;
 pub use units::{SizeUnit, TimeUnit};
