@@ -37,10 +37,6 @@ struct PathCompletionState {
 }
 
 impl TextInputState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn with_placeholder(mut self, placeholder: impl Into<String>) -> Self {
         self.placeholder = placeholder.into();
         self

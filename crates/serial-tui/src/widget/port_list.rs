@@ -25,10 +25,6 @@ pub struct PortListState {
 }
 
 impl PortListState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn set_ports(&mut self, ports: Vec<PortInfo>) {
         self.ports = ports;
         // Reset selection if out of bounds
@@ -190,14 +186,16 @@ pub struct PortList<'a> {
     focused: bool,
 }
 
-impl<'a> PortList<'a> {
-    pub fn new() -> Self {
+impl Default for PortList<'_> {
+    fn default() -> Self {
         Self {
             block: None,
             focused: false,
         }
     }
+}
 
+impl<'a> PortList<'a> {
     pub fn block(mut self, block: Block<'a>) -> Self {
         self.block = Some(block);
         self
@@ -209,11 +207,6 @@ impl<'a> PortList<'a> {
     }
 }
 
-impl Default for PortList<'_> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl StatefulWidget for PortList<'_> {
     type State = PortListState;

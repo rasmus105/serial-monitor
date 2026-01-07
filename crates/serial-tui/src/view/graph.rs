@@ -73,8 +73,6 @@ pub struct GraphView {
     pub config_nav: ConfigNav,
     /// Sub-focus within config panel (Settings vs Series).
     pub config_sub_focus: ConfigSubFocus,
-    /// Reference time for converting SystemTime to seconds.
-    pub reference_time: Option<SystemTime>,
     /// Cached graph data for rendering (avoids allocation per frame).
     /// Vec of (series_name, data_points) pairs.
     cached_graph_data: Vec<Vec<(f64, f64)>>,
@@ -391,18 +389,23 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
     },
 ];
 
-impl GraphView {
-    pub fn new() -> Self {
+impl Default for GraphView {
+    fn default() -> Self {
         Self {
             selected_series: 0,
             config: GraphConfig::default(),
             config_nav: ConfigNav::new(),
             config_sub_focus: ConfigSubFocus::default(),
-            reference_time: None,
             cached_graph_data: Vec::new(),
             last_applied_parser: None,
             loading: None,
         }
+    }
+}
+
+impl GraphView {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn draw(
@@ -1155,11 +1158,6 @@ impl GraphView {
     }
 }
 
-impl Default for GraphView {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 use crate::widget::ConfigPanel;
 

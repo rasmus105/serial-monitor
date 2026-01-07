@@ -375,24 +375,19 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
     },
 ];
 
-// Connection info section (read-only) - common baud rates for display
-#[allow(dead_code)]
-const BAUD_RATE_DISPLAY: &[&str] = &[
-    "300", "1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200", "230400", "460800",
-    "921600",
-];
+
 
 impl TrafficView {
     pub fn new() -> Self {
         Self {
             scroll: 0,
-            search_input: TextInputState::new().with_placeholder("Search pattern..."),
+            search_input: TextInputState::default().with_placeholder("Search pattern..."),
             search_focused: false,
-            filter_input: TextInputState::new().with_placeholder("Filter pattern..."),
+            filter_input: TextInputState::default().with_placeholder("Filter pattern..."),
             filter_focused: false,
-            send_input: TextInputState::new().with_placeholder("Data to send..."),
+            send_input: TextInputState::default().with_placeholder("Data to send..."),
             send_focused: false,
-            dir_path_input: TextInputState::new().with_placeholder("Enter directory path..."),
+            dir_path_input: TextInputState::default().with_placeholder("Enter directory path..."),
             dir_path_focused: false,
             dir_path_completion: CompletionState::default(),
             config: TrafficConfig::default(),

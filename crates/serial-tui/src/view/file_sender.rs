@@ -16,7 +16,7 @@ use serial_core::{
     SessionHandle, send_file,
     ui::{
         SizeUnit, TimeUnit,
-        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
+        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid, always_visible},
     },
 };
 
@@ -25,7 +25,7 @@ use crate::{
     theme::Theme,
     widget::{
         CompletionKind, CompletionPopup, CompletionState, ConfigPanel, ConnectionPanel,
-        Toast, handle_config_key,
+        Toast, format_bytes, handle_config_key,
         text_input::{TextInputState, find_path_completions},
     },
 };
@@ -412,7 +412,7 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
                     }
                 },
                 visible: always_visible,
-                enabled: always_visible,
+                enabled: always_enabled,
                 parent_id: None,
                 validate: always_valid,
             },
@@ -443,7 +443,7 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
 impl FileSenderView {
     pub fn new() -> Self {
         Self {
-            file_path_input: TextInputState::new().with_placeholder("Enter file path..."),
+            file_path_input: TextInputState::default().with_placeholder("Enter file path..."),
             file_path_focused: false,
             file_path_completion: CompletionState::default(),
             selected_path: None,
@@ -1325,16 +1325,6 @@ impl FileSenderView {
             preview_limit_unit_index: self.config.preview_limit_unit_index,
             auto_follow: self.config.auto_follow,
         }
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    if bytes >= 1_000_000 {
-        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
-    } else if bytes >= 1_000 {
-        format!("{:.1} KB", bytes as f64 / 1_000.0)
-    } else {
-        format!("{} B", bytes)
     }
 }
 
