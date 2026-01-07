@@ -1,6 +1,10 @@
 //! Main application state machine and event loop.
 
-use std::{io, time::{Duration, SystemTime}};
+use std::{
+    io,
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    time::{Duration, SystemTime},
+};
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
@@ -164,6 +168,21 @@ pub enum Focus {
     Config,
 }
 
+/// Configuration for establishing a connection.
+///
+/// Groups all the parameters needed by the `connect` method to avoid having
+/// too many function arguments.
+pub struct ConnectConfig {
+    pub port: String,
+    pub serial_config: SerialConfig,
+    pub session_config: SessionConfig,
+    pub keep_awake: bool,
+    pub file_save_enabled: bool,
+    pub file_save_format_index: usize,
+    pub file_save_encoding_index: usize,
+    pub file_save_directory: String,
+}
+
 impl SessionManager {
     /// Creates a new session manager with one PreConnect session.
     pub fn new() -> Self {
@@ -301,7 +320,7 @@ impl App {
         
         // Create help overlay with saved global settings
         let help = HelpOverlayState {
-            settings: settings.global.clone().into(),
+            settings: settings.global.clone(),
             ..Default::default()
         };
         
@@ -319,7 +338,7 @@ impl App {
             sessions,
             show_config: true,
             focus: Focus::Main,
-            command_input: TextInputState::new().with_placeholder("Enter command..."),
+            command_input: TextInputState::default().with_placeholder("Enter command..."),
             command_mode: false,
             completion: CompletionState::default(),
             needs_clear: false,
@@ -327,14 +346,44 @@ impl App {
         }
     }
 
+    /// Request the app to quit gracefully (e.g., from signal handler).
+    pub fn request_quit(&mut self) {
+        self.should_quit = true;
+    }
+
     /// Main event loop.
     pub async fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
+        self.run_inner(terminal, None).await
+    }
+
+    /// Main event loop with external shutdown flag for signal handling.
+    pub async fn run_with_shutdown<B: Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        shutdown_flag: Arc<AtomicBool>,
+    ) -> io::Result<()> {
+        self.run_inner(terminal, Some(shutdown_flag)).await
+    }
+
+    /// Internal event loop implementation.
+    async fn run_inner<B: Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        shutdown_flag: Option<Arc<AtomicBool>>,
+    ) -> io::Result<()> {
         // Initial port scan for any PreConnect sessions
         if let Some(SessionState::PreConnect(view)) = self.sessions.active_state_mut() {
             view.refresh_ports();
         }
 
         loop {
+            // Check external shutdown flag (from signal handlers)
+            if let Some(ref flag) = shutdown_flag {
+                if flag.load(Ordering::SeqCst) {
+                    self.should_quit = true;
+                }
+            }
+
             // Force full terminal redraw if needed before drawing
             // This handles clears requested from previous iterations (e.g., mode changes)
             if self.needs_clear {
@@ -669,16 +718,16 @@ impl App {
                                 buffer_size: settings.buffer_size(),
                                 auto_save: settings.to_auto_save_config(),
                             };
-                            self.connect(
-                                &port_path,
+                            self.connect(ConnectConfig {
+                                port: port_path,
                                 serial_config,
                                 session_config,
-                                settings.keep_awake,
+                                keep_awake: settings.keep_awake,
                                 file_save_enabled,
                                 file_save_format_index,
                                 file_save_encoding_index,
                                 file_save_directory,
-                            ).await;
+                            }).await;
                         }
                         ConnectModalAction::None => {}
                     }
@@ -1001,16 +1050,16 @@ impl App {
                     buffer_size: settings.buffer_size(),
                     auto_save: settings.to_auto_save_config(),
                 };
-                self.connect(
-                    &port,
+                self.connect(ConnectConfig {
+                    port,
                     serial_config,
                     session_config,
-                    settings.keep_awake,
+                    keep_awake: settings.keep_awake,
                     file_save_enabled,
                     file_save_format_index,
                     file_save_encoding_index,
                     file_save_directory,
-                ).await;
+                }).await;
             }
             PreConnectAction::Toast(toast) => {
                 self.toasts.push(toast);
@@ -1101,21 +1150,10 @@ impl App {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn connect(
-        &mut self,
-        port: &str,
-        serial_config: SerialConfig,
-        session_config: SessionConfig,
-        keep_awake: bool,
-        file_save_enabled: bool,
-        file_save_format_index: usize,
-        file_save_encoding_index: usize,
-        file_save_directory: String,
-    ) {
-        self.toasts.info(format!("Connecting to {}...", port));
+    async fn connect(&mut self, config: ConnectConfig) {
+        self.toasts.info(format!("Connecting to {}...", config.port));
 
-        match Session::connect_with_config(port, serial_config.clone(), session_config).await {
+        match Session::connect_with_config(&config.port, config.serial_config.clone(), config.session_config).await {
             Ok(handle) => {
                 let mut traffic = TrafficView::new();
                 traffic.session_start = Some(SystemTime::now());
@@ -1123,17 +1161,17 @@ impl App {
                 // Apply saved settings to traffic view first
                 traffic.apply_settings(&self.settings.traffic);
                 // Override file save settings with what was configured in pre-connect
-                traffic.config.file_save_enabled = file_save_enabled;
-                traffic.config.file_save_format_index = file_save_format_index;
-                traffic.config.file_save_encoding_index = file_save_encoding_index;
-                traffic.config.file_save_directory = file_save_directory.clone();
+                traffic.config.file_save_enabled = config.file_save_enabled;
+                traffic.config.file_save_format_index = config.file_save_format_index;
+                traffic.config.file_save_encoding_index = config.file_save_encoding_index;
+                traffic.config.file_save_directory = config.file_save_directory.clone();
                 // Apply global pattern matching settings (these override traffic settings)
                 traffic.config.search_mode_index = self.help.settings.search_mode_index;
                 traffic.config.filter_mode_index = self.help.settings.filter_mode_index;
                 
                 // Create keep-awake handle and enable if setting is on
                 let mut keep_awake_handle = KeepAwake::new();
-                if keep_awake {
+                if config.keep_awake {
                     keep_awake_handle.enable();
                     if !keep_awake_handle.is_active() {
                         self.toasts.info("Keep-awake not available on this system");
@@ -1141,12 +1179,12 @@ impl App {
                 }
                 
                 // Start file saving if enabled from pre-connect
-                if file_save_enabled {
+                if config.file_save_enabled {
                     let save_config = build_user_save_config(
-                        &file_save_directory,
+                        &config.file_save_directory,
                         handle.port_name(),
-                        file_save_format_index,
-                        file_save_encoding_index,
+                        config.file_save_format_index,
+                        config.file_save_encoding_index,
                     );
                     
                     let runtime = tokio::runtime::Handle::current();
@@ -1179,7 +1217,7 @@ impl App {
                     traffic,
                     graph,
                     file_sender,
-                    serial_config,
+                    serial_config: config.serial_config,
                     keep_awake: keep_awake_handle,
                 };
                 
@@ -1370,7 +1408,7 @@ impl App {
         }
         
         // Collect global settings from help overlay
-        self.settings.global = (&self.help.settings).into();
+        self.settings.global = self.help.settings.clone();
         
         // Save to file
         if let Err(e) = self.settings.save() {
