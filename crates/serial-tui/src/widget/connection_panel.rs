@@ -9,6 +9,7 @@ use ratatui::{
 use serial_core::{SerialConfig, Statistics};
 
 use crate::theme::Theme;
+use super::util::{format_bytes, format_rate};
 
 /// Widget displaying connection info (port config + statistics).
 pub struct ConnectionPanel<'a> {
@@ -165,36 +166,5 @@ impl Widget for ConnectionPanel<'_> {
                 buf,
             );
         }
-    }
-}
-
-/// Format bytes with appropriate unit (B, KB, MB, GB)
-fn format_bytes(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
-/// Format bytes per second rate
-fn format_rate(bytes_per_sec: f64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-
-    if bytes_per_sec >= MB {
-        format!("{:.1} MB/s", bytes_per_sec / MB)
-    } else if bytes_per_sec >= KB {
-        format!("{:.1} KB/s", bytes_per_sec / KB)
-    } else {
-        format!("{:.0} B/s", bytes_per_sec)
     }
 }

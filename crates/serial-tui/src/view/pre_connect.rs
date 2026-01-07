@@ -4,7 +4,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
-    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, StatefulWidget, Widget},
 };
 use serial_core::{
@@ -20,9 +19,11 @@ use serial_core::{
 
 use crate::{
     app::{Focus, PreConnectAction},
+    keybind::PRECONNECT_HINTS,
     theme::Theme,
     widget::{
         CompletionKind, CompletionPopup, CompletionState, ConfigPanel, PortList, TextInput, Toast,
+        util::build_help_line,
         port_list::PortListState,
         text_input::{TextInputState, find_path_completions},
     },
@@ -329,12 +330,12 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
 impl PreConnectView {
     pub fn new() -> Self {
         Self {
-            port_list: PortListState::new(),
+            port_list: PortListState::default(),
             config: PreConnectConfig::default(),
             config_nav: ConfigNav::new(),
-            search_input: TextInputState::new().with_placeholder("Search ports..."),
+            search_input: TextInputState::default().with_placeholder("Search ports..."),
             search_focused: false,
-            dir_path_input: TextInputState::new().with_placeholder("Enter directory path..."),
+            dir_path_input: TextInputState::default().with_placeholder("Enter directory path..."),
             dir_path_focused: false,
             dir_path_completion: CompletionState::default(),
             last_visible_height: 20, // Reasonable default
@@ -399,7 +400,7 @@ impl PreConnectView {
                 Theme::border()
             });
 
-        PortList::new()
+        PortList::default()
             .block(port_block)
             .focused(focus == Focus::Main && !self.search_focused)
             .render(main_chunks[0], buf, &mut self.port_list);
@@ -449,18 +450,7 @@ impl PreConnectView {
         // Help text at bottom of port list
         if main_chunks[0].height > 2 {
             let help_y = main_chunks[0].y + main_chunks[0].height - 2;
-            let help_line = Line::from(vec![
-                Span::styled("Enter", Theme::keybind_disconnected()),
-                Span::raw(" connect  "),
-                Span::styled("r", Theme::keybind_disconnected()),
-                Span::raw(" refresh  "),
-                Span::styled("/", Theme::keybind_disconnected()),
-                Span::raw(" search  "),
-                Span::styled("Ctrl+h/l", Theme::keybind_disconnected()),
-                Span::raw(" panels  "),
-                Span::styled("?", Theme::keybind_disconnected()),
-                Span::raw(" help"),
-            ]);
+            let help_line = build_help_line(PRECONNECT_HINTS, Theme::keybind_disconnected());
             Paragraph::new(help_line)
                 .style(Theme::muted())
                 .render(Rect::new(main_chunks[0].x + 2, help_y, main_chunks[0].width - 4, 1), buf);

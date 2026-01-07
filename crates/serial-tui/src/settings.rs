@@ -4,7 +4,11 @@
 //! with platform-appropriate paths on other systems.
 
 use serde::{Deserialize, Serialize};
-use serial_core::settings;
+use serial_core::{
+    DataBits,
+    settings,
+    ui::serial_config::{COMMON_BAUD_RATES, DATA_BITS_VARIANTS},
+};
 
 const APP_NAME: &str = "serial-monitor-tui";
 const SETTINGS_FILE: &str = "settings.toml";
@@ -54,15 +58,22 @@ pub struct PreConnectSettings {
 impl Default for PreConnectSettings {
     fn default() -> Self {
         Self {
-            baud_rate_index: 8,    // 115200
-            data_bits_index: 3,    // 8 bits
-            parity_index: 0,       // None
-            stop_bits_index: 0,    // 1
-            flow_control_index: 0, // None
-            line_ending_index: 1,  // LF
+            // Use position lookup for array-dependent indices to avoid hardcoded magic numbers
+            baud_rate_index: COMMON_BAUD_RATES
+                .iter()
+                .position(|&r| r == 115200)
+                .unwrap_or(8),
+            data_bits_index: DATA_BITS_VARIANTS
+                .iter()
+                .position(|&d| d == DataBits::Eight)
+                .unwrap_or(3),
+            parity_index: 0,       // None (first in array)
+            stop_bits_index: 0,    // 1 (first in array)
+            flow_control_index: 0, // None (first in array)
+            line_ending_index: 1,  // LF (second in LINE_ENDINGS array)
             file_save_enabled: false,
-            file_save_format_index: 1,   // Encoded
-            file_save_encoding_index: 1, // ASCII
+            file_save_format_index: 1,   // Encoded (second in format array)
+            file_save_encoding_index: 1, // ASCII (second in encoding array)
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
                 .into_owned(),
@@ -313,6 +324,58 @@ impl Default for GlobalSettings {
     }
 }
 
+/// Buffer sizes in bytes corresponding to buffer_size_index options.
+pub const BUFFER_SIZES: &[usize] = &[
+    1024 * 1024,        // 1 MB
+    5 * 1024 * 1024,    // 5 MB
+    10 * 1024 * 1024,   // 10 MB
+    50 * 1024 * 1024,   // 50 MB
+    100 * 1024 * 1024,  // 100 MB
+    usize::MAX,         // Unlimited
+];
+
+impl GlobalSettings {
+    /// Convert auto-save settings to AutoSaveConfig for the core.
+    pub fn to_auto_save_config(&self) -> serial_core::buffer::AutoSaveConfig {
+        use serial_core::buffer::{AutoSaveConfig, DirectionFilter, Encoding, SaveFormat};
+
+        // Map encoding index to Encoding enum
+        let encoding = match self.auto_save_encoding_index {
+            0 => Encoding::Utf8,
+            1 => Encoding::Ascii,
+            2 => Encoding::Hex(Default::default()),
+            3 => Encoding::Binary(Default::default()),
+            _ => Encoding::Ascii,
+        };
+
+        // Build save format based on format index
+        let format = match self.auto_save_format_index {
+            0 => SaveFormat::Raw,
+            _ => SaveFormat::Encoded {
+                encoding,
+                include_timestamps: self.auto_save_timestamps,
+                include_direction: self.auto_save_direction,
+            },
+        };
+
+        AutoSaveConfig {
+            enabled: self.auto_save_enabled,
+            max_sessions: self.auto_save_max_sessions,
+            directions: DirectionFilter {
+                tx: self.auto_save_tx,
+                rx: self.auto_save_rx,
+            },
+            format,
+            ..Default::default()
+        }
+    }
+
+    /// Get the buffer size in bytes (usize::MAX for unlimited).
+    pub fn buffer_size(&self) -> usize {
+        BUFFER_SIZES.get(self.buffer_size_index).copied().unwrap_or(usize::MAX)
+    }
+}
+
 impl TuiSettings {
     /// Load settings from the config directory.
     ///
@@ -332,59 +395,5 @@ impl TuiSettings {
     pub fn save(&self) -> Result<(), settings::SettingsError> {
         let config_dir = settings::config_directory(APP_NAME);
         settings::save(&config_dir, SETTINGS_FILE, self)
-    }
-}
-
-// =============================================================================
-// Conversions between GlobalSettings and widget::help_overlay::AppSettings
-// =============================================================================
-
-use crate::widget::help_overlay::AppSettings;
-
-impl From<GlobalSettings> for AppSettings {
-    fn from(g: GlobalSettings) -> Self {
-        AppSettings {
-            auto_save_enabled: g.auto_save_enabled,
-            auto_save_max_sessions: g.auto_save_max_sessions,
-            auto_save_format_index: g.auto_save_format_index,
-            auto_save_encoding_index: g.auto_save_encoding_index,
-            auto_save_timestamps: g.auto_save_timestamps,
-            auto_save_direction: g.auto_save_direction,
-            auto_save_rx: g.auto_save_rx,
-            auto_save_tx: g.auto_save_tx,
-            file_save_scope_index: g.file_save_scope_index,
-            file_save_rx: g.file_save_rx,
-            file_save_tx: g.file_save_tx,
-            file_save_timestamps: g.file_save_timestamps,
-            file_save_direction: g.file_save_direction,
-            search_mode_index: g.search_mode_index,
-            filter_mode_index: g.filter_mode_index,
-            buffer_size_index: g.buffer_size_index,
-            keep_awake: g.keep_awake,
-        }
-    }
-}
-
-impl From<&AppSettings> for GlobalSettings {
-    fn from(a: &AppSettings) -> Self {
-        GlobalSettings {
-            auto_save_enabled: a.auto_save_enabled,
-            auto_save_max_sessions: a.auto_save_max_sessions,
-            auto_save_format_index: a.auto_save_format_index,
-            auto_save_encoding_index: a.auto_save_encoding_index,
-            auto_save_timestamps: a.auto_save_timestamps,
-            auto_save_direction: a.auto_save_direction,
-            auto_save_rx: a.auto_save_rx,
-            auto_save_tx: a.auto_save_tx,
-            file_save_scope_index: a.file_save_scope_index,
-            file_save_rx: a.file_save_rx,
-            file_save_tx: a.file_save_tx,
-            file_save_timestamps: a.file_save_timestamps,
-            file_save_direction: a.file_save_direction,
-            search_mode_index: a.search_mode_index,
-            filter_mode_index: a.filter_mode_index,
-            buffer_size_index: a.buffer_size_index,
-            keep_awake: a.keep_awake,
-        }
     }
 }

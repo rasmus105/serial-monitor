@@ -11,9 +11,13 @@ use serial_core::ui::config::{ConfigNav, FieldDef, FieldKind, FieldValue, Sectio
 
 use crate::{
     keybind::{KeyContext, Keybind, all_keybinds},
+    settings::GlobalSettings,
     theme::Theme,
     widget::ConfigPanel,
 };
+
+/// Re-export GlobalSettings as AppSettings for backward compatibility within this module.
+pub type AppSettings = GlobalSettings;
 
 /// Tab in the help overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -52,129 +56,6 @@ impl HelpTab {
     }
 }
 
-/// Global application settings.
-#[derive(Debug, Clone)]
-pub struct AppSettings {
-    // === Auto-save (crash recovery) settings ===
-    /// Whether auto-save is enabled.
-    pub auto_save_enabled: bool,
-    /// Maximum number of session files to keep.
-    pub auto_save_max_sessions: usize,
-    /// Format index: 0=Raw, 1=Encoded
-    pub auto_save_format_index: usize,
-    /// Encoding index (when format=Encoded): 0=UTF-8, 1=ASCII, 2=Hex, 3=Binary
-    pub auto_save_encoding_index: usize,
-    /// Include timestamps in auto-save (when format=Encoded)
-    pub auto_save_timestamps: bool,
-    /// Include direction markers in auto-save (when format=Encoded)
-    pub auto_save_direction: bool,
-    /// Save RX data
-    pub auto_save_rx: bool,
-    /// Save TX data
-    pub auto_save_tx: bool,
-
-    // === File saving (user-initiated) settings ===
-    /// Save scope index: 0=ExistingOnly, 1=NewOnly, 2=ExistingAndContinue
-    pub file_save_scope_index: usize,
-    /// Save RX data in user-initiated saves
-    pub file_save_rx: bool,
-    /// Save TX data in user-initiated saves
-    pub file_save_tx: bool,
-    /// Include timestamps in user-initiated saves
-    pub file_save_timestamps: bool,
-    /// Include direction markers in user-initiated saves
-    pub file_save_direction: bool,
-
-    // === Pattern matching defaults ===
-    /// Default pattern mode for search: 0=Normal, 1=Regex
-    pub search_mode_index: usize,
-    /// Default pattern mode for filter: 0=Normal, 1=Regex
-    pub filter_mode_index: usize,
-
-    // === Buffer settings ===
-    /// Buffer size index (maps to BUFFER_SIZES)
-    pub buffer_size_index: usize,
-
-    // === System settings ===
-    /// Whether to keep the system awake while connected.
-    pub keep_awake: bool,
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            // Auto-save defaults
-            auto_save_enabled: true,
-            auto_save_max_sessions: 10,
-            auto_save_format_index: 1, // Encoded
-            auto_save_encoding_index: 1, // ASCII
-            auto_save_timestamps: true,
-            auto_save_direction: false,
-            auto_save_rx: true,
-            auto_save_tx: false,
-
-            // File saving (user-initiated) defaults
-            file_save_scope_index: 2, // ExistingAndContinue
-            file_save_rx: true,
-            file_save_tx: true,
-            file_save_timestamps: true,
-            file_save_direction: true,
-
-            // Pattern matching defaults
-            search_mode_index: 0, // Normal
-            filter_mode_index: 0, // Normal
-
-            // Buffer defaults
-            buffer_size_index: 2, // 10 MB
-
-            // System defaults
-            keep_awake: true,
-        }
-    }
-}
-
-impl AppSettings {
-    /// Convert auto-save settings to AutoSaveConfig for the core.
-    pub fn to_auto_save_config(&self) -> serial_core::buffer::AutoSaveConfig {
-        use serial_core::buffer::{AutoSaveConfig, DirectionFilter, Encoding, SaveFormat};
-
-        // Map encoding index to Encoding enum
-        let encoding = match self.auto_save_encoding_index {
-            0 => Encoding::Utf8,
-            1 => Encoding::Ascii,
-            2 => Encoding::Hex(Default::default()),
-            3 => Encoding::Binary(Default::default()),
-            _ => Encoding::Ascii,
-        };
-
-        // Build save format based on format index
-        let format = match self.auto_save_format_index {
-            0 => SaveFormat::Raw,
-            _ => SaveFormat::Encoded {
-                encoding,
-                include_timestamps: self.auto_save_timestamps,
-                include_direction: self.auto_save_direction,
-            },
-        };
-
-        AutoSaveConfig {
-            enabled: self.auto_save_enabled,
-            max_sessions: self.auto_save_max_sessions,
-            directions: DirectionFilter {
-                tx: self.auto_save_tx,
-                rx: self.auto_save_rx,
-            },
-            format,
-            ..Default::default()
-        }
-    }
-
-    /// Get the buffer size in bytes (usize::MAX for unlimited).
-    pub fn buffer_size(&self) -> usize {
-        BUFFER_SIZES.get(self.buffer_size_index).copied().unwrap_or(usize::MAX)
-    }
-}
-
 // Settings panel definitions
 const AUTO_SAVE_FORMAT_OPTIONS: &[&str] = &["Raw Binary", "Encoded Text"];
 const AUTO_SAVE_ENCODING_OPTIONS: &[&str] = &["UTF-8", "ASCII", "Hex", "Binary"];
@@ -182,16 +63,6 @@ const PATTERN_MODE_OPTIONS: &[&str] = &["Normal", "Regex"];
 const BUFFER_SIZE_OPTIONS: &[&str] = &["1 MB", "5 MB", "10 MB", "50 MB", "100 MB", "Unlimited"];
 const MAX_SESSIONS_OPTIONS: &[&str] = &["5", "10", "20", "50", "100"];
 const FILE_SAVE_SCOPE_OPTIONS: &[&str] = &["Existing Only", "New Only", "Existing + Continue"];
-
-/// Buffer sizes in bytes corresponding to BUFFER_SIZE_OPTIONS
-pub const BUFFER_SIZES: &[usize] = &[
-    1024 * 1024,
-    5 * 1024 * 1024,
-    10 * 1024 * 1024,
-    50 * 1024 * 1024,
-    100 * 1024 * 1024,
-    usize::MAX, // Unlimited
-];
 
 /// Max sessions values corresponding to MAX_SESSIONS_OPTIONS
 const MAX_SESSIONS_VALUES: &[usize] = &[5, 10, 20, 50, 100];

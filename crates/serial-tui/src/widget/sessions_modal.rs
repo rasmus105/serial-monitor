@@ -12,6 +12,7 @@ use crate::{
     app::{SessionEntry, SessionState},
     theme::Theme,
 };
+use super::util::{format_bytes, format_duration};
 
 /// State for the sessions modal.
 #[derive(Debug, Clone, Default)]
@@ -247,7 +248,7 @@ fn build_session_line(
             // Stats - show chunk count and buffer size
             let buffer = state.handle.buffer();
             let chunk_count = buffer.len();
-            let buffer_size = buffer.size();
+            let buffer_size = buffer.size() as u64;
             let stats_str = format!(
                 "  {} chunks  {}",
                 chunk_count,
@@ -267,29 +268,4 @@ fn build_session_line(
     }
 
     Line::from(spans)
-}
-
-/// Format bytes nicely (e.g., 1024 -> "1.0 KB").
-fn format_bytes(bytes: usize) -> String {
-    const KB: usize = 1024;
-    const MB: usize = KB * 1024;
-    const GB: usize = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
-/// Format duration nicely (seconds -> "HH:MM:SS").
-fn format_duration(total_secs: u64) -> String {
-    let hours = total_secs / 3600;
-    let minutes = (total_secs % 3600) / 60;
-    let seconds = total_secs % 60;
-    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
 }

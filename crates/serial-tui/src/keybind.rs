@@ -236,3 +236,51 @@ pub fn keybinds_for_context(context: KeyContext) -> Vec<&'static Keybind> {
         .filter(|k| k.context == context || k.context == KeyContext::Global)
         .collect()
 }
+
+/// A condensed keybind hint for status bars.
+///
+/// Use this to ensure consistency between inline help and the help overlay.
+pub struct KeyHint {
+    pub key: &'static str,
+    pub description: &'static str,
+}
+
+impl KeyHint {
+    pub const fn new(key: &'static str, description: &'static str) -> Self {
+        Self { key, description }
+    }
+}
+
+/// Common key hints for the pre-connect view status bar.
+pub const PRECONNECT_HINTS: &[KeyHint] = &[
+    KeyHint::new("Enter", "connect"),
+    KeyHint::new("r", "refresh"),
+    KeyHint::new("/", "search"),
+    KeyHint::new("Ctrl+h/l", "panels"),
+    KeyHint::new("?", "help"),
+];
+
+/// Common key hints for the traffic view status bar.
+pub const TRAFFIC_HINTS: &[KeyHint] = &[
+    KeyHint::new("s", "send"),
+    KeyHint::new("/", "search"),
+    KeyHint::new("f", "filter"),
+    KeyHint::new("Ctrl+b", "lock bottom"),
+    KeyHint::new("?", "help"),
+];
+
+/// Common key hints for the graph view status bar.
+pub const GRAPH_HINTS: &[KeyHint] = &[
+    KeyHint::new("g", "toggle graph"),
+    KeyHint::new("Tab", "settings/series"),
+    KeyHint::new("t", "toggle series"),
+    KeyHint::new("?", "help"),
+];
+
+/// Common key hints for the file sender view status bar.
+pub const FILE_SENDER_HINTS: &[KeyHint] = &[
+    KeyHint::new("o", "open file"),
+    KeyHint::new("Enter", "start sending"),
+    KeyHint::new("x", "cancel"),
+    KeyHint::new("?", "help"),
+];
