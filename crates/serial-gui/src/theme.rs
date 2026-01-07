@@ -10,6 +10,7 @@ impl Theme {
     // Base colors
     pub const BG: Color = Color::from_rgb(0.1, 0.1, 0.1);
     pub const FG: Color = Color::from_rgb(0.9, 0.9, 0.9);
+    pub const TEXT: Color = Color::from_rgb(0.9, 0.9, 0.9);
 
     // Accent colors
     pub const PRIMARY: Color = Color::from_rgb(0.0, 0.8, 0.8); // Cyan

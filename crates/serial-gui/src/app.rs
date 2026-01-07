@@ -1,8 +1,10 @@
 //! Main application state and logic.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use iced::widget::scrollable;
 use iced::{Element, Subscription, Task};
 use serial_core::{
     list_ports, ChunkingStrategy, DataBits, Encoding, FlowControl, LineDelimiter, Parity,
@@ -59,6 +61,24 @@ impl Default for PreConnectState {
     }
 }
 
+/// Scroll behavior for the traffic view
+#[derive(Debug, Clone)]
+pub enum ScrollState {
+    /// Locked to bottom - always shows latest data, user cannot scroll up
+    LockedToBottom,
+    /// Auto-scroll - stays at bottom when new data arrives, but allows scrolling up
+    /// When scrolled up, new data doesn't auto-scroll. When scrolled back to bottom, resumes.
+    AutoScroll { offset: f32 },
+    /// Manual scroll - user has scrolled away from bottom, stays where user left it
+    Manual { offset: f32 },
+}
+
+impl Default for ScrollState {
+    fn default() -> Self {
+        ScrollState::AutoScroll { offset: 0.0 }
+    }
+}
+
 /// State when connected to a serial port.
 pub struct ConnectedState {
     /// Session handle for serial communication.
@@ -75,14 +95,24 @@ pub struct ConnectedState {
     pub display_lines: Vec<DisplayLine>,
     /// Send input text.
     pub send_input: String,
-    /// Error/info message.
-    pub message: Option<(String, MessageKind)>,
     /// Whether to show TX data.
     pub show_tx: bool,
     /// Whether to show RX data.
     pub show_rx: bool,
     /// Line ending to append when sending (index: 0=None, 1=LF, 2=CR, 3=CRLF).
     pub send_line_ending_index: usize,
+    /// Whether to show the config panel.
+    pub show_config_panel: bool,
+    /// Whether to show timestamps.
+    pub show_timestamps: bool,
+    /// Timestamp format index (0=Relative, 1=HH:MM:SS.mmm, 2=HH:MM:SS).
+    pub timestamp_format_index: usize,
+    /// Scroll state for virtual scrolling
+    pub scroll_state: ScrollState,
+    /// Viewport height (set by scroll callback)
+    pub viewport_height: Option<f32>,
+    /// Collapsed sections in the config panel (by section name).
+    pub collapsed_sections: HashSet<String>,
 }
 
 /// A line to display in the traffic view.
@@ -93,12 +123,7 @@ pub struct DisplayLine {
     pub timestamp: std::time::SystemTime,
 }
 
-/// Kind of message to display.
-#[derive(Clone, Copy)]
-pub enum MessageKind {
-    Info,
-    Error,
-}
+
 
 /// Get the RX chunking strategy from index.
 pub fn rx_chunking_from_index(index: usize) -> ChunkingStrategy {
@@ -140,6 +165,12 @@ pub enum Message {
     ToggleShowRx,
     SelectSendLineEnding(usize),
     ClearBuffer,
+    ToggleConfigPanel,
+    ToggleTimestamps,
+    SelectTimestampFormat(usize),
+    ToggleSectionCollapse(String),
+    ScrollChanged(scrollable::Viewport),
+    SelectScrollMode(crate::view::traffic::ScrollModeOption),
     Tick,
 }
 
@@ -288,10 +319,15 @@ impl App {
                         session_start: std::time::SystemTime::now(),
                         display_lines: Vec::new(),
                         send_input: String::new(),
-                        message: Some(("Connected".to_string(), MessageKind::Info)),
                         show_tx: true,
                         show_rx: true,
                         send_line_ending_index: 1, // Default to LF
+                        show_config_panel: true,
+                        show_timestamps: true,
+                        timestamp_format_index: 0, // Relative
+                        scroll_state: ScrollState::default(),
+                        viewport_height: None,
+                        collapsed_sections: HashSet::from(["Statistics".to_string()]),
                     });
                 }
             }
@@ -383,6 +419,77 @@ impl App {
                     state.display_lines.clear();
                 }
             }
+            Message::ToggleConfigPanel => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    state.show_config_panel = !state.show_config_panel;
+                }
+            }
+            Message::ToggleTimestamps => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    state.show_timestamps = !state.show_timestamps;
+                }
+            }
+            Message::SelectTimestampFormat(index) => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    state.timestamp_format_index = index;
+                }
+            }
+            Message::ToggleSectionCollapse(section) => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    if state.collapsed_sections.contains(&section) {
+                        state.collapsed_sections.remove(&section);
+                    } else {
+                        state.collapsed_sections.insert(section);
+                    }
+                }
+            }
+            Message::ScrollChanged(viewport) => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    // Update viewport height for virtual scrolling calculations
+                    state.viewport_height = Some(viewport.bounds().height);
+                    
+                    let content_height = viewport.content_bounds().height;
+                    let viewport_height = viewport.bounds().height;
+                    let offset = viewport.absolute_offset().y;
+                    let max_scroll = (content_height - viewport_height).max(0.0);
+                    
+                    // Check if we're at the bottom (with small tolerance for float comparison)
+                    let at_bottom = offset >= max_scroll - 1.0;
+                    
+                    match &state.scroll_state {
+                        ScrollState::LockedToBottom => {
+                            // Stay locked - this shouldn't normally trigger scroll changes
+                        }
+                        ScrollState::AutoScroll { .. } => {
+                            if at_bottom {
+                                // Stay in auto-scroll mode at bottom
+                                state.scroll_state = ScrollState::AutoScroll { offset };
+                            } else {
+                                // User scrolled up - switch to manual mode
+                                state.scroll_state = ScrollState::Manual { offset };
+                            }
+                        }
+                        ScrollState::Manual { .. } => {
+                            if at_bottom {
+                                // User scrolled back to bottom - resume auto-scroll
+                                state.scroll_state = ScrollState::AutoScroll { offset };
+                            } else {
+                                // Update offset
+                                state.scroll_state = ScrollState::Manual { offset };
+                            }
+                        }
+                    }
+                }
+            }
+            Message::SelectScrollMode(mode) => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    use crate::view::traffic::ScrollModeOption;
+                    state.scroll_state = match mode {
+                        ScrollModeOption::Auto => ScrollState::AutoScroll { offset: 0.0 },
+                        ScrollModeOption::Locked => ScrollState::LockedToBottom,
+                    };
+                }
+            }
             Message::Tick => {
                 if let SessionState::Connected(state) = &mut self.state {
                     // Poll for session events
@@ -400,8 +507,9 @@ impl App {
                                     Message::PortsListed,
                                 );
                             }
-                            SessionEvent::Error(e) => {
-                                state.message = Some((e, MessageKind::Error));
+                            SessionEvent::Error(_e) => {
+                                // Errors are now shown via other means (toast, etc.)
+                                // No message field needed
                             }
                             _ => {}
                         }

@@ -8,6 +8,7 @@
 //! - `util/` - Generic, reusable utilities (text editing, config panels)
 //! - Top-level modules - Serial monitor specific display helpers
 
+pub mod descriptions;
 pub mod encoding;
 pub mod serial_config;
 pub mod util;
