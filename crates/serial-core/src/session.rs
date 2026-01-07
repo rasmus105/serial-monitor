@@ -252,8 +252,8 @@ impl SessionHandle {
         self.auto_save.as_ref().map(|h| h.file_path())
     }
 
-    /// Clone the command sender (for use by file sender)
-    pub(crate) fn clone_sender(&self) -> mpsc::Sender<SessionCommand> {
+    /// Clone the command sender (for use by file sender or GUI)
+    pub fn clone_command_sender(&self) -> mpsc::Sender<SessionCommand> {
         self.command_tx.clone()
     }
 

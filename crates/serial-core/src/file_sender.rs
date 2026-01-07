@@ -138,7 +138,7 @@ pub async fn send_file(
     });
     let (cancel_tx, cancel_rx) = mpsc::channel(1);
 
-    let session_clone = session.clone_sender();
+    let session_clone = session.clone_command_sender();
 
     tokio::spawn(async move {
         send_file_task(
