@@ -87,7 +87,8 @@ impl SearchState {
     /// Returns the slice of all matches.
     pub fn update(
         &mut self,
-        filtered_indices: &[usize],
+        filtered_indices: impl Iterator<Item = usize>,
+        is_filtered: bool,
         encoded: &VecDeque<String>,
     ) -> &[SearchMatch] {
         // Already up to date
@@ -103,12 +104,9 @@ impl SearchState {
 
         self.matches.clear();
 
-        // Determine which chunks to search
-        let is_filtered = !filtered_indices.is_empty();
-
         if is_filtered {
             // Search filtered chunks
-            for (visible_idx, &chunk_idx) in filtered_indices.iter().enumerate() {
+            for (visible_idx, chunk_idx) in filtered_indices.enumerate() {
                 if let Some(content) = encoded.get(chunk_idx) {
                     self.search_chunk(visible_idx, content);
                 }
@@ -302,7 +300,7 @@ mod tests {
         ]
         .into();
 
-        let matches = search.update(&[], &encoded);
+        let matches = search.update(std::iter::empty(), false, &encoded);
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].visible_index, 0);
         assert_eq!(matches[1].visible_index, 2);
@@ -322,7 +320,7 @@ mod tests {
 
         // Only search indices 1 and 2 (filtered view)
         let filtered_indices = vec![1, 2];
-        let matches = search.update(&filtered_indices, &encoded);
+        let matches = search.update(filtered_indices.into_iter(), true, &encoded);
 
         // Only one match - "hello again" at visible index 1
         assert_eq!(matches.len(), 1);
@@ -340,7 +338,7 @@ mod tests {
             "goodbye".to_string(),
         ]
         .into();
-        search.update(&[], &encoded);
+        search.update(std::iter::empty(), false, &encoded);
         assert_eq!(search.matches.len(), 1);
         assert_eq!(search.matches[0].visible_index, 0);
 
@@ -370,7 +368,7 @@ mod tests {
             "hello three".to_string(), // index 3, match at bytes 0-5
         ]
         .into();
-        search.update(&[], &encoded);
+        search.update(std::iter::empty(), false, &encoded);
         assert_eq!(search.matches.len(), 3);
         assert_eq!(search.matches[0].visible_index, 0);
         assert_eq!(search.matches[1].visible_index, 2);
@@ -405,7 +403,7 @@ mod tests {
             "hello two".to_string(),
         ]
         .into();
-        search.update(&[], &encoded);
+        search.update(std::iter::empty(), false, &encoded);
         
         // Navigate to first match
         search.goto_next();
@@ -434,7 +432,7 @@ mod tests {
             "test 3".to_string(),
         ]
         .into();
-        search.update(&[], &encoded);
+        search.update(std::iter::empty(), false, &encoded);
         assert_eq!(search.matches.len(), 3);
 
         // Navigate to match 2 (index 1)
@@ -471,7 +469,7 @@ mod tests {
             "x x".to_string(),      // chunk 3: 2 matches
         ]
         .into();
-        search.update(&[], &encoded);
+        search.update(std::iter::empty(), false, &encoded);
 
         // Verify total matches
         assert_eq!(search.matches.len(), 6);

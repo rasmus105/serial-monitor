@@ -107,6 +107,28 @@ const DEFAULT_MAX_SIZE: usize = 10 * 1024 * 1024;
 /// ```
 #[derive(Debug, bon::Builder)]
 pub struct DataBuffer {
+    // =========================================================================
+    // User-configurable settings
+    // =========================================================================
+    /// Current encoding setting
+    #[builder(default)]
+    pub encoding: Encoding,
+
+    /// Show TX chunks in filtered view
+    #[builder(default = true)]
+    pub show_tx: bool,
+
+    /// Show RX chunks in filtered view
+    #[builder(default = true)]
+    pub show_rx: bool,
+
+    /// Maximum buffer size in bytes
+    #[builder(default = DEFAULT_MAX_SIZE)]
+    pub max_size: usize,
+
+    // =========================================================================
+    // Internal state (not exposed in builder)
+    // =========================================================================
     /// Raw chunks - source of truth (hidden from frontends)
     #[builder(skip)]
     raw_chunks: VecDeque<RawChunk>,
@@ -115,25 +137,14 @@ pub struct DataBuffer {
     #[builder(skip)]
     encoded: VecDeque<String>,
 
-    /// Current encoding setting
-    #[builder(default)]
-    pub encoding: Encoding,
-
-    /// Indices into raw_chunks/encoded that pass the filter
+    /// Indices into raw_chunks/encoded that pass the filter.
+    /// Uses VecDeque for O(1) pop_front when dropping oldest chunks.
     #[builder(skip)]
-    filtered_indices: Vec<usize>,
+    filtered_indices: VecDeque<usize>,
 
     /// Filter pattern matcher
     #[builder(skip)]
     filter: PatternMatcher,
-
-    /// Show TX chunks
-    #[builder(default = true)]
-    pub show_tx: bool,
-
-    /// Show RX chunks
-    #[builder(default = true)]
-    pub show_rx: bool,
 
     /// Search state
     #[builder(skip)]
@@ -142,10 +153,6 @@ pub struct DataBuffer {
     /// Current total size in bytes (raw data)
     #[builder(skip)]
     current_size: usize,
-
-    /// Maximum size in bytes
-    #[builder(default = DEFAULT_MAX_SIZE)]
-    pub max_size: usize,
 
     /// Graph engine (lazy initialized)
     #[builder(skip)]
@@ -203,7 +210,7 @@ impl DataBuffer {
                 chunk_index // Same as raw index when no filter
             };
 
-            self.filtered_indices.push(chunk_index);
+            self.filtered_indices.push_back(chunk_index);
 
             // Incrementally add matches from this chunk instead of invalidating
             self.search
@@ -230,16 +237,16 @@ impl DataBuffer {
             self.encoded.pop_front();
 
             // Check if the dropped chunk was in the filtered view
-            let was_in_filtered_view = if let Some(first) = self.filtered_indices.first() {
+            let was_in_filtered_view = if let Some(first) = self.filtered_indices.front() {
                 *first == 0
             } else {
                 false
             };
 
             // Adjust filtered indices
-            // Remove index 0 if present, then subtract 1 from all remaining
+            // Remove index 0 if present (O(1) with VecDeque), then subtract 1 from all remaining
             if was_in_filtered_view {
-                self.filtered_indices.remove(0);
+                self.filtered_indices.pop_front();
             }
             for idx in &mut self.filtered_indices {
                 *idx -= 1;
@@ -425,7 +432,7 @@ impl DataBuffer {
         if self.is_filter_active() {
             for (i, raw) in self.raw_chunks.iter().enumerate() {
                 if self.chunk_passes_filter(raw, &self.encoded[i]) {
-                    self.filtered_indices.push(i);
+                    self.filtered_indices.push_back(i);
                 }
             }
         }
@@ -505,13 +512,12 @@ impl DataBuffer {
 
     /// Ensure search results are up-to-date (internal helper)
     fn ensure_search_updated(&mut self) {
-        let indices: &[usize] = if self.is_filter_active() {
-            &self.filtered_indices
-        } else {
-            &[]
-        };
-        let encoded = &self.encoded;
-        self.search.update(indices, encoded);
+        let is_filtered = self.is_filter_active();
+        self.search.update(
+            self.filtered_indices.iter().copied(),
+            is_filtered,
+            &self.encoded,
+        );
     }
 
     /// Get current match index
