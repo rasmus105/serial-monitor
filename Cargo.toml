@@ -26,6 +26,9 @@ ratatui = "0.29"
 crossterm = "0.29"
 unicode-width = "0.2"
 
+# GUI
+iced = "0.14"
+
 # Enum utilities
 strum = { version = "0.26", features = ["derive"] }
 
@@ -54,3 +57,4 @@ keepawake = "0.6"
 # Internal crates
 serial-core = { path = "crates/serial-core" }
 serial-tui = { path = "crates/serial-tui" }
+serial-gui = { path = "crates/serial-gui" }

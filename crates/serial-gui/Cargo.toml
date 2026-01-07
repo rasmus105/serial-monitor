@@ -1,0 +1,12 @@
+[package]
+name = "serial-gui"
+description = "GUI frontend for serial monitor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serial-core = { workspace = true }
+
+tokio = { workspace = true }
+iced = { workspace = true }
