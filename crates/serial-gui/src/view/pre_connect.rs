@@ -1,6 +1,6 @@
 //! Pre-connect view for port selection and configuration.
 
-use iced::widget::{button, column, container, pick_list, row, text, Space};
+use iced::widget::{button, column, container, pick_list, row, text, text_input, Space};
 use iced::{Alignment, Element, Fill, Length};
 use serial_core::ui::serial_config::{
     data_bits_display, flow_control_display, parity_display, stop_bits_display,
@@ -50,6 +50,22 @@ impl fmt::Display for FlowControlOption {
     }
 }
 
+// RX Chunking wrapper
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RxChunkingOption(pub usize);
+
+impl fmt::Display for RxChunkingOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            0 => write!(f, "None (Raw)"),
+            1 => write!(f, "LF (\\n)"),
+            2 => write!(f, "CR (\\r)"),
+            3 => write!(f, "CRLF (\\r\\n)"),
+            _ => write!(f, "Unknown"),
+        }
+    }
+}
+
 /// Render the pre-connect view.
 pub fn view(state: &PreConnectState) -> Element<'_, Message> {
     let title = text("Serial Monitor").size(28);
@@ -87,6 +103,11 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
     } else {
         text("")
     };
+
+    // Custom port path input (for PTYs, etc.)
+    let custom_port_input = text_input("Or enter custom path (e.g., /dev/pts/5)...", &state.custom_port_path)
+        .on_input(Message::CustomPortPathChanged)
+        .width(300);
 
     // Baud rate selection
     let baud_options: Vec<u32> = COMMON_BAUD_RATES.to_vec();
@@ -140,6 +161,15 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
     )
     .width(180);
 
+    // RX Chunking selection
+    let rx_chunking_options: Vec<RxChunkingOption> = (0..4).map(RxChunkingOption).collect();
+    let rx_chunking_picker = pick_list(
+        rx_chunking_options,
+        Some(RxChunkingOption(state.rx_chunking_index)),
+        |opt| Message::SelectRxChunking(opt.0),
+    )
+    .width(150);
+
     // Config rows
     let label_width = 100;
     let config_rows = column![
@@ -173,13 +203,20 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
         ]
         .spacing(10)
         .align_y(Alignment::Center),
+        row![
+            text("RX Chunking:").width(label_width),
+            rx_chunking_picker,
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
     ]
     .spacing(8);
 
-    // Connect button
+    // Connect button - enable if either port is selected or custom path is entered
+    let can_connect = state.selected_port.is_some() || !state.custom_port_path.is_empty();
     let connect_btn = if state.connecting {
         button(text("Connecting..."))
-    } else if state.selected_port.is_some() {
+    } else if can_connect {
         button(text("Connect")).on_press(Message::Connect)
     } else {
         button(text("Connect"))
@@ -198,6 +235,8 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
         text("Port:"),
         port_row,
         port_info,
+        Space::new().height(5),
+        custom_port_input,
         Space::new().height(15),
         config_rows,
         Space::new().height(20),

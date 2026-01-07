@@ -630,10 +630,10 @@ impl ConfigNav {
             .map(|f| f.kind.option_count())
             .unwrap_or(0);
 
-        if let EditMode::Dropdown { index } = &mut self.edit_mode {
-            if count > 0 {
-                *index = (*index + 1) % count;
-            }
+        if let EditMode::Dropdown { index } = &mut self.edit_mode
+            && count > 0
+        {
+            *index = (*index + 1) % count;
         }
     }
 
@@ -644,10 +644,10 @@ impl ConfigNav {
             .map(|f| f.kind.option_count())
             .unwrap_or(0);
 
-        if let EditMode::Dropdown { index } = &mut self.edit_mode {
-            if count > 0 {
-                *index = if *index == 0 { count - 1 } else { *index - 1 };
-            }
+        if let EditMode::Dropdown { index } = &mut self.edit_mode
+            && count > 0
+        {
+            *index = if *index == 0 { count - 1 } else { *index - 1 };
         }
     }
 
@@ -657,10 +657,10 @@ impl ConfigNav {
         sections: &[Section<T>],
         state: &mut T,
     ) -> ValidationResult {
-        if let EditMode::Dropdown { index } = self.edit_mode {
-            if let Some(field) = sections.nth_visible_field(state, self.selected) {
-                field.set_value(state, FieldValue::OptionIndex(index))?;
-            }
+        if let EditMode::Dropdown { index } = self.edit_mode
+            && let Some(field) = sections.nth_visible_field(state, self.selected)
+        {
+            field.set_value(state, FieldValue::OptionIndex(index))?;
         }
         self.edit_mode = EditMode::None;
         Ok(())

@@ -378,10 +378,10 @@ impl App {
 
         loop {
             // Check external shutdown flag (from signal handlers)
-            if let Some(ref flag) = shutdown_flag {
-                if flag.load(Ordering::SeqCst) {
-                    self.should_quit = true;
-                }
+            if let Some(ref flag) = shutdown_flag
+                && flag.load(Ordering::SeqCst)
+            {
+                self.should_quit = true;
             }
 
             // Force full terminal redraw if needed before drawing

@@ -1,6 +1,6 @@
 //! Traffic view for connected state - displays sent/received data.
 
-use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input, Space};
+use iced::widget::{button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Element, Fill};
 use serial_core::ui::encoding::{encoding_display, ENCODING_VARIANTS};
 use serial_core::{Direction, Encoding};
@@ -23,6 +23,23 @@ struct EncodingOption(Encoding);
 impl fmt::Display for EncodingOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", encoding_display(self.0))
+    }
+}
+
+// Wrapper type for line ending options in pick_list
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LineEndingOption(usize);
+
+impl fmt::Display for LineEndingOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self.0 {
+            0 => "None",
+            1 => "LF (\\n)",
+            2 => "CR (\\r)",
+            3 => "CRLF (\\r\\n)",
+            _ => "None",
+        };
+        write!(f, "{}", label)
     }
 }
 
@@ -65,6 +82,29 @@ pub fn view(state: &ConnectedState) -> Element<'_, Message> {
     .size(12)
     .color(Theme::MUTED);
 
+    // Filter controls toolbar
+    let show_tx_checkbox = checkbox(state.show_tx)
+        .label("TX")
+        .on_toggle(|_| Message::ToggleShowTx)
+        .text_size(14);
+    let show_rx_checkbox = checkbox(state.show_rx)
+        .label("RX")
+        .on_toggle(|_| Message::ToggleShowRx)
+        .text_size(14);
+    let clear_btn = button(text("Clear").size(14)).on_press(Message::ClearBuffer);
+
+    let filter_row = row![
+        text("Show:").size(14),
+        Space::new().width(8),
+        show_tx_checkbox,
+        Space::new().width(10),
+        show_rx_checkbox,
+        Space::new().width(Fill),
+        clear_btn,
+    ]
+    .padding([5, 10])
+    .align_y(Alignment::Center);
+
     // Data display
     let data_content: Element<'_, Message> = if state.display_lines.is_empty() {
         container(text("No data yet...").color(Theme::MUTED).size(14))
@@ -84,9 +124,9 @@ pub fn view(state: &ConnectedState) -> Element<'_, Message> {
                 };
                 let timestamp = format_timestamp(line.timestamp, state.session_start);
                 row![
-                    text(timestamp).color(Theme::MUTED).size(12),
+                    text(prefix).color(color).size(14),
                     Space::new().width(8),
-                    text(format!("[{}]", prefix)).color(color).size(14),
+                    text(timestamp).color(Theme::MUTED).size(12),
                     Space::new().width(10),
                     text(&line.content).size(14),
                 ]
@@ -97,8 +137,21 @@ pub fn view(state: &ConnectedState) -> Element<'_, Message> {
         scrollable(column(lines).spacing(2).padding(10))
             .height(Fill)
             .anchor_bottom()
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new()
+                    .width(8)
+                    .scroller_width(8),
+            ))
             .into()
     };
+
+    // Line ending selector
+    let line_ending_options: Vec<LineEndingOption> = (0..4).map(LineEndingOption).collect();
+    let current_line_ending = LineEndingOption(state.send_line_ending_index);
+    let line_ending_picker = pick_list(line_ending_options, Some(current_line_ending), |opt| {
+        Message::SelectSendLineEnding(opt.0)
+    })
+    .width(120);
 
     // Send input
     let send_input = text_input("Type to send...", &state.send_input)
@@ -108,10 +161,16 @@ pub fn view(state: &ConnectedState) -> Element<'_, Message> {
 
     let send_btn = button(text("Send")).on_press(Message::Send);
 
-    let send_row = row![send_input, send_btn]
-        .spacing(10)
-        .padding(10)
-        .align_y(Alignment::Center);
+    let send_row = row![
+        send_input,
+        Space::new().width(10),
+        line_ending_picker,
+        Space::new().width(10),
+        send_btn,
+    ]
+    .spacing(0)
+    .padding(10)
+    .align_y(Alignment::Center);
 
     // Message display
     let message_row = if let Some((msg, kind)) = &state.message {
@@ -127,6 +186,7 @@ pub fn view(state: &ConnectedState) -> Element<'_, Message> {
     let content = column![
         header,
         container(stats_text).width(Fill).center_x(Fill),
+        filter_row,
         container(data_content)
             .width(Fill)
             .height(Fill)

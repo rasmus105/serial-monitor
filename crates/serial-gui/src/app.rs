@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use iced::{Element, Subscription, Task};
 use serial_core::{
-    list_ports, DataBits, Encoding, FlowControl, Parity, PortInfo, SerialConfig, Session,
-    SessionEvent, SessionHandle, StopBits,
+    list_ports, ChunkingStrategy, DataBits, Encoding, FlowControl, LineDelimiter, Parity,
+    PortInfo, SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle, StopBits,
 };
 
 use crate::view::{pre_connect, traffic};
@@ -33,12 +33,30 @@ pub struct PreConnectState {
     pub ports: Vec<PortInfo>,
     /// Currently selected port.
     pub selected_port: Option<String>,
+    /// Custom port path input (for PTYs, etc).
+    pub custom_port_path: String,
     /// Serial configuration.
     pub config: SerialConfig,
+    /// RX chunking mode index (0=Raw, 1=LF, 2=CR, 3=CRLF).
+    pub rx_chunking_index: usize,
     /// Error message to display.
     pub error: Option<String>,
     /// Whether we're currently connecting.
     pub connecting: bool,
+}
+
+impl Default for PreConnectState {
+    fn default() -> Self {
+        Self {
+            ports: Vec::new(),
+            selected_port: None,
+            custom_port_path: String::new(),
+            config: SerialConfig::default(),
+            rx_chunking_index: 1, // Default to LF (like TUI)
+            error: None,
+            connecting: false,
+        }
+    }
 }
 
 /// State when connected to a serial port.
@@ -59,6 +77,12 @@ pub struct ConnectedState {
     pub send_input: String,
     /// Error/info message.
     pub message: Option<(String, MessageKind)>,
+    /// Whether to show TX data.
+    pub show_tx: bool,
+    /// Whether to show RX data.
+    pub show_rx: bool,
+    /// Line ending to append when sending (index: 0=None, 1=LF, 2=CR, 3=CRLF).
+    pub send_line_ending_index: usize,
 }
 
 /// A line to display in the traffic view.
@@ -76,6 +100,17 @@ pub enum MessageKind {
     Error,
 }
 
+/// Get the RX chunking strategy from index.
+pub fn rx_chunking_from_index(index: usize) -> ChunkingStrategy {
+    match index {
+        0 => ChunkingStrategy::Raw,
+        1 => ChunkingStrategy::with_delimiter(LineDelimiter::Newline),
+        2 => ChunkingStrategy::with_delimiter(LineDelimiter::Cr),
+        3 => ChunkingStrategy::with_delimiter(LineDelimiter::CrLf),
+        _ => ChunkingStrategy::Raw,
+    }
+}
+
 /// Application messages.
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -83,11 +118,13 @@ pub enum Message {
     RefreshPorts,
     PortsListed(Vec<PortInfo>),
     SelectPort(String),
+    CustomPortPathChanged(String),
     SelectBaudRate(u32),
     SelectDataBits(DataBits),
     SelectParity(Parity),
     SelectStopBits(StopBits),
     SelectFlowControl(FlowControl),
+    SelectRxChunking(usize),
     Connect,
     ConnectionComplete,
     ConnectionFailed(String),
@@ -99,6 +136,10 @@ pub enum Message {
     Send,
     SendComplete,
     SelectEncoding(Encoding),
+    ToggleShowTx,
+    ToggleShowRx,
+    SelectSendLineEnding(usize),
+    ClearBuffer,
     Tick,
 }
 
@@ -118,13 +159,7 @@ impl Default for App {
 impl App {
     pub fn new() -> (Self, Task<Message>) {
         let app = Self {
-            state: SessionState::PreConnect(PreConnectState {
-                ports: Vec::new(),
-                selected_port: None,
-                config: SerialConfig::default(),
-                error: None,
-                connecting: false,
-            }),
+            state: SessionState::PreConnect(PreConnectState::default()),
             pending_connection: Arc::new(Mutex::new(None)),
         };
         (app, Task::done(Message::RefreshPorts))
@@ -157,6 +192,15 @@ impl App {
             Message::SelectPort(port) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
                     state.selected_port = Some(port);
+                    state.custom_port_path.clear(); // Clear custom path when selecting from list
+                }
+            }
+            Message::CustomPortPathChanged(path) => {
+                if let SessionState::PreConnect(state) = &mut self.state {
+                    state.custom_port_path = path;
+                    if !state.custom_port_path.is_empty() {
+                        state.selected_port = None; // Clear selected when using custom path
+                    }
                 }
             }
             Message::SelectBaudRate(baud) => {
@@ -184,17 +228,34 @@ impl App {
                     state.config.flow_control = flow_control;
                 }
             }
+            Message::SelectRxChunking(index) => {
+                if let SessionState::PreConnect(state) = &mut self.state {
+                    state.rx_chunking_index = index;
+                }
+            }
             Message::Connect => {
                 if let SessionState::PreConnect(state) = &mut self.state {
-                    if let Some(port) = state.selected_port.clone() {
+                    // Determine port to connect to: custom path takes priority
+                    let port = if !state.custom_port_path.is_empty() {
+                        state.custom_port_path.clone()
+                    } else {
+                        state.selected_port.clone().unwrap_or_default()
+                    };
+
+                    if !port.is_empty() {
                         state.connecting = true;
                         state.error = None;
                         let config = state.config.clone();
+                        let rx_chunking = rx_chunking_from_index(state.rx_chunking_index);
                         let pending = Arc::clone(&self.pending_connection);
 
                         return Task::perform(
                             async move {
-                                match Session::connect(&port, config.clone()).await {
+                                let session_config = SessionConfig {
+                                    rx_chunking,
+                                    ..Default::default()
+                                };
+                                match Session::connect_with_config(&port, config.clone(), session_config).await {
                                     Ok(handle) => {
                                         // Store the result in the shared state
                                         let result = ConnectionResult {
@@ -228,6 +289,9 @@ impl App {
                         display_lines: Vec::new(),
                         send_input: String::new(),
                         message: Some(("Connected".to_string(), MessageKind::Info)),
+                        show_tx: true,
+                        show_rx: true,
+                        send_line_ending_index: 1, // Default to LF
                     });
                 }
             }
@@ -242,13 +306,7 @@ impl App {
             Message::Disconnect => {
                 if let SessionState::Connected(state) = std::mem::replace(
                     &mut self.state,
-                    SessionState::PreConnect(PreConnectState {
-                        ports: Vec::new(),
-                        selected_port: None,
-                        config: SerialConfig::default(),
-                        error: None,
-                        connecting: false,
-                    }),
+                    SessionState::PreConnect(PreConnectState::default()),
                 ) {
                     return Task::perform(
                         async move {
@@ -268,20 +326,28 @@ impl App {
                 }
             }
             Message::Send => {
-                if let SessionState::Connected(state) = &mut self.state {
-                    if !state.send_input.is_empty() {
-                        let data = state.send_input.clone().into_bytes();
-                        state.send_input.clear();
+                if let SessionState::Connected(state) = &mut self.state
+                    && !state.send_input.is_empty()
+                {
+                    let mut data = state.send_input.clone().into_bytes();
+                    state.send_input.clear();
 
-                        // Use the session handle's send method
-                        let sender = state.handle.clone_command_sender();
-                        return Task::perform(
-                            async move {
-                                let _ = sender.send(serial_core::SessionCommand::Send(data)).await;
-                            },
-                            |_| Message::SendComplete,
-                        );
+                    // Append line ending based on selection
+                    match state.send_line_ending_index {
+                        1 => data.push(b'\n'),        // LF
+                        2 => data.push(b'\r'),        // CR
+                        3 => data.extend_from_slice(b"\r\n"), // CRLF
+                        _ => {}                       // None
                     }
+
+                    // Use the session handle's send method
+                    let sender = state.handle.clone_command_sender();
+                    return Task::perform(
+                        async move {
+                            let _ = sender.send(serial_core::SessionCommand::Send(data)).await;
+                        },
+                        |_| Message::SendComplete,
+                    );
                 }
             }
             Message::SendComplete => {
@@ -294,6 +360,29 @@ impl App {
                     state.handle.buffer_mut().set_encoding(encoding);
                 }
             }
+            Message::ToggleShowTx => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    state.show_tx = !state.show_tx;
+                    state.handle.buffer_mut().set_show_tx(state.show_tx);
+                }
+            }
+            Message::ToggleShowRx => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    state.show_rx = !state.show_rx;
+                    state.handle.buffer_mut().set_show_rx(state.show_rx);
+                }
+            }
+            Message::SelectSendLineEnding(index) => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    state.send_line_ending_index = index;
+                }
+            }
+            Message::ClearBuffer => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    state.handle.buffer_mut().clear();
+                    state.display_lines.clear();
+                }
+            }
             Message::Tick => {
                 if let SessionState::Connected(state) = &mut self.state {
                     // Poll for session events
@@ -302,11 +391,9 @@ impl App {
                             SessionEvent::Disconnected { error } => {
                                 let msg = error.unwrap_or_else(|| "Disconnected".to_string());
                                 self.state = SessionState::PreConnect(PreConnectState {
-                                    ports: Vec::new(),
-                                    selected_port: None,
                                     config: state.config.clone(),
                                     error: Some(msg),
-                                    connecting: false,
+                                    ..Default::default()
                                 });
                                 return Task::perform(
                                     async { list_ports().unwrap_or_default() },

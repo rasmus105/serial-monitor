@@ -5,6 +5,7 @@ use iced::Color;
 /// Application color palette.
 pub struct Theme;
 
+#[allow(dead_code)]
 impl Theme {
     // Base colors
     pub const BG: Color = Color::from_rgb(0.1, 0.1, 0.1);

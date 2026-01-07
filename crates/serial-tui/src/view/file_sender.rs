@@ -468,9 +468,7 @@ impl FileSenderView {
     }
 
     pub fn tick(&mut self) -> Option<FileSenderAction> {
-        let Some(ref handle) = self.send_handle else {
-            return None;
-        };
+        let handle = self.send_handle.as_ref()?;
 
         let progress = handle.progress();
         let complete = progress.complete;
@@ -496,12 +494,12 @@ impl FileSenderView {
             self.config.is_sending = false;
 
             // Return error toast if there was an error (but not for cancellation)
-            if let Some(err) = error {
-                if err != "Cancelled" {
-                    return Some(FileSenderAction::Toast(Toast::error(format!(
-                        "File send failed: {err}"
-                    ))));
-                }
+            if let Some(err) = error
+                && err != "Cancelled"
+            {
+                return Some(FileSenderAction::Toast(Toast::error(format!(
+                    "File send failed: {err}"
+                ))));
             }
         }
 

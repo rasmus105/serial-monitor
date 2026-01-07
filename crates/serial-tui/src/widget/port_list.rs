@@ -181,18 +181,10 @@ impl PortListState {
 }
 
 /// Port list widget.
+#[derive(Default)]
 pub struct PortList<'a> {
     block: Option<Block<'a>>,
     focused: bool,
-}
-
-impl Default for PortList<'_> {
-    fn default() -> Self {
-        Self {
-            block: None,
-            focused: false,
-        }
-    }
 }
 
 impl<'a> PortList<'a> {

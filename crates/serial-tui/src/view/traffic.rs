@@ -1257,10 +1257,9 @@ impl TrafficView {
                 // If filter was toggled, adjust scroll to keep the same line centered
                 if toggling_filter 
                     && (self.config.show_tx != show_tx_was || self.config.show_rx != show_rx_was)
+                    && let Some(raw_idx) = middle_raw_index
                 {
-                    if let Some(raw_idx) = middle_raw_index {
-                        self.scroll_to_center_raw_index(raw_idx, handle);
-                    }
+                    self.scroll_to_center_raw_index(raw_idx, handle);
                 }
                 
                 // Check if file_save_enabled was toggled
@@ -1284,7 +1283,7 @@ impl TrafficView {
     /// Calculate the raw chunk index at the middle of the visible area.
     fn calculate_middle_raw_index(&self, handle: &SessionHandle) -> Option<usize> {
         let buffer = handle.buffer();
-        if buffer.len() == 0 {
+        if buffer.is_empty() {
             return None;
         }
 
