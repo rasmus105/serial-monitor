@@ -9,6 +9,7 @@ use ratatui::{
     style::Style,
     widgets::{Block, Paragraph, Widget},
 };
+use serial_core::ui::TextBuffer;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::Theme;
@@ -16,11 +17,9 @@ use crate::theme::Theme;
 /// A text input field.
 #[derive(Debug, Default, Clone)]
 pub struct TextInputState {
-    /// Current input content
-    pub content: String,
-    /// Cursor position (byte index)
-    cursor: usize,
-    /// Horizontal scroll offset
+    /// Text buffer handling content and cursor
+    buffer: TextBuffer,
+    /// Horizontal scroll offset (display width units)
     scroll: usize,
     /// Placeholder text
     pub placeholder: String,
@@ -48,267 +47,153 @@ impl TextInputState {
     }
 
     pub fn with_content(mut self, content: impl Into<String>) -> Self {
-        self.content = content.into();
-        self.cursor = self.content.len();
+        self.buffer.set_content(content);
         self
+    }
+
+    /// Get the current content.
+    pub fn content(&self) -> &str {
+        self.buffer.content()
     }
 
     /// Handle a key event. Returns true if the event was handled.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         // Handle Ctrl+<key> sequences
         if key.modifiers.contains(KeyModifiers::CONTROL) {
-            return match key.code {
+            let handled = match key.code {
                 KeyCode::Char('a') => {
-                    self.move_start();
+                    self.buffer.move_start();
                     true
                 }
                 KeyCode::Char('e') => {
-                    self.move_end();
+                    self.buffer.move_end();
                     true
                 }
                 KeyCode::Char('b') => {
-                    self.move_left();
+                    self.buffer.move_left();
                     true
                 }
                 KeyCode::Char('f') => {
-                    self.move_right();
+                    self.buffer.move_right();
                     true
                 }
                 KeyCode::Char('h') => {
-                    self.delete_char_before();
+                    self.buffer.delete_char_before();
                     true
                 }
                 KeyCode::Char('w') => {
-                    self.delete_word_before();
+                    self.buffer.delete_word_before();
                     true
                 }
                 KeyCode::Char('u') => {
-                    self.delete_to_start();
+                    self.buffer.delete_to_start();
                     true
                 }
                 KeyCode::Char('k') => {
-                    self.delete_to_end();
+                    self.buffer.delete_to_end();
                     true
                 }
                 KeyCode::Left => {
-                    self.move_word_left();
+                    self.buffer.move_word_left();
                     true
                 }
                 KeyCode::Right => {
-                    self.move_word_right();
+                    self.buffer.move_word_right();
                     true
                 }
                 _ => false,
             };
+            if handled {
+                self.clear_completion();
+            }
+            return handled;
         }
 
         // Handle Alt+<key> sequences
         if key.modifiers.contains(KeyModifiers::ALT) {
-            return match key.code {
+            let handled = match key.code {
                 KeyCode::Char('b') => {
-                    self.move_word_left();
+                    self.buffer.move_word_left();
                     true
                 }
                 KeyCode::Char('f') => {
-                    self.move_word_right();
+                    self.buffer.move_word_right();
                     true
                 }
                 _ => false,
             };
+            if handled {
+                self.clear_completion();
+            }
+            return handled;
         }
 
-        match key.code {
+        let handled = match key.code {
             KeyCode::Char(c) => {
-                self.insert_char(c);
+                self.buffer.insert_char(c);
                 true
             }
             KeyCode::Backspace => {
-                self.delete_char_before();
+                self.buffer.delete_char_before();
                 true
             }
             KeyCode::Delete => {
-                self.delete_char_after();
+                self.buffer.delete_char_after();
                 true
             }
             KeyCode::Left => {
-                self.move_left();
+                self.buffer.move_left();
                 true
             }
             KeyCode::Right => {
-                self.move_right();
+                self.buffer.move_right();
                 true
             }
             KeyCode::Home => {
-                self.move_start();
+                self.buffer.move_start();
                 true
             }
             KeyCode::End => {
-                self.move_end();
+                self.buffer.move_end();
                 true
             }
             _ => false,
+        };
+        if handled {
+            self.clear_completion();
         }
+        handled
     }
 
     /// Clear the input.
     pub fn clear(&mut self) {
-        self.content.clear();
-        self.cursor = 0;
+        self.buffer.clear();
         self.scroll = 0;
         self.completion = None;
     }
 
     /// Set the content and move cursor to end.
     pub fn set_content(&mut self, content: impl Into<String>) {
-        self.content = content.into();
-        self.cursor = self.content.len();
+        self.buffer.set_content(content);
         self.scroll = 0;
         self.completion = None;
     }
 
     /// Take the content and clear the input.
     pub fn take(&mut self) -> String {
-        let content = std::mem::take(&mut self.content);
-        self.cursor = 0;
         self.scroll = 0;
         self.completion = None;
-        content
+        self.buffer.take()
     }
 
     /// Get the cursor position (display width from start).
     pub fn cursor_display_pos(&self) -> usize {
-        self.content[..self.cursor].width()
-    }
-
-    fn insert_char(&mut self, c: char) {
-        self.clear_completion();
-        self.content.insert(self.cursor, c);
-        self.cursor += c.len_utf8();
-    }
-
-    fn delete_char_before(&mut self) {
-        if self.cursor > 0 {
-            self.clear_completion();
-            let prev = self.prev_char_boundary();
-            self.content.drain(prev..self.cursor);
-            self.cursor = prev;
-        }
-    }
-
-    fn delete_char_after(&mut self) {
-        if self.cursor < self.content.len() {
-            self.clear_completion();
-            let next = self.next_char_boundary();
-            self.content.drain(self.cursor..next);
-        }
-    }
-
-    fn move_left(&mut self) {
-        if self.cursor > 0 {
-            self.clear_completion();
-            self.cursor = self.prev_char_boundary();
-        }
-    }
-
-    fn move_right(&mut self) {
-        if self.cursor < self.content.len() {
-            self.clear_completion();
-            self.cursor = self.next_char_boundary();
-        }
-    }
-
-    fn move_start(&mut self) {
-        self.clear_completion();
-        self.cursor = 0;
-    }
-
-    fn move_end(&mut self) {
-        self.clear_completion();
-        self.cursor = self.content.len();
-    }
-
-    fn move_word_left(&mut self) {
-        // Skip whitespace, then skip word characters
-        while self.cursor > 0 {
-            let prev = self.prev_char_boundary();
-            let c = self.content[prev..self.cursor].chars().next().unwrap();
-            if !c.is_whitespace() {
-                break;
-            }
-            self.cursor = prev;
-        }
-        while self.cursor > 0 {
-            let prev = self.prev_char_boundary();
-            let c = self.content[prev..self.cursor].chars().next().unwrap();
-            if c.is_whitespace() {
-                break;
-            }
-            self.cursor = prev;
-        }
-    }
-
-    fn delete_word_before(&mut self) {
-        self.clear_completion();
-        let end = self.cursor;
-        self.move_word_left();
-        if self.cursor < end {
-            self.content.drain(self.cursor..end);
-        }
-    }
-
-    fn delete_to_start(&mut self) {
-        if self.cursor > 0 {
-            self.clear_completion();
-            self.content.drain(..self.cursor);
-            self.cursor = 0;
-        }
-    }
-
-    fn delete_to_end(&mut self) {
-        if self.cursor < self.content.len() {
-            self.clear_completion();
-            self.content.truncate(self.cursor);
-        }
-    }
-
-    fn move_word_right(&mut self) {
-        self.clear_completion();
-        // Skip word characters, then skip whitespace
-        while self.cursor < self.content.len() {
-            let c = self.content[self.cursor..].chars().next().unwrap();
-            if c.is_whitespace() {
-                break;
-            }
-            self.cursor = self.next_char_boundary();
-        }
-        while self.cursor < self.content.len() {
-            let c = self.content[self.cursor..].chars().next().unwrap();
-            if !c.is_whitespace() {
-                break;
-            }
-            self.cursor = self.next_char_boundary();
-        }
-    }
-
-    fn prev_char_boundary(&self) -> usize {
-        let mut idx = self.cursor.saturating_sub(1);
-        while idx > 0 && !self.content.is_char_boundary(idx) {
-            idx -= 1;
-        }
-        idx
-    }
-
-    fn next_char_boundary(&self) -> usize {
-        let mut idx = self.cursor + 1;
-        while idx < self.content.len() && !self.content.is_char_boundary(idx) {
-            idx += 1;
-        }
-        idx.min(self.content.len())
+        self.buffer.content()[..self.buffer.cursor()].width()
     }
 
     /// Update scroll to ensure cursor is visible.
     fn update_scroll(&mut self, width: usize) {
-        let cursor_pos = self.content[..self.cursor].width();
+        let cursor_pos = self.cursor_display_pos();
         if cursor_pos < self.scroll {
             self.scroll = cursor_pos;
         } else if cursor_pos >= self.scroll + width {
@@ -333,15 +218,14 @@ impl TextInputState {
         if let Some(ref mut state) = self.completion {
             if !state.matches.is_empty() {
                 state.index = (state.index + 1) % state.matches.len();
-                self.content = state.matches[state.index].clone();
-                self.cursor = self.content.len();
+                self.buffer.set_content(state.matches[state.index].clone());
                 return true;
             }
             return false;
         }
 
         // Start new completion
-        let matches = find_path_completions(&self.content);
+        let matches = find_path_completions(self.buffer.content());
         if matches.is_empty() {
             return false;
         }
@@ -349,8 +233,7 @@ impl TextInputState {
         if matches.len() == 1 {
             // Single match - complete it directly
             let completed = &matches[0];
-            self.content = completed.clone();
-            self.cursor = self.content.len();
+            self.buffer.set_content(completed.clone());
             // Store state so subsequent tabs can cycle (if it's a directory)
             self.completion = Some(PathCompletionState {
                 matches,
@@ -361,10 +244,9 @@ impl TextInputState {
 
         // Multiple matches - complete to common prefix first
         let common = longest_common_prefix(&matches);
-        if common.len() > self.content.len() {
+        if common.len() > self.buffer.len() {
             // We can extend the input
-            self.content = common;
-            self.cursor = self.content.len();
+            self.buffer.set_content(common);
             self.completion = Some(PathCompletionState {
                 matches,
                 index: 0,
@@ -377,8 +259,7 @@ impl TextInputState {
             });
             // Apply first match
             if let Some(ref state) = self.completion {
-                self.content = state.matches[0].clone();
-                self.cursor = self.content.len();
+                self.buffer.set_content(state.matches[0].clone());
             }
         }
         true
@@ -436,13 +317,14 @@ impl Widget for TextInput<'_> {
         // Update scroll
         self.state.update_scroll(inner.width as usize - 1);
 
-        let display_text = if self.state.content.is_empty() {
+        let content = self.state.buffer.content();
+        let display_text = if content.is_empty() {
             &self.state.placeholder
         } else {
-            &self.state.content
+            content
         };
 
-        let style = if self.state.content.is_empty() {
+        let style = if content.is_empty() {
             Theme::muted()
         } else {
             self.style
@@ -476,9 +358,8 @@ impl Widget for TextInput<'_> {
             .render(inner, buf);
 
         // Draw cursor if focused and not showing placeholder
-        if self.focused && !self.state.content.is_empty() {
-            let cursor_x =
-                self.state.content[..self.state.cursor].width() - self.state.scroll;
+        if self.focused && !content.is_empty() {
+            let cursor_x = self.state.cursor_display_pos() - self.state.scroll;
             if cursor_x < inner.width as usize {
                 let x = inner.x + cursor_x as u16;
                 let y = inner.y;

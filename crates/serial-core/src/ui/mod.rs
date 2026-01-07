@@ -3,14 +3,23 @@
 //! This module provides framework-agnostic utilities that help frontends
 //! display and configure data consistently without duplicating logic.
 //!
-//! These are presentation helpers that build on top of core types - they
-//! don't affect core functionality, only how data is displayed to users.
+//! ## Structure
+//!
+//! - `util/` - Generic, reusable utilities (text editing, config panels)
+//! - Top-level modules - Serial monitor specific display helpers
 
-pub mod config;
 pub mod encoding;
 pub mod serial_config;
+pub mod util;
 mod timestamp;
 mod units;
+
+// Re-export util submodules at ui level for ergonomic imports
+pub use util::config;
+pub use util::text;
+
+// Re-export commonly used types for convenience
+pub use util::{ConfigKeyResult, ConfigNav, EditMode, FieldDef, FieldValue, Section, TextBuffer};
 
 pub use timestamp::TimestampFormat;
 pub use units::{SizeUnit, TimeUnit};

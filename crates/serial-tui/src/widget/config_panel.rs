@@ -8,7 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
-use serial_core::ui::config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section};
+use serial_core::ui::config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section};
 
 use crate::theme::Theme;
 
@@ -34,17 +34,17 @@ pub use serial_core::ui::config::ConfigKeyResult;
 /// ```
 pub fn handle_config_key<T: 'static>(
     key: KeyEvent,
-    nav: &mut ConfigPanelNav,
+    nav: &mut ConfigNav,
     sections: &[Section<T>],
     config: &mut T,
 ) -> ConfigKeyResult {
     // Handle text editing mode
-    if nav.is_text_editing() {
+    if nav.edit_mode.is_text_input() {
         return handle_text_edit_key(key, nav, sections, config);
     }
 
     // Handle dropdown mode separately
-    if nav.is_dropdown_open() {
+    if nav.edit_mode.is_dropdown() {
         return handle_dropdown_key(key, nav, sections, config);
     }
 
@@ -66,8 +66,7 @@ pub fn handle_config_key<T: 'static>(
                     let _ = nav.toggle_current(sections, config);
                     return ConfigKeyResult::Changed;
                 } else if field.kind.is_select() {
-                    nav.dropdown_prev(sections, config);
-                    let _ = nav.apply_dropdown_selection(sections, config);
+                    let _ = nav.cycle_select_prev(sections, config);
                     return ConfigKeyResult::Changed;
                 }
             }
@@ -79,8 +78,7 @@ pub fn handle_config_key<T: 'static>(
                     let _ = nav.toggle_current(sections, config);
                     return ConfigKeyResult::Changed;
                 } else if field.kind.is_select() {
-                    nav.dropdown_next(sections, config);
-                    let _ = nav.apply_dropdown_selection(sections, config);
+                    let _ = nav.cycle_select_next(sections, config);
                     return ConfigKeyResult::Changed;
                 }
             }
@@ -102,8 +100,6 @@ pub fn handle_config_key<T: 'static>(
             ConfigKeyResult::Handled
         }
         _ => {
-            // Sync dropdown index even if key wasn't handled
-            nav.sync_dropdown_index(sections, config);
             ConfigKeyResult::NotHandled
         }
     }
@@ -112,7 +108,7 @@ pub fn handle_config_key<T: 'static>(
 /// Handle a key event when a dropdown is open.
 fn handle_dropdown_key<T: 'static>(
     key: KeyEvent,
-    nav: &mut ConfigPanelNav,
+    nav: &mut ConfigNav,
     sections: &[Section<T>],
     config: &mut T,
 ) -> ConfigKeyResult {
@@ -129,14 +125,12 @@ fn handle_dropdown_key<T: 'static>(
             ConfigKeyResult::Handled
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
-            let _ = nav.apply_dropdown_selection(sections, config);
-            nav.close_dropdown();
+            let _ = nav.apply_dropdown(sections, config);
             ConfigKeyResult::Changed
         }
         KeyCode::Esc | KeyCode::Char('q') => {
             nav.close_dropdown();
-            nav.sync_dropdown_index(sections, config);
-            ConfigKeyResult::DropdownClosed
+            ConfigKeyResult::EditClosed
         }
         _ => ConfigKeyResult::NotHandled,
     }
@@ -145,7 +139,7 @@ fn handle_dropdown_key<T: 'static>(
 /// Handle a key event when editing text.
 fn handle_text_edit_key<T: 'static>(
     key: KeyEvent,
-    nav: &mut ConfigPanelNav,
+    nav: &mut ConfigNav,
     sections: &[Section<T>],
     config: &mut T,
 ) -> ConfigKeyResult {
@@ -163,58 +157,79 @@ fn handle_text_edit_key<T: 'static>(
         }
         KeyCode::Esc => {
             nav.cancel_text_edit();
-            ConfigKeyResult::Handled
+            ConfigKeyResult::EditClosed
         }
         KeyCode::Char(c) => {
             // Handle Ctrl+<key> sequences
             if key.modifiers.contains(KeyModifiers::CONTROL) {
-                match c {
-                    'a' => {
-                        // Ctrl+A: not implemented (would need cursor tracking in ConfigPanelNav)
-                        ConfigKeyResult::Handled
+                if let Some(buf) = nav.edit_mode.text_buffer_mut() {
+                    match c {
+                        'a' => buf.move_start(),
+                        'e' => buf.move_end(),
+                        'u' => buf.delete_to_start(),
+                        'w' => buf.delete_word_before(),
+                        'k' => buf.delete_to_end(),
+                        _ => {}
                     }
-                    'e' => {
-                        // Ctrl+E: not implemented
-                        ConfigKeyResult::Handled
-                    }
-                    'u' => {
-                        // Ctrl+U: clear line
-                        nav.text_buffer_mut().clear();
-                        ConfigKeyResult::Handled
-                    }
-                    'w' => {
-                        // Ctrl+W: delete word backward
-                        let buf = nav.text_buffer_mut();
-                        let trimmed = buf.trim_end();
-                        if let Some(last_space) = trimmed.rfind(' ') {
-                            buf.truncate(last_space + 1);
-                        } else {
-                            buf.clear();
-                        }
-                        ConfigKeyResult::Handled
-                    }
-                    _ => ConfigKeyResult::Handled,
                 }
+                ConfigKeyResult::Handled
             } else {
                 // For numeric fields, only allow digits
-                if is_numeric {
-                    if c.is_ascii_digit() {
-                        nav.text_buffer_mut().push(c);
+                if let Some(buf) = nav.edit_mode.text_buffer_mut() {
+                    if is_numeric {
+                        if c.is_ascii_digit() {
+                            buf.insert_char(c);
+                        }
+                        // Silently ignore non-digit characters for numeric input
+                    } else {
+                        buf.insert_char(c);
                     }
-                    // Silently ignore non-digit characters for numeric input
-                } else {
-                    nav.text_buffer_mut().push(c);
                 }
                 ConfigKeyResult::Handled
             }
         }
         KeyCode::Backspace => {
-            nav.text_buffer_mut().pop();
+            if let Some(buf) = nav.edit_mode.text_buffer_mut() {
+                buf.delete_char_before();
+            }
             ConfigKeyResult::Handled
         }
         KeyCode::Delete => {
-            // For simplicity, same as backspace (we don't track cursor position)
-            nav.text_buffer_mut().pop();
+            if let Some(buf) = nav.edit_mode.text_buffer_mut() {
+                buf.delete_char_after();
+            }
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Left => {
+            if let Some(buf) = nav.edit_mode.text_buffer_mut() {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    buf.move_word_left();
+                } else {
+                    buf.move_left();
+                }
+            }
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Right => {
+            if let Some(buf) = nav.edit_mode.text_buffer_mut() {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    buf.move_word_right();
+                } else {
+                    buf.move_right();
+                }
+            }
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Home => {
+            if let Some(buf) = nav.edit_mode.text_buffer_mut() {
+                buf.move_start();
+            }
+            ConfigKeyResult::Handled
+        }
+        KeyCode::End => {
+            if let Some(buf) = nav.edit_mode.text_buffer_mut() {
+                buf.move_end();
+            }
             ConfigKeyResult::Handled
         }
         _ => ConfigKeyResult::Handled, // Consume all other keys when editing
@@ -225,7 +240,7 @@ fn handle_text_edit_key<T: 'static>(
 pub struct ConfigPanel<'a, T: 'static> {
     sections: &'a [Section<T>],
     data: &'a T,
-    nav: &'a ConfigPanelNav,
+    nav: &'a ConfigNav,
     focused: bool,
     block: Option<Block<'a>>,
     /// Whether to show config as read-only (grayed out).
@@ -235,7 +250,7 @@ pub struct ConfigPanel<'a, T: 'static> {
 }
 
 impl<'a, T: 'static> ConfigPanel<'a, T> {
-    pub fn new(sections: &'a [Section<T>], data: &'a T, nav: &'a ConfigPanelNav) -> Self {
+    pub fn new(sections: &'a [Section<T>], data: &'a T, nav: &'a ConfigNav) -> Self {
         Self {
             sections,
             data,
@@ -271,7 +286,8 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
     /// Get info needed to render dropdown overlay after the main panel.
     /// Returns (field_y, options, selected_index, disconnected) if dropdown is open.
     fn get_dropdown_info(&self, inner: Rect) -> Option<(u16, &'static [&'static str], usize, bool)> {
-        if !self.nav.dropdown_open || !self.focused {
+        let dropdown_index = self.nav.edit_mode.dropdown_index()?;
+        if !self.focused {
             return None;
         }
 
@@ -300,7 +316,7 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
                 if self.nav.selected == field_index
                     && let FieldKind::Select { options } = &field.kind
                 {
-                    return Some((y, options, self.nav.dropdown_index, self.disconnected));
+                    return Some((y, options, dropdown_index, self.disconnected));
                 }
 
                 y += 1;
@@ -388,8 +404,8 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 }
 
                 let is_selected = self.focused && self.nav.selected == field_index;
-                let is_dropdown_open = is_selected && self.nav.dropdown_open;
-                let is_text_editing = is_selected && self.nav.text_editing;
+                let is_dropdown_open = is_selected && self.nav.edit_mode.is_dropdown();
+                let is_text_editing = is_selected && self.nav.edit_mode.is_text_input();
                 let is_enabled = (field.enabled)(self.data);
                 let value = (field.get)(self.data);
 
@@ -439,7 +455,10 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     (FieldKind::TextInput { placeholder }, FieldValue::String(s)) => {
                         if is_text_editing {
                             // Show edit buffer with cursor indicator
-                            (format!("{}▏", self.nav.text_buffer()), None)
+                            let content = self.nav.edit_mode.text_buffer()
+                                .map(|b| b.content())
+                                .unwrap_or("");
+                            (format!("{}▏", content), None)
                         } else if s.is_empty() {
                             (format!("[{}]", placeholder), None)
                         } else {
@@ -449,21 +468,30 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     (FieldKind::NumericInput { .. }, FieldValue::Usize(n)) => {
                         if is_text_editing {
                             // Show edit buffer with cursor indicator
-                            (format!("{}▏", self.nav.text_buffer()), None)
+                            let content = self.nav.edit_mode.text_buffer()
+                                .map(|b| b.content())
+                                .unwrap_or("");
+                            (format!("{}▏", content), None)
                         } else {
                             (n.to_string(), None)
                         }
                     }
                     (FieldKind::NumericInput { .. }, FieldValue::Isize(n)) => {
                         if is_text_editing {
-                            (format!("{}▏", self.nav.text_buffer()), None)
+                            let content = self.nav.edit_mode.text_buffer()
+                                .map(|b| b.content())
+                                .unwrap_or("");
+                            (format!("{}▏", content), None)
                         } else {
                             (n.to_string(), None)
                         }
                     }
                     (FieldKind::NumericInput { .. }, FieldValue::Float(f)) => {
                         if is_text_editing {
-                            (format!("{}▏", self.nav.text_buffer()), None)
+                            let content = self.nav.edit_mode.text_buffer()
+                                .map(|b| b.content())
+                                .unwrap_or("");
+                            (format!("{}▏", content), None)
                         } else {
                             (format!("{:.2}", f), None)
                         }

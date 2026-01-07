@@ -16,7 +16,7 @@ use serial_core::{
     buffer::{PatternMode, SearchMatch},
     ui::{
         TimestampFormat,
-        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
+        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
         encoding::{ENCODING_DISPLAY_NAMES, ENCODING_VARIANTS},
     },
 };
@@ -56,7 +56,7 @@ pub struct TrafficView {
     /// Traffic config.
     pub config: TrafficConfig,
     /// Config panel navigation.
-    pub config_nav: ConfigPanelNav,
+    pub config_nav: ConfigNav,
     /// Session start time for relative timestamps.
     pub session_start: Option<SystemTime>,
     /// Last known visible height (for scroll bounds calculation).
@@ -396,7 +396,7 @@ impl TrafficView {
             dir_path_focused: false,
             dir_path_completion: CompletionState::default(),
             config: TrafficConfig::default(),
-            config_nav: ConfigPanelNav::new(),
+            config_nav: ConfigNav::new(),
             session_start: None,
             last_visible_height: 20, // Conservative default
             last_content_width: 80,  // Conservative default
@@ -1239,7 +1239,7 @@ impl TrafficView {
         let mut toggling_file_save = false;
         let file_save_was_enabled = self.config.file_save_enabled;
         
-        if is_toggle_key && !self.config_nav.is_dropdown_open()
+        if is_toggle_key && !self.config_nav.edit_mode.is_dropdown()
             && let Some(field) = self.config_nav.current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
         {
             // Handle text input field (directory)
@@ -1287,7 +1287,7 @@ impl TrafficView {
                 
                 Some(TrafficAction::RequestClear)
             }
-            ConfigKeyResult::DropdownClosed => Some(TrafficAction::RequestClear),
+            ConfigKeyResult::EditClosed => Some(TrafficAction::RequestClear),
             _ => None,
         }
     }
@@ -1344,7 +1344,7 @@ impl TrafficView {
                 self.search_input.handle_key(key);
                 
                 // Then update search pattern incrementally
-                let pattern = &self.search_input.content;
+                let pattern = self.search_input.content();
                 if !pattern.is_empty() {
                     let mode = if self.config.search_mode_index == 1 {
                         PatternMode::Regex
@@ -1382,7 +1382,7 @@ impl TrafficView {
                 self.filter_input.handle_key(key);
                 
                 // Then update filter pattern incrementally
-                let pattern = &self.filter_input.content;
+                let pattern = self.filter_input.content();
                 if !pattern.is_empty() {
                     let mode = if self.config.filter_mode_index == 1 {
                         PatternMode::Regex
@@ -1434,7 +1434,7 @@ impl TrafficView {
                     return None;
                 }
                 // Apply directory path and exit input mode
-                self.config.file_save_directory = self.dir_path_input.content.clone();
+                self.config.file_save_directory = self.dir_path_input.content().to_string();
                 self.dir_path_focused = false;
                 // Layout changed - request clear to avoid artifacts
                 return Some(TrafficAction::RequestClear);
@@ -1473,7 +1473,7 @@ impl TrafficView {
     }
 
     fn update_dir_path_completions(&mut self) {
-        let input = &self.dir_path_input.content;
+        let input = self.dir_path_input.content();
         let completions = find_path_completions(input);
         self.dir_path_completion.show(completions, CompletionKind::Argument);
     }

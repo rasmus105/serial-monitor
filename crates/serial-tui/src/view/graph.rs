@@ -18,7 +18,7 @@ use serial_core::{
     SerialConfig, SessionHandle,
     buffer::graph::{GraphMode, GraphParserType, Csv, Json, Regex, Smart},
     ui::{
-        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
+        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
     },
 };
 
@@ -70,7 +70,7 @@ pub struct GraphView {
     /// Graph config.
     pub config: GraphConfig,
     /// Config panel navigation.
-    pub config_nav: ConfigPanelNav,
+    pub config_nav: ConfigNav,
     /// Sub-focus within config panel (Settings vs Series).
     pub config_sub_focus: ConfigSubFocus,
     /// Reference time for converting SystemTime to seconds.
@@ -396,7 +396,7 @@ impl GraphView {
         Self {
             selected_series: 0,
             config: GraphConfig::default(),
-            config_nav: ConfigPanelNav::new(),
+            config_nav: ConfigNav::new(),
             config_sub_focus: ConfigSubFocus::default(),
             reference_time: None,
             cached_graph_data: Vec::new(),
@@ -898,7 +898,7 @@ impl GraphView {
     /// This is used to prevent global keybindings (like 'd' to disconnect)
     /// from being triggered while the user is typing in a text field.
     pub fn is_input_mode(&self) -> bool {
-        self.config_nav.is_text_editing() || self.config_nav.is_dropdown_open()
+        self.config_nav.edit_mode.is_text_input() || self.config_nav.edit_mode.is_dropdown()
     }
 
     pub fn handle_key(&mut self, key: KeyEvent, focus: Focus, handle: &SessionHandle) -> Option<GraphAction> {
@@ -939,11 +939,11 @@ impl GraphView {
             && handle.buffer().graph().map(|g| !g.series.is_empty()).unwrap_or(false);
         
         // Track if we were editing text before this key
-        let was_text_editing = self.config_nav.is_text_editing();
+        let was_text_editing = self.config_nav.edit_mode.is_text_input();
         
         // Handle Tab to switch between Settings and Series
         // Apply pending text changes when leaving text edit via Tab
-        if key.code == KeyCode::Tab && has_series && !self.config_nav.is_dropdown_open() {
+        if key.code == KeyCode::Tab && has_series && !self.config_nav.edit_mode.is_dropdown() {
             if was_text_editing {
                 // Apply text edit before switching
                 let _ = self.config_nav.apply_text_edit(GRAPH_CONFIG_SECTIONS, &mut self.config);
@@ -1110,7 +1110,7 @@ impl GraphView {
     /// content differs from what's been applied.
     pub fn has_pending_text_changes(&self) -> bool {
         // Only relevant when editing text
-        if !self.config_nav.is_text_editing() {
+        if !self.config_nav.edit_mode.is_text_input() {
             return false;
         }
         
@@ -1119,7 +1119,9 @@ impl GraphView {
             match field.id {
                 "regex_pattern" | "csv_columns" => {
                     // Compare current text buffer with the applied value
-                    let buffer = self.config_nav.text_buffer();
+                    let buffer = self.config_nav.edit_mode.text_buffer()
+                        .map(|b| b.content())
+                        .unwrap_or("");
                     match field.id {
                         "regex_pattern" => {
                             self.last_applied_parser

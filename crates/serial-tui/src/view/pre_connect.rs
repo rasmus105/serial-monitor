@@ -10,7 +10,7 @@ use ratatui::{
 use serial_core::{
     ChunkingStrategy, DataBits, LineDelimiter, SerialConfig, list_ports,
     ui::{
-        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
+        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
         serial_config::{
             COMMON_BAUD_RATES, DATA_BITS_VARIANTS, FLOW_CONTROL_VARIANTS, PARITY_VARIANTS,
             STOP_BITS_VARIANTS,
@@ -35,7 +35,7 @@ pub struct PreConnectView {
     /// Serial configuration.
     pub config: PreConnectConfig,
     /// Config panel navigation.
-    pub config_nav: ConfigPanelNav,
+    pub config_nav: ConfigNav,
     /// Search input state.
     pub search_input: TextInputState,
     /// Whether search input is focused.
@@ -331,7 +331,7 @@ impl PreConnectView {
         Self {
             port_list: PortListState::new(),
             config: PreConnectConfig::default(),
-            config_nav: ConfigPanelNav::new(),
+            config_nav: ConfigNav::new(),
             search_input: TextInputState::new().with_placeholder("Search ports..."),
             search_focused: false,
             dir_path_input: TextInputState::new().with_placeholder("Enter directory path..."),
@@ -491,7 +491,7 @@ impl PreConnectView {
             match key.code {
                 KeyCode::Enter => {
                     // Apply search and exit search mode
-                    let pattern = self.search_input.content.clone();
+                    let pattern = self.search_input.content().to_string();
                     self.port_list.set_search(&pattern);
                     self.search_focused = false;
                 }
@@ -504,7 +504,7 @@ impl PreConnectView {
                 _ => {
                     self.search_input.handle_key(key);
                     // Live search as user types
-                    self.port_list.set_search(&self.search_input.content);
+                    self.port_list.set_search(self.search_input.content());
                 }
             }
             return None;
@@ -521,7 +521,7 @@ impl PreConnectView {
                         return None;
                     }
                     // Apply directory path and exit input mode
-                    self.config.file_save_directory = self.dir_path_input.content.clone();
+                    self.config.file_save_directory = self.dir_path_input.content().to_string();
                     self.dir_path_focused = false;
                 }
                 KeyCode::Esc => {
@@ -622,7 +622,7 @@ impl PreConnectView {
 
     fn handle_config_key(&mut self, key: KeyEvent) -> Option<PreConnectAction> {
         // Handle dropdown mode separately
-        if self.config_nav.is_dropdown_open() {
+        if self.config_nav.edit_mode.is_dropdown() {
             return self.handle_dropdown_key(key);
         }
 
@@ -653,7 +653,7 @@ impl PreConnectView {
                             .dropdown_prev(PRECONNECT_CONFIG_SECTIONS, &self.config);
                         let _ = self
                             .config_nav
-                            .apply_dropdown_selection(PRECONNECT_CONFIG_SECTIONS, &mut self.config);
+                            .apply_dropdown(PRECONNECT_CONFIG_SECTIONS, &mut self.config);
                     }
                 }
             }
@@ -672,7 +672,7 @@ impl PreConnectView {
                             .dropdown_next(PRECONNECT_CONFIG_SECTIONS, &self.config);
                         let _ = self
                             .config_nav
-                            .apply_dropdown_selection(PRECONNECT_CONFIG_SECTIONS, &mut self.config);
+                            .apply_dropdown(PRECONNECT_CONFIG_SECTIONS, &mut self.config);
                     }
                 }
             }
@@ -700,9 +700,6 @@ impl PreConnectView {
             }
             _ => {}
         }
-        // Sync dropdown index with current selection
-        self.config_nav
-            .sync_dropdown_index(PRECONNECT_CONFIG_SECTIONS, &self.config);
         None
     }
 
@@ -723,15 +720,12 @@ impl PreConnectView {
                 // Apply selection and close dropdown
                 let _ = self
                     .config_nav
-                    .apply_dropdown_selection(PRECONNECT_CONFIG_SECTIONS, &mut self.config);
+                    .apply_dropdown(PRECONNECT_CONFIG_SECTIONS, &mut self.config);
                 self.config_nav.close_dropdown();
             }
             KeyCode::Esc | KeyCode::Char('q') => {
                 // Close dropdown without applying
                 self.config_nav.close_dropdown();
-                // Restore original value
-                self.config_nav
-                    .sync_dropdown_index(PRECONNECT_CONFIG_SECTIONS, &self.config);
             }
             _ => {}
         }
@@ -739,7 +733,7 @@ impl PreConnectView {
     }
 
     fn update_dir_path_completions(&mut self) {
-        let input = &self.dir_path_input.content;
+        let input = self.dir_path_input.content();
         let completions = find_path_completions(input);
         self.dir_path_completion.show(completions, CompletionKind::Argument);
     }

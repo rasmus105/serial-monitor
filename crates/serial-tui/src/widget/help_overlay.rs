@@ -7,7 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Tabs, Widget},
 };
-use serial_core::ui::config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled};
+use serial_core::ui::config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled};
 
 use crate::{
     keybind::{KeyContext, Keybind, all_keybinds},
@@ -505,7 +505,7 @@ pub struct HelpOverlayState {
     /// Global app settings.
     pub settings: AppSettings,
     /// Config panel navigation for settings tab.
-    pub settings_nav: ConfigPanelNav,
+    pub settings_nav: ConfigNav,
 }
 
 impl HelpOverlayState {
@@ -547,13 +547,13 @@ impl HelpOverlayState {
             }
             KeyCode::Tab | KeyCode::Char('l') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Don't switch tab if in dropdown
-                if self.tab != HelpTab::Settings || !self.settings_nav.dropdown_open {
+                if self.tab != HelpTab::Settings || !self.settings_nav.edit_mode.is_dropdown() {
                     self.next_tab();
                 }
             }
             KeyCode::BackTab | KeyCode::Char('h') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Don't switch tab if in dropdown
-                if self.tab != HelpTab::Settings || !self.settings_nav.dropdown_open {
+                if self.tab != HelpTab::Settings || !self.settings_nav.edit_mode.is_dropdown() {
                     self.prev_tab();
                 }
             }
@@ -594,7 +594,7 @@ impl HelpOverlayState {
 
     fn handle_settings_key(&mut self, key: KeyEvent) -> bool {
         // Handle dropdown mode
-        if self.settings_nav.dropdown_open {
+        if self.settings_nav.edit_mode.is_dropdown() {
             return self.handle_settings_dropdown_key(key);
         }
 
@@ -611,7 +611,7 @@ impl HelpOverlayState {
                         let _ = self.settings_nav.toggle_current(SETTINGS_SECTIONS, &mut self.settings);
                     } else if field.kind.is_select() {
                         self.settings_nav.dropdown_prev(SETTINGS_SECTIONS, &self.settings);
-                        let _ = self.settings_nav.apply_dropdown_selection(SETTINGS_SECTIONS, &mut self.settings);
+                        let _ = self.settings_nav.apply_dropdown(SETTINGS_SECTIONS, &mut self.settings);
                     }
                 }
             }
@@ -621,7 +621,7 @@ impl HelpOverlayState {
                         let _ = self.settings_nav.toggle_current(SETTINGS_SECTIONS, &mut self.settings);
                     } else if field.kind.is_select() {
                         self.settings_nav.dropdown_next(SETTINGS_SECTIONS, &self.settings);
-                        let _ = self.settings_nav.apply_dropdown_selection(SETTINGS_SECTIONS, &mut self.settings);
+                        let _ = self.settings_nav.apply_dropdown(SETTINGS_SECTIONS, &mut self.settings);
                     }
                 }
             }
@@ -636,7 +636,6 @@ impl HelpOverlayState {
             }
             _ => {}
         }
-        self.settings_nav.sync_dropdown_index(SETTINGS_SECTIONS, &self.settings);
         false
     }
 
@@ -649,13 +648,12 @@ impl HelpOverlayState {
                 self.settings_nav.dropdown_prev(SETTINGS_SECTIONS, &self.settings);
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
-                let _ = self.settings_nav.apply_dropdown_selection(SETTINGS_SECTIONS, &mut self.settings);
+                let _ = self.settings_nav.apply_dropdown(SETTINGS_SECTIONS, &mut self.settings);
                 self.settings_nav.close_dropdown();
                 return true; // Need redraw for dropdown close
             }
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.settings_nav.close_dropdown();
-                self.settings_nav.sync_dropdown_index(SETTINGS_SECTIONS, &self.settings);
                 return true; // Need redraw for dropdown close
             }
             _ => {}
@@ -773,7 +771,7 @@ fn render_shortcuts(area: Rect, buf: &mut Buffer, scroll: usize) {
     Paragraph::new(visible_lines).render(area, buf);
 }
 
-fn render_settings(area: Rect, buf: &mut Buffer, settings: &AppSettings, nav: &ConfigPanelNav) {
+fn render_settings(area: Rect, buf: &mut Buffer, settings: &AppSettings, nav: &ConfigNav) {
     // Instructions at top
     let help_lines = vec![
         Line::from(vec![

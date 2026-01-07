@@ -491,7 +491,7 @@ impl App {
         } else {
             Theme::keybind()
         });
-        let content = Span::raw(&self.command_input.content);
+        let content = Span::raw(self.command_input.content());
         let line = Line::from(vec![prefix, content]);
 
         Paragraph::new(line).render(inner, buf);
@@ -1270,7 +1270,7 @@ impl App {
     fn update_completions(&mut self) {
         use crate::widget::text_input::find_path_completions;
 
-        let input = &self.command_input.content;
+        let input = self.command_input.content();
         let trimmed = input.trim();
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
 
@@ -1332,7 +1332,7 @@ impl App {
     /// Apply the selected completion to the command input.
     fn apply_completion(&mut self) {
         if let Some(value) = self.completion.selected_value() {
-            let input = &self.command_input.content;
+            let input = self.command_input.content();
             let parts: Vec<&str> = input.split_whitespace().collect();
 
             // Use the stored kind to determine how to apply the completion

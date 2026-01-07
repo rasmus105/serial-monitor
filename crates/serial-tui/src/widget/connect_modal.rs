@@ -10,7 +10,7 @@ use ratatui::{
 use serial_core::{
     ChunkingStrategy, DataBits, LineDelimiter, SerialConfig,
     ui::{
-        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid, always_visible},
+        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid, always_visible},
         serial_config::{
             COMMON_BAUD_RATES, DATA_BITS_VARIANTS, FLOW_CONTROL_VARIANTS, PARITY_VARIANTS,
             STOP_BITS_VARIANTS,
@@ -321,7 +321,7 @@ pub struct ConnectModalState {
     /// Serial configuration.
     pub config: ConnectModalConfig,
     /// Config panel navigation.
-    pub nav: ConfigPanelNav,
+    pub nav: ConfigNav,
 }
 
 impl Default for ConnectModalState {
@@ -330,7 +330,7 @@ impl Default for ConnectModalState {
             visible: false,
             port_path: String::new(),
             config: ConnectModalConfig::default(),
-            nav: ConfigPanelNav::new(),
+            nav: ConfigNav::new(),
         }
     }
 }
@@ -341,7 +341,7 @@ impl ConnectModalState {
         self.visible = true;
         self.port_path = port_path;
         self.config = ConnectModalConfig::default();
-        self.nav = ConfigPanelNav::new();
+        self.nav = ConfigNav::new();
     }
 
     /// Hide the modal.
@@ -357,12 +357,12 @@ impl ConnectModalState {
         }
 
         // Handle text editing mode
-        if self.nav.is_text_editing() {
+        if self.nav.edit_mode.is_text_input() {
             return self.handle_text_edit_key(key);
         }
 
         // Handle dropdown mode separately
-        if self.nav.is_dropdown_open() {
+        if self.nav.edit_mode.is_dropdown() {
             return self.handle_dropdown_key(key);
         }
 
@@ -404,7 +404,7 @@ impl ConnectModalState {
                         let _ = self.nav.toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
                     } else if field.kind.is_select() {
                         self.nav.dropdown_prev(CONNECT_MODAL_SECTIONS, &self.config);
-                        let _ = self.nav.apply_dropdown_selection(CONNECT_MODAL_SECTIONS, &mut self.config);
+                        let _ = self.nav.apply_dropdown(CONNECT_MODAL_SECTIONS, &mut self.config);
                     }
                 }
                 ConnectModalAction::None
@@ -415,13 +415,12 @@ impl ConnectModalState {
                         let _ = self.nav.toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
                     } else if field.kind.is_select() {
                         self.nav.dropdown_next(CONNECT_MODAL_SECTIONS, &self.config);
-                        let _ = self.nav.apply_dropdown_selection(CONNECT_MODAL_SECTIONS, &mut self.config);
+                        let _ = self.nav.apply_dropdown(CONNECT_MODAL_SECTIONS, &mut self.config);
                     }
                 }
                 ConnectModalAction::None
             }
             _ => {
-                self.nav.sync_dropdown_index(CONNECT_MODAL_SECTIONS, &self.config);
                 ConnectModalAction::None
             }
         }
@@ -440,30 +439,25 @@ impl ConnectModalState {
             KeyCode::Char(c) => {
                 // Handle Ctrl+<key> sequences
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    match c {
-                        'u' => {
-                            // Ctrl+U: clear line
-                            self.nav.text_buffer_mut().clear();
+                    if let Some(buf) = self.nav.edit_mode.text_buffer_mut() {
+                        match c {
+                            'u' => buf.delete_to_start(),
+                            'w' => buf.delete_word_before(),
+                            'a' => buf.move_start(),
+                            'e' => buf.move_end(),
+                            'k' => buf.delete_to_end(),
+                            _ => {}
                         }
-                        'w' => {
-                            // Ctrl+W: delete word backward
-                            let buf = self.nav.text_buffer_mut();
-                            let trimmed = buf.trim_end();
-                            if let Some(last_space) = trimmed.rfind(' ') {
-                                buf.truncate(last_space + 1);
-                            } else {
-                                buf.clear();
-                            }
-                        }
-                        _ => {}
                     }
-                } else {
-                    self.nav.text_buffer_mut().push(c);
+                } else if let Some(buf) = self.nav.edit_mode.text_buffer_mut() {
+                    buf.insert_char(c);
                 }
                 ConnectModalAction::None
             }
             KeyCode::Backspace => {
-                self.nav.text_buffer_mut().pop();
+                if let Some(buf) = self.nav.edit_mode.text_buffer_mut() {
+                    buf.delete_char_before();
+                }
                 ConnectModalAction::None
             }
             _ => ConnectModalAction::None,
@@ -481,12 +475,11 @@ impl ConnectModalState {
                 self.nav.dropdown_prev(CONNECT_MODAL_SECTIONS, &self.config);
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
-                let _ = self.nav.apply_dropdown_selection(CONNECT_MODAL_SECTIONS, &mut self.config);
+                let _ = self.nav.apply_dropdown(CONNECT_MODAL_SECTIONS, &mut self.config);
                 self.nav.close_dropdown();
             }
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.nav.close_dropdown();
-                self.nav.sync_dropdown_index(CONNECT_MODAL_SECTIONS, &self.config);
             }
             _ => {}
         }

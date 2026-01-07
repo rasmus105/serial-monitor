@@ -16,7 +16,7 @@ use serial_core::{
     SessionHandle, send_file,
     ui::{
         SizeUnit, TimeUnit,
-        config::{ConfigPanelNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
+        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible},
     },
 };
 
@@ -49,7 +49,7 @@ pub struct FileSenderView {
     /// Sender config.
     pub config: FileSenderConfig,
     /// Config panel navigation.
-    pub config_nav: ConfigPanelNav,
+    pub config_nav: ConfigNav,
     /// Active send handle.
     pub send_handle: Option<FileSendHandle>,
     /// Latest progress.
@@ -449,7 +449,7 @@ impl FileSenderView {
             selected_path: None,
             preview: None,
             config: FileSenderConfig::default(),
-            config_nav: ConfigPanelNav::new(),
+            config_nav: ConfigNav::new(),
             send_handle: None,
             progress: None,
             scroll: 0,
@@ -459,8 +459,8 @@ impl FileSenderView {
 
     pub fn is_input_mode(&self) -> bool {
         self.file_path_focused
-            || self.config_nav.is_text_editing()
-            || self.config_nav.is_dropdown_open()
+            || self.config_nav.edit_mode.is_text_input()
+            || self.config_nav.edit_mode.is_dropdown()
     }
 
     pub fn is_sending(&self) -> bool {
@@ -1069,7 +1069,7 @@ impl FileSenderView {
             KeyCode::Enter | KeyCode::Char(' ')
         );
 
-        if is_toggle_key && !self.config_nav.is_dropdown_open()
+        if is_toggle_key && !self.config_nav.edit_mode.is_dropdown()
             && let Some(field) = self.config_nav.current_field(FILE_SENDER_CONFIG_SECTIONS, &self.config)
         {
             // Handle text input field (file path)
@@ -1117,7 +1117,7 @@ impl FileSenderView {
                     return None;
                 }
                 // Otherwise, confirm the path
-                let path_str = self.file_path_input.content.clone();
+                let path_str = self.file_path_input.content().to_string();
                 if !path_str.is_empty() {
                     let path = PathBuf::from(&path_str);
                     if path.exists() && path.is_file() {
@@ -1164,7 +1164,7 @@ impl FileSenderView {
     }
 
     fn update_file_path_completions(&mut self) {
-        let input = &self.file_path_input.content;
+        let input = self.file_path_input.content();
         let completions = find_path_completions(input);
         self.file_path_completion.show(completions, CompletionKind::Argument);
     }
