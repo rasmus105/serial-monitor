@@ -1234,6 +1234,10 @@ impl TrafficView {
         let mut toggling_file_save = false;
         let file_save_was_enabled = self.config.file_save_enabled;
         
+        // Track if we're about to toggle a filter option (show_tx, show_rx)
+        let mut toggling_filter = false;
+        let (show_tx_was, show_rx_was) = (self.config.show_tx, self.config.show_rx);
+        
         if is_toggle_key && !self.config_nav.edit_mode.is_dropdown()
             && let Some(field) = self.config_nav.current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
         {
@@ -1256,7 +1260,19 @@ impl TrafficView {
                 }
                 toggling_file_save = true;
             }
+            
+            // Check if toggling a filter option
+            if matches!(field.id, "show_tx" | "show_rx") && matches!(field.kind, FieldKind::Toggle) {
+                toggling_filter = true;
+            }
         }
+
+        // If toggling filter, capture the middle visible line's raw index before the change
+        let middle_raw_index = if toggling_filter {
+            self.calculate_middle_raw_index(handle)
+        } else {
+            None
+        };
 
         let result = handle_config_key(
             key,
@@ -1268,6 +1284,15 @@ impl TrafficView {
         match result {
             ConfigKeyResult::Changed => {
                 self.sync_config_to_buffer(handle);
+                
+                // If filter was toggled, adjust scroll to keep the same line centered
+                if toggling_filter 
+                    && (self.config.show_tx != show_tx_was || self.config.show_rx != show_rx_was)
+                {
+                    if let Some(raw_idx) = middle_raw_index {
+                        self.scroll_to_center_raw_index(raw_idx, handle);
+                    }
+                }
                 
                 // Check if file_save_enabled was toggled
                 if toggling_file_save && self.config.file_save_enabled != file_save_was_enabled {
@@ -1284,6 +1309,78 @@ impl TrafficView {
             }
             ConfigKeyResult::EditClosed => Some(TrafficAction::RequestClear),
             _ => None,
+        }
+    }
+    
+    /// Calculate the raw chunk index at the middle of the visible area.
+    fn calculate_middle_raw_index(&self, handle: &SessionHandle) -> Option<usize> {
+        let buffer = handle.buffer();
+        if buffer.len() == 0 {
+            return None;
+        }
+
+        let content_width = self.last_content_width.max(1);
+        let middle_display_line = self.scroll + self.last_visible_height / 2;
+
+        let middle_visible_idx = if self.config.wrap_text {
+            // In wrapped mode, find which chunk the middle display line belongs to
+            let mut acc = 0usize;
+            let mut found_idx = 0;
+            for (i, chunk) in buffer.chunks().enumerate() {
+                let content_display_width = chunk.encoded.width();
+                let num_lines = content_display_width.div_ceil(content_width).max(1);
+                let next_acc = acc + num_lines;
+                if acc <= middle_display_line && middle_display_line < next_acc {
+                    found_idx = i;
+                    break;
+                }
+                if next_acc > middle_display_line {
+                    break;
+                }
+                found_idx = i;
+                acc = next_acc;
+            }
+            found_idx
+        } else {
+            // In truncated mode, scroll position is the visible chunk index
+            (self.scroll + self.last_visible_height / 2).min(buffer.len().saturating_sub(1))
+        };
+
+        buffer.visible_to_raw_index(middle_visible_idx)
+    }
+
+    /// Scroll to center a raw chunk index in the view.
+    fn scroll_to_center_raw_index(&mut self, raw_index: usize, handle: &SessionHandle) {
+        let buffer = handle.buffer();
+        
+        // Find where this raw index ends up in the new filtered view
+        let visible_idx = match buffer.nearest_visible_from_raw(raw_index) {
+            Some(idx) => idx,
+            None => {
+                // Filtered view is empty
+                self.scroll = 0;
+                return;
+            }
+        };
+
+        let content_width = self.last_content_width.max(1);
+
+        if self.config.wrap_text {
+            // Calculate display line offset for this visible index
+            let mut display_line = 0;
+            for (i, chunk) in buffer.chunks().enumerate() {
+                if i == visible_idx {
+                    break;
+                }
+                let content_display_width = chunk.encoded.width();
+                let num_lines = content_display_width.div_ceil(content_width).max(1);
+                display_line += num_lines;
+            }
+            // Center it: position with half the visible height above
+            self.scroll = display_line.saturating_sub(self.last_visible_height / 2);
+        } else {
+            // In truncated mode, visible index = scroll position for centering
+            self.scroll = visible_idx.saturating_sub(self.last_visible_height / 2);
         }
     }
     
@@ -1324,6 +1421,58 @@ impl TrafficView {
                 // Confirm search and exit search mode
                 // Pattern is already set via incremental search
                 self.search_focused = false;
+
+                // Jump to the nearest match forward from the middle visible line
+                let buffer = handle.buffer();
+                let content_width = self.last_content_width.max(1);
+
+                // Calculate visible chunk index at middle of screen
+                let middle_display_line = self.scroll + self.last_visible_height / 2;
+
+                let (middle_chunk_idx, display_offsets) = if self.config.wrap_text {
+                    // Build display line offsets and find chunk at middle
+                    let mut offsets = Vec::with_capacity(buffer.len());
+                    let mut middle_idx = 0;
+                    let mut acc = 0usize;
+                    for (i, chunk) in buffer.chunks().enumerate() {
+                        offsets.push(acc);
+                        let content_display_width = chunk.encoded.width();
+                        let num_lines = content_display_width.div_ceil(content_width).max(1);
+                        let next_acc = acc + num_lines;
+                        // Check if middle_display_line falls within this chunk
+                        if acc <= middle_display_line && middle_display_line < next_acc {
+                            middle_idx = i;
+                        }
+                        acc = next_acc;
+                    }
+                    // Handle case where middle_display_line is past all content
+                    if middle_display_line >= acc && !offsets.is_empty() {
+                        middle_idx = offsets.len().saturating_sub(1);
+                    }
+                    (middle_idx, Some(offsets))
+                } else {
+                    // In truncated mode, scroll position = chunk index
+                    let middle_idx = (self.scroll + self.last_visible_height / 2).min(buffer.len().saturating_sub(1));
+                    (middle_idx, None)
+                };
+
+                drop(buffer);
+
+                // Jump to the first match at or after the middle chunk
+                let scroll_pos = handle.buffer_mut().goto_match_from(middle_chunk_idx).map(|idx| {
+                    if let Some(offsets) = &display_offsets {
+                        offsets.get(idx).copied().unwrap_or(0)
+                    } else {
+                        idx
+                    }
+                });
+
+                if let Some(pos) = scroll_pos {
+                    // Position match with 20% of visible height above it (like vim scrolloff)
+                    let offset = self.last_visible_height / 5;
+                    self.scroll = pos.saturating_sub(offset);
+                }
+
                 // Layout changed - request clear to avoid artifacts
                 return Some(TrafficAction::RequestClear);
             }
@@ -1366,13 +1515,25 @@ impl TrafficView {
                 return Some(TrafficAction::RequestClear);
             }
             KeyCode::Esc => {
+                // Capture middle line before clearing filter
+                let middle_raw_index = self.calculate_middle_raw_index(handle);
+                
                 self.filter_focused = false;
                 self.filter_input.clear();
                 handle.buffer_mut().clear_filter();
+                
+                // Restore scroll position to keep same line centered
+                if let Some(raw_idx) = middle_raw_index {
+                    self.scroll_to_center_raw_index(raw_idx, handle);
+                }
+                
                 // Layout changed - request clear to avoid artifacts
                 return Some(TrafficAction::RequestClear);
             }
             _ => {
+                // Capture middle line before filter change
+                let middle_raw_index = self.calculate_middle_raw_index(handle);
+                
                 // Handle the key input first
                 self.filter_input.handle_key(key);
                 
@@ -1388,6 +1549,11 @@ impl TrafficView {
                     let _ = handle.buffer_mut().set_filter_pattern(pattern, mode);
                 } else {
                     handle.buffer_mut().clear_filter();
+                }
+                
+                // Restore scroll position to keep same line centered
+                if let Some(raw_idx) = middle_raw_index {
+                    self.scroll_to_center_raw_index(raw_idx, handle);
                 }
             }
         }

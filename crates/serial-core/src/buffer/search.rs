@@ -253,6 +253,32 @@ impl SearchState {
         Some(self.matches[prev_idx].visible_index)
     }
 
+    /// Go to the first match at or after a visible index (wrapping)
+    ///
+    /// Finds the first match with `visible_index >= from_visible_index`.
+    /// If no match is found forward, wraps to the first match.
+    /// Returns the visible index of the new current match.
+    pub fn goto_match_from(&mut self, from_visible_index: usize) -> Option<usize> {
+        if self.matches.is_empty() {
+            return None;
+        }
+
+        // Binary search for first match at or after from_visible_index
+        let forward_idx = self
+            .matches
+            .partition_point(|m| m.visible_index < from_visible_index);
+
+        // If found a match forward, use it; otherwise wrap to first match
+        let match_idx = if forward_idx < self.matches.len() {
+            forward_idx
+        } else {
+            0
+        };
+
+        self.current_match = Some(match_idx);
+        Some(self.matches[match_idx].visible_index)
+    }
+
     // -------------------------------------------------------------------------
     // Status
     // -------------------------------------------------------------------------
@@ -482,5 +508,50 @@ mod tests {
 
         // Non-existent chunk
         assert_eq!(search.matches_in_chunk(99).len(), 0);
+    }
+
+    #[test]
+    fn goto_match_from_finds_forward() {
+        let mut search = SearchState::default();
+        search.set_pattern("hello", PatternMode::Normal).unwrap();
+
+        let encoded: VecDeque<String> = vec![
+            "hello one".to_string(),   // index 0, match
+            "goodbye".to_string(),     // index 1, no match
+            "hello two".to_string(),   // index 2, match
+            "world".to_string(),       // index 3, no match
+            "hello three".to_string(), // index 4, match
+        ]
+        .into();
+        search.update(std::iter::empty(), false, &encoded);
+        assert_eq!(search.matches.len(), 3);
+
+        // From index 0: should find match at index 0
+        assert_eq!(search.goto_match_from(0), Some(0));
+        assert_eq!(search.current_match, Some(0));
+
+        // From index 1: should find match at index 2
+        assert_eq!(search.goto_match_from(1), Some(2));
+        assert_eq!(search.current_match, Some(1));
+
+        // From index 3: should find match at index 4
+        assert_eq!(search.goto_match_from(3), Some(4));
+        assert_eq!(search.current_match, Some(2));
+
+        // From index 5 (past all matches): should wrap to index 0
+        assert_eq!(search.goto_match_from(5), Some(0));
+        assert_eq!(search.current_match, Some(0));
+    }
+
+    #[test]
+    fn goto_match_from_empty_matches() {
+        let mut search = SearchState::default();
+        search.set_pattern("notfound", PatternMode::Normal).unwrap();
+
+        let encoded: VecDeque<String> = vec!["hello".to_string(), "world".to_string()].into();
+        search.update(std::iter::empty(), false, &encoded);
+
+        assert_eq!(search.goto_match_from(0), None);
+        assert_eq!(search.current_match, None);
     }
 }

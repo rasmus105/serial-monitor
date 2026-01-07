@@ -340,6 +340,77 @@ impl DataBuffer {
         self.raw_chunks.len()
     }
 
+    /// Convert visible index to raw chunk index
+    ///
+    /// When filtering is active, visible indices map to a subset of raw indices.
+    /// When no filter is active, visible index equals raw index.
+    pub fn visible_to_raw_index(&self, visible_index: usize) -> Option<usize> {
+        if self.is_filter_active() {
+            self.filtered_indices.get(visible_index).copied()
+        } else if visible_index < self.raw_chunks.len() {
+            Some(visible_index)
+        } else {
+            None
+        }
+    }
+
+    /// Convert raw chunk index to visible index
+    ///
+    /// When filtering is active, returns the position in the filtered view,
+    /// or None if the chunk doesn't pass the filter.
+    /// When no filter is active, raw index equals visible index.
+    pub fn raw_to_visible_index(&self, raw_index: usize) -> Option<usize> {
+        if raw_index >= self.raw_chunks.len() {
+            return None;
+        }
+
+        if self.is_filter_active() {
+            // Binary search for raw_index in filtered_indices
+            self.filtered_indices
+                .binary_search_by(|&idx| idx.cmp(&raw_index))
+                .ok()
+        } else {
+            Some(raw_index)
+        }
+    }
+
+    /// Find the nearest visible index at or after a raw index
+    ///
+    /// Useful for finding where to scroll after a filter change.
+    /// Returns None only if filtered view is empty.
+    pub fn nearest_visible_from_raw(&self, raw_index: usize) -> Option<usize> {
+        if !self.is_filter_active() {
+            // No filter: raw index = visible index, clamp to bounds
+            return if self.raw_chunks.is_empty() {
+                None
+            } else {
+                Some(raw_index.min(self.raw_chunks.len() - 1))
+            };
+        }
+
+        if self.filtered_indices.is_empty() {
+            return None;
+        }
+
+        // Find first filtered index >= raw_index
+        let pos = self
+            .filtered_indices
+            .binary_search_by(|&idx| idx.cmp(&raw_index));
+
+        match pos {
+            Ok(idx) => Some(idx), // Exact match
+            Err(idx) => {
+                // idx is where raw_index would be inserted
+                if idx < self.filtered_indices.len() {
+                    Some(idx) // First index after raw_index
+                } else {
+                    // raw_index is past all filtered chunks, return last visible
+                    Some(self.filtered_indices.len() - 1)
+                }
+            }
+        }
+    }
+
     /// Get current buffer size in bytes
     pub fn size(&self) -> usize {
         self.current_size
@@ -508,6 +579,15 @@ impl DataBuffer {
         // Ensure matches are up-to-date before navigating
         self.ensure_search_updated();
         self.search.goto_prev()
+    }
+
+    /// Go to the first match at or after a visible index (wrapping)
+    ///
+    /// Finds the first match with `visible_index >= from_visible_index`.
+    /// If no match is found forward, wraps to the first match.
+    pub fn goto_match_from(&mut self, from_visible_index: usize) -> Option<usize> {
+        self.ensure_search_updated();
+        self.search.goto_match_from(from_visible_index)
     }
 
     /// Ensure search results are up-to-date (internal helper)
