@@ -290,9 +290,22 @@ impl Session {
         // Flush buffers to discard any stale data from before we connected.
         port.clear(ClearBuffer::All)?;
 
-        let buffer = DataBuffer::builder()
-            .max_size(session_config.buffer_size)
-            .build();
+        // Extract delimiter bytes from chunking strategy for display stripping
+        let delimiter = session_config
+            .rx_chunking
+            .delimiter_bytes()
+            .map(|b| b.to_vec());
+
+        let buffer = if let Some(delim) = delimiter {
+            DataBuffer::builder()
+                .max_size(session_config.buffer_size)
+                .delimiter(delim)
+                .build()
+        } else {
+            DataBuffer::builder()
+                .max_size(session_config.buffer_size)
+                .build()
+        };
         let buffer = Arc::new(RwLock::new(buffer));
 
         let (event_tx, event_rx) = mpsc::channel(256);

@@ -90,6 +90,8 @@ pub struct TrafficSettings {
     pub show_tx: bool,
     /// Show RX data.
     pub show_rx: bool,
+    /// Show delimiter escape sequences (e.g., \n, \r\n).
+    pub show_delimiter: bool,
     /// Show timestamps.
     pub show_timestamps: bool,
     /// Timestamp format index.
@@ -120,6 +122,7 @@ impl Default for TrafficSettings {
             encoding_index: 0, // UTF-8
             show_tx: true,
             show_rx: true,
+            show_delimiter: true,
             show_timestamps: true,
             timestamp_format_index: 0, // Relative
             auto_scroll: true,

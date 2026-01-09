@@ -86,6 +86,10 @@ pub struct TrafficConfig {
     pub encoding_index: usize,
     pub show_tx: bool,
     pub show_rx: bool,
+    pub show_delimiter: bool,
+    /// Whether we're in raw mode (no delimiter). Used to gray out show_delimiter toggle.
+    /// This is synced from the buffer, not persisted.
+    pub is_raw_mode: bool,
     pub show_timestamps: bool,
     pub timestamp_format_index: usize,
     pub auto_scroll: bool,
@@ -106,6 +110,8 @@ impl Default for TrafficConfig {
             encoding_index: 0, // UTF-8
             show_tx: true,
             show_rx: true,
+            show_delimiter: true,
+            is_raw_mode: true, // Default to raw mode (no delimiter)
             show_timestamps: true,
             timestamp_format_index: 0, // Relative
             auto_scroll: true,
@@ -277,6 +283,22 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                 parent_id: None,
                 validate: always_valid,
             },
+            FieldDef {
+                id: "show_delimiter",
+                label: "Delimiter",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.show_delimiter),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.show_delimiter = b;
+                    }
+                },
+                visible: always_visible,
+                // Disabled (grayed out) in raw mode since there's no delimiter to show/hide
+                enabled: |c| !c.is_raw_mode,
+                parent_id: None,
+                validate: always_valid,
+            },
         ],
     },
     Section {
@@ -396,6 +418,14 @@ impl TrafficView {
         // Sync show_tx/show_rx
         buffer.set_show_tx(self.config.show_tx);
         buffer.set_show_rx(self.config.show_rx);
+
+        // Sync show_delimiter
+        buffer.set_show_delimiter(self.config.show_delimiter);
+    }
+
+    /// Update is_raw_mode from the buffer (call after session creation or when needed).
+    pub fn update_raw_mode_from_buffer(&mut self, handle: &SessionHandle) {
+        self.config.is_raw_mode = handle.buffer().is_raw_mode();
     }
 
     pub fn draw(
@@ -1915,6 +1945,7 @@ impl TrafficView {
         self.config.encoding_index = settings.encoding_index;
         self.config.show_tx = settings.show_tx;
         self.config.show_rx = settings.show_rx;
+        self.config.show_delimiter = settings.show_delimiter;
         self.config.show_timestamps = settings.show_timestamps;
         self.config.timestamp_format_index = settings.timestamp_format_index;
         self.config.auto_scroll = settings.auto_scroll;
@@ -1934,6 +1965,7 @@ impl TrafficView {
             encoding_index: self.config.encoding_index,
             show_tx: self.config.show_tx,
             show_rx: self.config.show_rx,
+            show_delimiter: self.config.show_delimiter,
             show_timestamps: self.config.show_timestamps,
             timestamp_format_index: self.config.timestamp_format_index,
             auto_scroll: self.config.auto_scroll,

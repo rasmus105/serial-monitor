@@ -1260,6 +1260,8 @@ impl App {
                 // Apply global pattern matching settings (these override traffic settings)
                 traffic.config.search_mode_index = self.help.settings.search_mode_index;
                 traffic.config.filter_mode_index = self.help.settings.filter_mode_index;
+                // Update is_raw_mode from the buffer (for graying out delimiter toggle)
+                traffic.update_raw_mode_from_buffer(&handle);
 
                 // Create keep-awake handle and enable if setting is on
                 let mut keep_awake_handle = KeepAwake::new();

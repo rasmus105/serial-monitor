@@ -64,7 +64,7 @@ mod search;
 // Public exports
 pub use chunk::{ChunkView, Direction};
 pub use encoding::{BinaryFormat, Encoding, HexFormat};
-pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8};
+pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_stripped, encode_utf8};
 pub use file_saver::{
     AutoSaveConfig, DirectionFilter, SaveFormat, SaveScope, UserSaveConfig, default_cache_directory,
 };
@@ -126,6 +126,16 @@ pub struct DataBuffer {
     #[builder(default = DEFAULT_MAX_SIZE)]
     pub max_size: usize,
 
+    /// Show delimiter escape sequences in encoded output.
+    /// When false, the delimiter bytes are stripped from encoded strings.
+    /// Only affects UTF-8 and ASCII encodings.
+    #[builder(default = true)]
+    pub show_delimiter: bool,
+
+    /// Delimiter bytes to optionally strip from encoded output.
+    /// None means raw mode (no delimiter), Some contains the delimiter bytes.
+    pub delimiter: Option<Vec<u8>>,
+
     // =========================================================================
     // Internal state (not exposed in builder)
     // =========================================================================
@@ -181,7 +191,7 @@ impl DataBuffer {
     pub fn push(&mut self, data: Vec<u8>, direction: Direction, timestamp: SystemTime) {
         let size = data.len();
 
-        let encoded_str = encode(&data, self.encoding);
+        let encoded_str = self.encode_chunk(&data);
 
         let raw = RawChunk {
             data,
@@ -434,9 +444,18 @@ impl DataBuffer {
     fn reencode_all(&mut self) {
         self.encoded.clear();
         for raw in &self.raw_chunks {
-            self.encoded.push_back(encode(&raw.data, self.encoding));
+            self.encoded.push_back(self.encode_chunk(&raw.data));
         }
         self.rebuild_filter();
+    }
+
+    /// Encode a chunk using current settings (encoding, show_delimiter, delimiter).
+    fn encode_chunk(&self, data: &[u8]) -> String {
+        if self.show_delimiter {
+            encode(data, self.encoding)
+        } else {
+            encode_stripped(data, self.encoding, self.delimiter.as_deref())
+        }
     }
 
     // =========================================================================
@@ -525,6 +544,22 @@ impl DataBuffer {
             self.show_rx = show;
             self.rebuild_filter();
         }
+    }
+
+    /// Set show_delimiter and re-encode if needed
+    pub fn set_show_delimiter(&mut self, show: bool) {
+        if self.show_delimiter != show {
+            self.show_delimiter = show;
+            self.reencode_all();
+        }
+    }
+
+    /// Check if raw mode is active (no delimiter configured).
+    ///
+    /// When in raw mode, the show_delimiter toggle has no effect and should
+    /// be displayed as disabled/grayed out in the UI.
+    pub fn is_raw_mode(&self) -> bool {
+        self.delimiter.is_none()
     }
 
     // =========================================================================

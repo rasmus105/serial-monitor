@@ -93,6 +93,19 @@ pub fn encode(data: &[u8], encoding: Encoding) -> String {
     }
 }
 
+/// Encode raw bytes, optionally stripping a trailing delimiter.
+///
+/// When `delimiter` is `Some`, the delimiter bytes are removed from the end
+/// of the data before encoding (if present). This is useful for hiding
+/// line endings like `\n` or `\r\n` from the display.
+pub fn encode_stripped(data: &[u8], encoding: Encoding, delimiter: Option<&[u8]>) -> String {
+    let data = match delimiter {
+        Some(delim) if data.ends_with(delim) => &data[..data.len() - delim.len()],
+        _ => data,
+    };
+    encode(data, encoding)
+}
+
 /// Encode bytes as UTF-8, replacing invalid sequences with replacement character.
 ///
 /// Control characters are shown as escape sequences (e.g., `\n`, `\r`, `\t`)
@@ -425,6 +438,45 @@ mod tests {
         assert_eq!(
             encode(&[0x48], Encoding::Binary(BinaryFormat::default())),
             "01001000"
+        );
+    }
+
+    #[test]
+    fn encode_stripped_removes_trailing_delimiter() {
+        // LF delimiter
+        assert_eq!(
+            encode_stripped(b"Hello\n", Encoding::Utf8, Some(b"\n")),
+            "Hello"
+        );
+        // CRLF delimiter
+        assert_eq!(
+            encode_stripped(b"Hello\r\n", Encoding::Utf8, Some(b"\r\n")),
+            "Hello"
+        );
+        // CR delimiter
+        assert_eq!(
+            encode_stripped(b"Hello\r", Encoding::Ascii, Some(b"\r")),
+            "Hello"
+        );
+        // No delimiter at end - should not strip anything
+        assert_eq!(
+            encode_stripped(b"Hello", Encoding::Utf8, Some(b"\n")),
+            "Hello"
+        );
+        // Delimiter in middle - should not strip (only trailing)
+        assert_eq!(
+            encode_stripped(b"Hello\nWorld", Encoding::Utf8, Some(b"\n")),
+            "Hello\\nWorld"
+        );
+        // None delimiter - no stripping
+        assert_eq!(
+            encode_stripped(b"Hello\n", Encoding::Utf8, None),
+            "Hello\\n"
+        );
+        // Works with Hex encoding too
+        assert_eq!(
+            encode_stripped(b"Hi\n", Encoding::Hex(HexFormat::default()), Some(b"\n")),
+            "48 69"
         );
     }
 }

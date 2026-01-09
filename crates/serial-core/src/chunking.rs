@@ -53,6 +53,21 @@ impl ChunkingStrategy {
         }
         self
     }
+
+    /// Get the delimiter bytes, if any.
+    ///
+    /// Returns `Some(&[u8])` for line-delimited mode, `None` for raw mode.
+    pub fn delimiter_bytes(&self) -> Option<&[u8]> {
+        match self {
+            ChunkingStrategy::Raw => None,
+            ChunkingStrategy::LineDelimited { delimiter, .. } => Some(delimiter.as_bytes()),
+        }
+    }
+
+    /// Check if this is raw mode (no delimiter-based chunking).
+    pub fn is_raw(&self) -> bool {
+        matches!(self, ChunkingStrategy::Raw)
+    }
 }
 
 /// Line delimiter options
