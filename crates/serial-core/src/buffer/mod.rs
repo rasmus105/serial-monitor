@@ -605,6 +605,11 @@ impl DataBuffer {
         self.search.current_match
     }
 
+    /// Get the number of search matches (without updating search)
+    pub fn match_count(&self) -> usize {
+        self.search.matches.len()
+    }
+
     /// Get current match
     pub fn current_match(&self) -> Option<&SearchMatch> {
         self.search.current_match()

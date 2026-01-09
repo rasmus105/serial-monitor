@@ -603,13 +603,24 @@ impl TrafficView {
             ""
         };
         let save_indicator = if buffer.is_saving() { " [SAVING]" } else { "" };
+        let search_info = if buffer.search_pattern().is_some() {
+            let match_total = buffer.match_count();
+            match buffer.current_match_index() {
+                Some(idx) => format!(" [{}/{}]", idx + 1, match_total),
+                None if match_total > 0 => format!(" [-/{}]", match_total),
+                None => String::new(),
+            }
+        } else {
+            String::new()
+        };
         // Cap displayed scroll position at content max (don't show padding in title)
         let display_scroll = scroll.min(max_scroll_content);
         let block = block.title(format!(
-            " Traffic [{}/{}]{}{}{} ",
+            " Traffic [{}/{}]{}{}{}{} ",
             display_scroll + 1,
             total.max(1),
             filter_info,
+            search_info,
             lock_indicator,
             save_indicator,
         ));
@@ -733,11 +744,22 @@ impl TrafficView {
             ""
         };
         let save_indicator = if buffer.is_saving() { " [SAVING]" } else { "" };
+        let search_info = if buffer.search_pattern().is_some() {
+            let match_total = buffer.match_count();
+            match buffer.current_match_index() {
+                Some(idx) => format!(" [{}/{}]", idx + 1, match_total),
+                None if match_total > 0 => format!(" [-/{}]", match_total),
+                None => String::new(),
+            }
+        } else {
+            String::new()
+        };
         let block = block.title(format!(
-            " Traffic [{}/{}]{}{}{} ",
+            " Traffic [{}/{}]{}{}{}{} ",
             display_scroll + 1,
             total_display_lines.max(1),
             filter_info,
+            search_info,
             lock_indicator,
             save_indicator,
         ));
