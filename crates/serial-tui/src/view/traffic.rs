@@ -33,7 +33,7 @@ use crate::{
     theme::Theme,
     widget::{
         CompletionKind, CompletionPopup, CompletionState, ConfigKeyResult, ConfigPanel,
-        ConnectionPanel, TextInput, handle_config_key,
+        ConnectionPanel, InputHistory, TextInput, handle_config_key,
         text_input::{TextInputState, find_path_completions},
     },
 };
@@ -46,14 +46,20 @@ pub struct TrafficView {
     pub search_input: TextInputState,
     /// Whether search input is focused.
     pub search_focused: bool,
+    /// Search input history.
+    pub search_history: InputHistory,
     /// Filter input state.
     pub filter_input: TextInputState,
     /// Whether filter input is focused.
     pub filter_focused: bool,
+    /// Filter input history.
+    pub filter_history: InputHistory,
     /// Send input state.
     pub send_input: TextInputState,
     /// Whether send input is focused.
     pub send_focused: bool,
+    /// Send input history.
+    pub send_history: InputHistory,
     /// Directory path input state.
     pub dir_path_input: TextInputState,
     /// Whether directory path input is focused.
@@ -356,10 +362,13 @@ impl TrafficView {
             scroll: 0,
             search_input: TextInputState::default().with_placeholder("Search pattern..."),
             search_focused: false,
+            search_history: InputHistory::default(),
             filter_input: TextInputState::default().with_placeholder("Filter pattern..."),
             filter_focused: false,
+            filter_history: InputHistory::default(),
             send_input: TextInputState::default().with_placeholder("Data to send..."),
             send_focused: false,
+            send_history: InputHistory::default(),
             dir_path_input: TextInputState::default().with_placeholder("Enter directory path..."),
             dir_path_focused: false,
             dir_path_completion: CompletionState::default(),
@@ -1506,8 +1515,55 @@ impl TrafficView {
         key: KeyEvent,
         handle: &SessionHandle,
     ) -> Option<TrafficAction> {
+        // Handle history navigation with Ctrl+p/n
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('p') => {
+                    if let Some(entry) = self.search_history.prev(self.search_input.content()) {
+                        self.search_input.set_content(entry.to_string());
+                        // Update search pattern
+                        let pattern = self.search_input.content();
+                        if !pattern.is_empty() {
+                            let mode = if self.config.search_mode_index == 1 {
+                                PatternMode::Regex
+                            } else {
+                                PatternMode::Normal
+                            };
+                            let _ = handle.buffer_mut().set_search_pattern(pattern, mode);
+                        } else {
+                            handle.buffer_mut().clear_search();
+                        }
+                    }
+                    return None;
+                }
+                KeyCode::Char('n') => {
+                    if let Some(entry) = self.search_history.next_entry() {
+                        self.search_input.set_content(entry.to_string());
+                        // Update search pattern
+                        let pattern = self.search_input.content();
+                        if !pattern.is_empty() {
+                            let mode = if self.config.search_mode_index == 1 {
+                                PatternMode::Regex
+                            } else {
+                                PatternMode::Normal
+                            };
+                            let _ = handle.buffer_mut().set_search_pattern(pattern, mode);
+                        } else {
+                            handle.buffer_mut().clear_search();
+                        }
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Enter => {
+                // Add to history before confirming
+                self.search_history.push(self.search_input.content());
+                self.search_history.reset_navigation();
+
                 // Confirm search and exit search mode
                 // Pattern is already set via incremental search
                 self.search_focused = false;
@@ -1571,6 +1627,7 @@ impl TrafficView {
                 return Some(TrafficAction::RequestClear);
             }
             KeyCode::Esc => {
+                self.search_history.reset_navigation();
                 self.search_focused = false;
                 self.search_input.clear();
                 handle.buffer_mut().clear_search();
@@ -1578,6 +1635,9 @@ impl TrafficView {
                 return Some(TrafficAction::RequestClear);
             }
             _ => {
+                // Reset history navigation when typing
+                self.search_history.reset_navigation();
+
                 // Handle the key input first
                 self.search_input.handle_key(key);
 
@@ -1604,8 +1664,69 @@ impl TrafficView {
         key: KeyEvent,
         handle: &SessionHandle,
     ) -> Option<TrafficAction> {
+        // Handle history navigation with Ctrl+p/n
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('p') => {
+                    // Capture middle line before filter change
+                    let middle_raw_index = self.calculate_middle_raw_index(handle);
+
+                    if let Some(entry) = self.filter_history.prev(self.filter_input.content()) {
+                        self.filter_input.set_content(entry.to_string());
+                        // Update filter pattern
+                        let pattern = self.filter_input.content();
+                        if !pattern.is_empty() {
+                            let mode = if self.config.filter_mode_index == 1 {
+                                PatternMode::Regex
+                            } else {
+                                PatternMode::Normal
+                            };
+                            let _ = handle.buffer_mut().set_filter_pattern(pattern, mode);
+                        } else {
+                            handle.buffer_mut().clear_filter();
+                        }
+                        // Restore scroll position
+                        if let Some(raw_idx) = middle_raw_index {
+                            self.scroll_to_center_raw_index(raw_idx, handle);
+                        }
+                    }
+                    return None;
+                }
+                KeyCode::Char('n') => {
+                    // Capture middle line before filter change
+                    let middle_raw_index = self.calculate_middle_raw_index(handle);
+
+                    if let Some(entry) = self.filter_history.next_entry() {
+                        self.filter_input.set_content(entry.to_string());
+                        // Update filter pattern
+                        let pattern = self.filter_input.content();
+                        if !pattern.is_empty() {
+                            let mode = if self.config.filter_mode_index == 1 {
+                                PatternMode::Regex
+                            } else {
+                                PatternMode::Normal
+                            };
+                            let _ = handle.buffer_mut().set_filter_pattern(pattern, mode);
+                        } else {
+                            handle.buffer_mut().clear_filter();
+                        }
+                        // Restore scroll position
+                        if let Some(raw_idx) = middle_raw_index {
+                            self.scroll_to_center_raw_index(raw_idx, handle);
+                        }
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Enter => {
+                // Add to history before confirming
+                self.filter_history.push(self.filter_input.content());
+                self.filter_history.reset_navigation();
+
                 // Confirm filter and exit filter mode
                 // Pattern is already set via incremental filtering
                 self.filter_focused = false;
@@ -1613,6 +1734,8 @@ impl TrafficView {
                 return Some(TrafficAction::RequestClear);
             }
             KeyCode::Esc => {
+                self.filter_history.reset_navigation();
+
                 // Capture middle line before clearing filter
                 let middle_raw_index = self.calculate_middle_raw_index(handle);
 
@@ -1629,6 +1752,9 @@ impl TrafficView {
                 return Some(TrafficAction::RequestClear);
             }
             _ => {
+                // Reset history navigation when typing
+                self.filter_history.reset_navigation();
+
                 // Capture middle line before filter change
                 let middle_raw_index = self.calculate_middle_raw_index(handle);
 
@@ -1659,10 +1785,33 @@ impl TrafficView {
     }
 
     fn handle_send_key(&mut self, key: KeyEvent) -> Option<TrafficAction> {
+        // Handle history navigation with Ctrl+p/n
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('p') => {
+                    if let Some(entry) = self.send_history.prev(self.send_input.content()) {
+                        self.send_input.set_content(entry.to_string());
+                    }
+                    return None;
+                }
+                KeyCode::Char('n') => {
+                    if let Some(entry) = self.send_history.next_entry() {
+                        self.send_input.set_content(entry.to_string());
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Enter => {
                 let data = self.send_input.take();
                 if !data.is_empty() {
+                    // Add to history before sending
+                    self.send_history.push(&data);
+                    self.send_history.reset_navigation();
+
                     self.send_focused = false;
                     // Add newline for convenience
                     let mut bytes = data.into_bytes();
@@ -1671,12 +1820,15 @@ impl TrafficView {
                 }
             }
             KeyCode::Esc => {
+                self.send_history.reset_navigation();
                 self.send_focused = false;
                 self.send_input.clear();
                 // Layout changed - request clear to avoid artifacts
                 return Some(TrafficAction::RequestClear);
             }
             _ => {
+                // Reset history navigation when typing
+                self.send_history.reset_navigation();
                 self.send_input.handle_key(key);
             }
         }
