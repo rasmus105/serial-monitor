@@ -106,14 +106,22 @@ pub const fn alt(code: KeyCode) -> KeyEvent {
 pub fn all_keybinds() -> Vec<Keybind> {
     vec![
         // Global
-        Keybind::new(key(KeyCode::Char('q')), "Quit / Disconnect prompt", KeyContext::Global),
+        Keybind::new(
+            key(KeyCode::Char('q')),
+            "Quit / Disconnect prompt",
+            KeyContext::Global,
+        ),
         Keybind::new(key(KeyCode::Char('?')), "Help/Settings", KeyContext::Global),
         Keybind::new(
             key(KeyCode::Char('c')),
             "Toggle config panel",
             KeyContext::Global,
         ),
-        Keybind::new(key(KeyCode::Esc), "Close overlay/Cancel", KeyContext::Global),
+        Keybind::new(
+            key(KeyCode::Esc),
+            "Close overlay/Cancel",
+            KeyContext::Global,
+        ),
         Keybind::new(
             ctrl(KeyCode::Char('h')),
             "Focus main panel",
@@ -127,23 +135,42 @@ pub fn all_keybinds() -> Vec<Keybind> {
         // Navigation
         Keybind::new(key(KeyCode::Char('j')), "Down", KeyContext::Navigation),
         Keybind::new(key(KeyCode::Char('k')), "Up", KeyContext::Navigation),
-        Keybind::new(key(KeyCode::Char('h')), "Left / prev option", KeyContext::Navigation),
-        Keybind::new(key(KeyCode::Char('l')), "Right / next option", KeyContext::Navigation),
+        Keybind::new(
+            key(KeyCode::Char('h')),
+            "Left / prev option",
+            KeyContext::Navigation,
+        ),
+        Keybind::new(
+            key(KeyCode::Char('l')),
+            "Right / next option",
+            KeyContext::Navigation,
+        ),
         Keybind::new(key(KeyCode::Char('g')), "Go to top", KeyContext::Navigation),
-        Keybind::new(key(KeyCode::Char('G')), "Go to bottom", KeyContext::Navigation),
-        Keybind::new(ctrl(KeyCode::Char('d')), "Page down", KeyContext::Navigation),
+        Keybind::new(
+            key(KeyCode::Char('G')),
+            "Go to bottom",
+            KeyContext::Navigation,
+        ),
+        Keybind::new(
+            ctrl(KeyCode::Char('d')),
+            "Page down",
+            KeyContext::Navigation,
+        ),
         Keybind::new(ctrl(KeyCode::Char('u')), "Page up", KeyContext::Navigation),
-        Keybind::new(key(KeyCode::Enter), "Select / toggle", KeyContext::Navigation),
-        Keybind::new(key(KeyCode::Char(' ')), "Select / toggle", KeyContext::Navigation),
+        Keybind::new(
+            key(KeyCode::Enter),
+            "Select / toggle",
+            KeyContext::Navigation,
+        ),
+        Keybind::new(
+            key(KeyCode::Char(' ')),
+            "Select / toggle",
+            KeyContext::Navigation,
+        ),
         // Pre-connect
         Keybind::new(
             key(KeyCode::Enter),
             "Connect to port",
-            KeyContext::PreConnect,
-        ),
-        Keybind::new(
-            key(KeyCode::Char('r')),
-            "Refresh port list",
             KeyContext::PreConnect,
         ),
         Keybind::new(
@@ -173,16 +200,16 @@ pub fn all_keybinds() -> Vec<Keybind> {
             "File sender",
             KeyContext::Connected,
         ),
-        Keybind::new(
-            key(KeyCode::Char('d')),
-            "Disconnect",
-            KeyContext::Connected,
-        ),
+        Keybind::new(key(KeyCode::Char('d')), "Disconnect", KeyContext::Connected),
         // Traffic view
         Keybind::new(key(KeyCode::Char('s')), "Send data", KeyContext::Traffic),
         Keybind::new(key(KeyCode::Char('/')), "Search", KeyContext::Traffic),
         Keybind::new(key(KeyCode::Char('n')), "Next match", KeyContext::Traffic),
-        Keybind::new(key(KeyCode::Char('N')), "Previous match", KeyContext::Traffic),
+        Keybind::new(
+            key(KeyCode::Char('N')),
+            "Previous match",
+            KeyContext::Traffic,
+        ),
         Keybind::new(key(KeyCode::Char('f')), "Filter", KeyContext::Traffic),
         Keybind::new(
             ctrl(KeyCode::Char('b')),
@@ -206,16 +233,8 @@ pub fn all_keybinds() -> Vec<Keybind> {
             KeyContext::Graph,
         ),
         // File sender
-        Keybind::new(
-            key(KeyCode::Char('o')),
-            "Open file",
-            KeyContext::FileSender,
-        ),
-        Keybind::new(
-            key(KeyCode::Enter),
-            "Start sending",
-            KeyContext::FileSender,
-        ),
+        Keybind::new(key(KeyCode::Char('o')), "Open file", KeyContext::FileSender),
+        Keybind::new(key(KeyCode::Enter), "Start sending", KeyContext::FileSender),
         Keybind::new(
             key(KeyCode::Char('x')),
             "Cancel sending",
@@ -254,7 +273,6 @@ impl KeyHint {
 /// Common key hints for the pre-connect view status bar.
 pub const PRECONNECT_HINTS: &[KeyHint] = &[
     KeyHint::new("Enter", "connect"),
-    KeyHint::new("r", "refresh"),
     KeyHint::new("/", "search"),
     KeyHint::new("Ctrl+h/l", "panels"),
     KeyHint::new("?", "help"),

@@ -1,11 +1,10 @@
 //! Pre-connect view for port selection and configuration.
 
-use iced::widget::{button, column, container, pick_list, row, text, text_input, Space};
+use iced::widget::{Space, button, column, container, pick_list, row, text, text_input};
 use iced::{Alignment, Element, Fill, Length};
 use serial_core::ui::serial_config::{
-    data_bits_display, flow_control_display, parity_display, stop_bits_display,
     COMMON_BAUD_RATES, DATA_BITS_VARIANTS, FLOW_CONTROL_VARIANTS, PARITY_VARIANTS,
-    STOP_BITS_VARIANTS,
+    STOP_BITS_VARIANTS, data_bits_display, flow_control_display, parity_display, stop_bits_display,
 };
 use serial_core::{DataBits, FlowControl, Parity, StopBits};
 use std::fmt;
@@ -105,9 +104,12 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
     };
 
     // Custom port path input (for PTYs, etc.)
-    let custom_port_input = text_input("Or enter custom path (e.g., /dev/pts/5)...", &state.custom_port_path)
-        .on_input(Message::CustomPortPathChanged)
-        .width(300);
+    let custom_port_input = text_input(
+        "Or enter custom path (e.g., /dev/pts/5)...",
+        &state.custom_port_path,
+    )
+    .on_input(Message::CustomPortPathChanged)
+    .width(300);
 
     // Baud rate selection
     let baud_options: Vec<u32> = COMMON_BAUD_RATES.to_vec();
@@ -119,8 +121,11 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
     .width(120);
 
     // Data bits selection
-    let data_bits_options: Vec<DataBitsOption> =
-        DATA_BITS_VARIANTS.iter().copied().map(DataBitsOption).collect();
+    let data_bits_options: Vec<DataBitsOption> = DATA_BITS_VARIANTS
+        .iter()
+        .copied()
+        .map(DataBitsOption)
+        .collect();
     let data_bits_picker = pick_list(
         data_bits_options,
         Some(DataBitsOption(state.config.data_bits)),
@@ -139,8 +144,11 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
     .width(80);
 
     // Stop bits selection
-    let stop_bits_options: Vec<StopBitsOption> =
-        STOP_BITS_VARIANTS.iter().copied().map(StopBitsOption).collect();
+    let stop_bits_options: Vec<StopBitsOption> = STOP_BITS_VARIANTS
+        .iter()
+        .copied()
+        .map(StopBitsOption)
+        .collect();
     let stop_bits_picker = pick_list(
         stop_bits_options,
         Some(StopBitsOption(state.config.stop_bits)),
@@ -173,42 +181,27 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
     // Config rows
     let label_width = 100;
     let config_rows = column![
-        row![
-            text("Baud Rate:").width(label_width),
-            baud_picker,
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center),
-        row![
-            text("Data Bits:").width(label_width),
-            data_bits_picker,
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center),
-        row![
-            text("Parity:").width(label_width),
-            parity_picker,
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center),
-        row![
-            text("Stop Bits:").width(label_width),
-            stop_bits_picker,
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center),
+        row![text("Baud Rate:").width(label_width), baud_picker,]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        row![text("Data Bits:").width(label_width), data_bits_picker,]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        row![text("Parity:").width(label_width), parity_picker,]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        row![text("Stop Bits:").width(label_width), stop_bits_picker,]
+            .spacing(10)
+            .align_y(Alignment::Center),
         row![
             text("Flow Control:").width(label_width),
             flow_control_picker,
         ]
         .spacing(10)
         .align_y(Alignment::Center),
-        row![
-            text("RX Chunking:").width(label_width),
-            rx_chunking_picker,
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center),
+        row![text("RX Chunking:").width(label_width), rx_chunking_picker,]
+            .spacing(10)
+            .align_y(Alignment::Center),
     ]
     .spacing(8);
 
