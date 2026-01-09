@@ -30,11 +30,8 @@ impl PortListState {
         // Reset selection if out of bounds
         if let Some(selected) = self.list_state.selected() {
             if selected >= self.ports.len() {
-                self.list_state.select(if self.ports.is_empty() {
-                    None
-                } else {
-                    Some(0)
-                });
+                self.list_state
+                    .select(if self.ports.is_empty() { None } else { Some(0) });
             }
         } else if !self.ports.is_empty() {
             self.list_state.select(Some(0));
@@ -199,7 +196,6 @@ impl<'a> PortList<'a> {
     }
 }
 
-
 impl StatefulWidget for PortList<'_> {
     type State = PortListState;
 
@@ -220,9 +216,7 @@ impl StatefulWidget for PortList<'_> {
                     Theme::highlight()
                 };
 
-                let mut lines = vec![Line::from(vec![
-                    Span::styled(&port.name, name_style),
-                ])];
+                let mut lines = vec![Line::from(vec![Span::styled(&port.name, name_style)])];
 
                 // Add details on second line if available
                 let mut details = Vec::new();

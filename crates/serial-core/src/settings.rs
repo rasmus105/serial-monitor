@@ -34,7 +34,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// Get the platform-appropriate configuration directory for the given app name.
 ///

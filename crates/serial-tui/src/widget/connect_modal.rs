@@ -10,7 +10,10 @@ use ratatui::{
 use serial_core::{
     ChunkingStrategy, DataBits, LineDelimiter, SerialConfig,
     ui::{
-        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid, always_visible},
+        config::{
+            ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid,
+            always_visible,
+        },
         serial_config::{
             COMMON_BAUD_RATES, DATA_BITS_VARIANTS, FLOW_CONTROL_VARIANTS, PARITY_VARIANTS,
             STOP_BITS_VARIANTS,
@@ -18,10 +21,7 @@ use serial_core::{
     },
 };
 
-use crate::{
-    theme::Theme,
-    widget::ConfigPanel,
-};
+use crate::{theme::Theme, widget::ConfigPanel};
 
 /// Action returned from connect modal key handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +74,7 @@ impl Default for ConnectModalConfig {
             line_ending_index: 1, // LF
             // File saving defaults
             file_save_enabled: false,
-            file_save_format_index: 1, // Encoded
+            file_save_format_index: 1,   // Encoded
             file_save_encoding_index: 1, // ASCII
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
@@ -217,25 +217,23 @@ static CONNECT_MODAL_SECTIONS: &[Section<ConnectModalConfig>] = &[
     },
     Section {
         header: Some("Data Handling"),
-        fields: &[
-            FieldDef {
-                id: "rx_chunking",
-                label: "RX Chunking",
-                kind: FieldKind::Select {
-                    options: RX_CHUNKING_OPTIONS,
-                },
-                get: |c| FieldValue::OptionIndex(c.line_ending_index),
-                set: |c, v| {
-                    if let FieldValue::OptionIndex(i) = v {
-                        c.line_ending_index = i;
-                    }
-                },
-                visible: always_visible,
-                enabled: always_enabled,
-                parent_id: None,
-                validate: always_valid,
+        fields: &[FieldDef {
+            id: "rx_chunking",
+            label: "RX Chunking",
+            kind: FieldKind::Select {
+                options: RX_CHUNKING_OPTIONS,
             },
-        ],
+            get: |c| FieldValue::OptionIndex(c.line_ending_index),
+            set: |c, v| {
+                if let FieldValue::OptionIndex(i) = v {
+                    c.line_ending_index = i;
+                }
+            },
+            visible: always_visible,
+            enabled: always_enabled,
+            parent_id: None,
+            validate: always_valid,
+        }],
     },
     Section {
         header: Some("File Saving"),
@@ -383,9 +381,12 @@ impl ConnectModalState {
                     if field.kind.is_select() {
                         self.nav.open_dropdown(CONNECT_MODAL_SECTIONS, &self.config);
                     } else if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self.nav.toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
+                        let _ = self
+                            .nav
+                            .toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
                     } else if field.kind.is_editable() {
-                        self.nav.start_text_edit(CONNECT_MODAL_SECTIONS, &self.config);
+                        self.nav
+                            .start_text_edit(CONNECT_MODAL_SECTIONS, &self.config);
                     }
                 }
                 ConnectModalAction::None
@@ -401,10 +402,14 @@ impl ConnectModalState {
             KeyCode::Char('h') | KeyCode::Left => {
                 if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config) {
                     if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self.nav.toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
+                        let _ = self
+                            .nav
+                            .toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
                     } else if field.kind.is_select() {
                         self.nav.dropdown_prev(CONNECT_MODAL_SECTIONS, &self.config);
-                        let _ = self.nav.apply_dropdown(CONNECT_MODAL_SECTIONS, &mut self.config);
+                        let _ = self
+                            .nav
+                            .apply_dropdown(CONNECT_MODAL_SECTIONS, &mut self.config);
                     }
                 }
                 ConnectModalAction::None
@@ -412,24 +417,28 @@ impl ConnectModalState {
             KeyCode::Char('l') | KeyCode::Right => {
                 if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config) {
                     if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self.nav.toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
+                        let _ = self
+                            .nav
+                            .toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
                     } else if field.kind.is_select() {
                         self.nav.dropdown_next(CONNECT_MODAL_SECTIONS, &self.config);
-                        let _ = self.nav.apply_dropdown(CONNECT_MODAL_SECTIONS, &mut self.config);
+                        let _ = self
+                            .nav
+                            .apply_dropdown(CONNECT_MODAL_SECTIONS, &mut self.config);
                     }
                 }
                 ConnectModalAction::None
             }
-            _ => {
-                ConnectModalAction::None
-            }
+            _ => ConnectModalAction::None,
         }
     }
 
     fn handle_text_edit_key(&mut self, key: KeyEvent) -> ConnectModalAction {
         match key.code {
             KeyCode::Enter => {
-                let _ = self.nav.apply_text_edit(CONNECT_MODAL_SECTIONS, &mut self.config);
+                let _ = self
+                    .nav
+                    .apply_text_edit(CONNECT_MODAL_SECTIONS, &mut self.config);
                 ConnectModalAction::None
             }
             KeyCode::Esc => {
@@ -475,7 +484,9 @@ impl ConnectModalState {
                 self.nav.dropdown_prev(CONNECT_MODAL_SECTIONS, &self.config);
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
-                let _ = self.nav.apply_dropdown(CONNECT_MODAL_SECTIONS, &mut self.config);
+                let _ = self
+                    .nav
+                    .apply_dropdown(CONNECT_MODAL_SECTIONS, &mut self.config);
                 self.nav.close_dropdown();
             }
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -533,7 +544,12 @@ impl Widget for ConnectModal<'_> {
         let footer_height = 2u16;
         let content_height = inner.height.saturating_sub(footer_height);
         let content_area = Rect::new(inner.x, inner.y, inner.width, content_height);
-        let footer_area = Rect::new(inner.x, inner.y + content_height, inner.width, footer_height);
+        let footer_area = Rect::new(
+            inner.x,
+            inner.y + content_height,
+            inner.width,
+            footer_height,
+        );
 
         // Render config panel
         ConfigPanel::new(CONNECT_MODAL_SECTIONS, &self.state.config, &self.state.nav)
@@ -551,7 +567,15 @@ impl Widget for ConnectModal<'_> {
             ]);
             Paragraph::new(footer_line)
                 .alignment(Alignment::Center)
-                .render(Rect::new(footer_area.x, footer_area.y + footer_area.height - 1, footer_area.width, 1), buf);
+                .render(
+                    Rect::new(
+                        footer_area.x,
+                        footer_area.y + footer_area.height - 1,
+                        footer_area.width,
+                        1,
+                    ),
+                    buf,
+                );
         }
     }
 }

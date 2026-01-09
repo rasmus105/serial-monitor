@@ -1,13 +1,13 @@
 //! Traffic view for connected state - displays sent/received data.
 
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text,
-    text_input, tooltip, Space,
+    Space, button, checkbox, column, container, pick_list, row, scrollable, text, text_input,
+    tooltip,
 };
 use iced::{Alignment, Element, Fill, Length};
+use serial_core::ui::TimestampFormat;
 use serial_core::ui::descriptions;
 use serial_core::ui::encoding::encoding_display;
-use serial_core::ui::TimestampFormat;
 use serial_core::{Direction, Encoding};
 use std::fmt;
 use std::time::{Duration, SystemTime};
@@ -31,10 +31,8 @@ const TIMESTAMP_FORMAT_OPTIONS: &[TimestampFormatOption] = &[
     TimestampFormatOption(2),
 ];
 
-const SCROLL_MODE_OPTIONS: &[ScrollModeOption] = &[
-    ScrollModeOption::Auto,
-    ScrollModeOption::Locked,
-];
+const SCROLL_MODE_OPTIONS: &[ScrollModeOption] =
+    &[ScrollModeOption::Auto, ScrollModeOption::Locked];
 
 /// Static encoding options - wraps ENCODING_VARIANTS
 const ENCODING_OPTIONS: &[EncodingOption] = &[
@@ -67,7 +65,11 @@ fn divider<'a>() -> Element<'a, Message> {
 }
 
 /// Format a timestamp according to the selected format
-fn format_timestamp(timestamp: SystemTime, session_start: SystemTime, format_index: usize) -> String {
+fn format_timestamp(
+    timestamp: SystemTime,
+    session_start: SystemTime,
+    format_index: usize,
+) -> String {
     let format = match format_index {
         0 => TimestampFormat::Relative,
         1 => TimestampFormat::AbsoluteMillis,
@@ -171,18 +173,15 @@ impl fmt::Display for ScrollModeOption {
 pub fn view(state: &ConnectedState) -> Element<'_, Message> {
     // Main content area with optional config panel
     let main_content: Element<'_, Message> = if state.show_config_panel {
-        row![
-            traffic_area(state),
-            config_panel(state),
-        ]
-        .spacing(5)
-        .into()
+        row![traffic_area(state), config_panel(state),]
+            .spacing(5)
+            .into()
     } else {
         // When panel is hidden, show a small button to reveal it
         let show_panel_btn = button(text(">").size(14))
             .on_press(Message::ToggleConfigPanel)
             .padding([10, 5]);
-        
+
         row![
             traffic_area(state),
             container(show_panel_btn)
@@ -205,7 +204,7 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
     // Borrow buffer directly - no intermediate storage needed
     let buffer = state.handle.buffer();
     let total_lines = buffer.len();
-    
+
     // Data display with virtual scrolling
     let data_content: Element<'_, Message> = if total_lines == 0 {
         container(text("No data yet...").color(Theme::MUTED).size(14))
@@ -226,7 +225,8 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
             ScrollState::LockedToBottom => {
                 // When locked to bottom, we render the last N lines that fit
                 // but still need to handle the case where viewport is unknown
-                let viewport_lines = state.viewport_height
+                let viewport_lines = state
+                    .viewport_height
                     .map(|h| (h / ROW_HEIGHT).ceil() as usize)
                     .unwrap_or(50); // Default estimate
                 let start = total_lines.saturating_sub(viewport_lines + RENDER_BUFFER);
@@ -237,7 +237,7 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                 let viewport_height = state.viewport_height.unwrap_or(500.0);
                 let start_line = (*offset / ROW_HEIGHT).floor() as usize;
                 let visible_count = (viewport_height / ROW_HEIGHT).ceil() as usize;
-                
+
                 let visible_start = start_line.saturating_sub(RENDER_BUFFER);
                 let visible_end = (start_line + visible_count + RENDER_BUFFER).min(total_lines);
                 (visible_start, visible_end)
@@ -246,7 +246,7 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
 
         // Top spacer to maintain scroll position
         let top_spacer_height = visible_start as f32 * ROW_HEIGHT;
-        
+
         // Collect visible chunk data - we need to clone only the visible lines
         // because Iced widgets need to own their data (unlike ratatui which renders directly).
         // This is MUCH better than cloning ALL lines every 50ms tick.
@@ -256,10 +256,10 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
             .take(visible_end - visible_start)
             .map(|chunk| (chunk.direction, chunk.encoded.to_string(), chunk.timestamp))
             .collect();
-        
+
         // Drop the buffer guard before building widgets
         drop(buffer);
-        
+
         // Build visible lines from collected data
         let visible_lines: Vec<Element<'_, Message>> = visible_chunk_data
             .into_iter()
@@ -268,12 +268,15 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                     Direction::Tx => ("TX", Theme::TX),
                     Direction::Rx => ("RX", Theme::RX),
                 };
-                
+
                 let mut line_row = row![text(prefix).color(color).size(14), Space::new().width(8),];
 
                 if state.show_timestamps {
-                    let ts_str =
-                        format_timestamp(timestamp, state.session_start, state.timestamp_format_index);
+                    let ts_str = format_timestamp(
+                        timestamp,
+                        state.session_start,
+                        state.timestamp_format_index,
+                    );
                     // Right-align timestamp within fixed width
                     let padded_timestamp = format!("{:>width$}", ts_str, width = timestamp_width);
                     line_row = line_row.push(text(padded_timestamp).color(Theme::MUTED).size(12));
@@ -287,7 +290,7 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
 
         // Bottom spacer to maintain total scroll height
         let bottom_spacer_height = (total_lines - visible_end) as f32 * ROW_HEIGHT;
-        
+
         // Build scrollable content with spacers for virtual scrolling
         let content = column![
             Space::new().width(Fill).height(top_spacer_height),
@@ -358,7 +361,7 @@ fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                 }),
             send_row,
         ]
-        .spacing(5)
+        .spacing(5),
     )
     .width(Fill)
     .into()
@@ -429,7 +432,7 @@ fn config_panel(state: &ConnectedState) -> Element<'_, Message> {
             Space::new().width(8),
             config_grid_cell_owned("Baud", baud_value),
         ],
-        // Row 2: Data Bits | Parity  
+        // Row 2: Data Bits | Parity
         row![
             config_grid_cell("Data", data_bits_value),
             Space::new().width(8),
@@ -444,22 +447,17 @@ fn config_panel(state: &ConnectedState) -> Element<'_, Message> {
     ]
     .spacing(4);
 
-    let connection_section = column![
-        section_header("Connection"),
-        connection_grid,
-    ]
-    .spacing(4)
-    .padding(8);
+    let connection_section = column![section_header("Connection"), connection_grid,]
+        .spacing(4)
+        .padding(8);
 
     // === Statistics Section (collapsible) ===
     let stats_collapsed = state.collapsed_sections.contains("Statistics");
     let stats_section: Element<'_, Message> = if stats_collapsed {
-        column![
-            collapsible_section_header("Statistics", true),
-        ]
-        .spacing(4)
-        .padding(8)
-        .into()
+        column![collapsible_section_header("Statistics", true),]
+            .spacing(4)
+            .padding(8)
+            .into()
     } else {
         let duration_row = config_row_info_owned("Duration", duration_str, Some(Theme::SUCCESS));
         let rx_row = config_row_info_owned("RX", format_bytes(stats.bytes_rx()), Some(Theme::RX));
@@ -484,30 +482,21 @@ fn config_panel(state: &ConnectedState) -> Element<'_, Message> {
     .width(Length::Fixed(100.0))
     .text_size(12);
 
-    let encoding_row = config_row_with_tooltip(
-        "Encoding",
-        encoding_picker,
-        descriptions::display::ENCODING,
-    );
+    let encoding_row =
+        config_row_with_tooltip("Encoding", encoding_picker, descriptions::display::ENCODING);
 
     // Show TX/RX as separate rows with consistent layout
     let show_tx_toggle = checkbox(state.show_tx)
         .on_toggle(|_| Message::ToggleShowTx)
         .text_size(12);
-    let show_tx_row = config_row_with_tooltip(
-        "Show TX",
-        show_tx_toggle,
-        descriptions::display::SHOW_TX,
-    );
+    let show_tx_row =
+        config_row_with_tooltip("Show TX", show_tx_toggle, descriptions::display::SHOW_TX);
 
     let show_rx_toggle = checkbox(state.show_rx)
         .on_toggle(|_| Message::ToggleShowRx)
         .text_size(12);
-    let show_rx_row = config_row_with_tooltip(
-        "Show RX",
-        show_rx_toggle,
-        descriptions::display::SHOW_RX,
-    );
+    let show_rx_row =
+        config_row_with_tooltip("Show RX", show_rx_toggle, descriptions::display::SHOW_RX);
 
     // Timestamps with format as sub-option
     let timestamps_toggle = checkbox(state.show_timestamps)
@@ -533,7 +522,7 @@ fn config_panel(state: &ConnectedState) -> Element<'_, Message> {
         container(
             text(format!("{}", current_format))
                 .size(12)
-                .color(Theme::MUTED)
+                .color(Theme::MUTED),
         )
         .width(Length::Fixed(120.0))
         .into()
@@ -563,13 +552,13 @@ fn config_panel(state: &ConnectedState) -> Element<'_, Message> {
 
     // Show current scroll state indicator when in manual mode
     let scroll_status_row: Element<'_, Message> = match &state.scroll_state {
-        ScrollState::Manual { .. } => {
-            config_row_indented(
-                "Status",
-                text("Paused (scroll down to resume)").size(11).color(Theme::MUTED),
-                false,
-            )
-        }
+        ScrollState::Manual { .. } => config_row_indented(
+            "Status",
+            text("Paused (scroll down to resume)")
+                .size(11)
+                .color(Theme::MUTED),
+            false,
+        ),
         _ => Space::new().height(0).into(),
     };
 
@@ -657,14 +646,14 @@ fn section_header<'a>(title: &'a str) -> Element<'a, Message> {
 /// Create a collapsible section header that can be clicked to toggle
 fn collapsible_section_header<'a>(title: &'static str, collapsed: bool) -> Element<'a, Message> {
     let icon = if collapsed { "+" } else { "-" };
-    
+
     button(
         row![
             text(icon).size(12).color(Theme::MUTED),
             Space::new().width(4),
             text(title).size(12).color(Theme::MUTED),
         ]
-        .align_y(Alignment::Center)
+        .align_y(Alignment::Center),
     )
     .on_press(Message::ToggleSectionCollapse(title.to_string()))
     .padding([2, 4])
@@ -711,13 +700,9 @@ fn config_row_with_tooltip<'a>(
     )
     .gap(5);
 
-    row![
-        label_with_tooltip,
-        Space::new().width(Fill),
-        widget.into(),
-    ]
-    .align_y(Alignment::Center)
-    .into()
+    row![label_with_tooltip, Space::new().width(Fill), widget.into(),]
+        .align_y(Alignment::Center)
+        .into()
 }
 
 /// Create an indented config row (for sub-options)
@@ -784,7 +769,7 @@ fn config_row_info_owned<'a>(
     } else {
         value_text
     };
-    
+
     row![
         text(label).size(12).color(Theme::MUTED),
         Space::new().width(Fill),

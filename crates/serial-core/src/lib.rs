@@ -30,15 +30,17 @@ pub mod ui;
 
 // Re-export commonly used types from buffer
 pub use buffer::{
-    default_cache_directory, encode, encode_ascii, encode_binary, encode_hex, encode_utf8, graph,
     AutoSaveConfig, BinaryFormat, ChunkView, DataBuffer, Direction, DirectionFilter, Encoding,
     HexFormat, PatternMatcher, PatternMode, SaveFormat, SaveScope, SearchMatch, UserSaveConfig,
+    default_cache_directory, encode, encode_ascii, encode_binary, encode_hex, encode_utf8, graph,
 };
 pub use chunking::{Chunker, ChunkingStrategy, LineDelimiter};
 pub use error::{Error, Result};
 pub use file_sender::{
-    send_file, ChunkMode, Delimiter, FileSendConfig, FileSendHandle, FileSendProgress,
+    ChunkMode, Delimiter, FileSendConfig, FileSendHandle, FileSendProgress, send_file,
 };
 pub use keep_awake::KeepAwake;
-pub use port::{list_ports, DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits};
-pub use session::{Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle, Statistics};
+pub use port::{DataBits, FlowControl, Parity, PortInfo, SerialConfig, StopBits, list_ports};
+pub use session::{
+    Session, SessionCommand, SessionConfig, SessionEvent, SessionHandle, Statistics,
+};

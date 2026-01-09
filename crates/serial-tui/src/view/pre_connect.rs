@@ -1,5 +1,7 @@
 //! Pre-connection view: port selection and configuration.
 
+use std::time::Instant;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
@@ -9,7 +11,10 @@ use ratatui::{
 use serial_core::{
     ChunkingStrategy, DataBits, LineDelimiter, SerialConfig, list_ports,
     ui::{
-        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
+        config::{
+            ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid,
+            always_visible,
+        },
         serial_config::{
             COMMON_BAUD_RATES, DATA_BITS_VARIANTS, FLOW_CONTROL_VARIANTS, PARITY_VARIANTS,
             STOP_BITS_VARIANTS,
@@ -23,9 +28,9 @@ use crate::{
     theme::Theme,
     widget::{
         CompletionKind, CompletionPopup, CompletionState, ConfigPanel, PortList, TextInput, Toast,
-        util::build_help_line,
         port_list::PortListState,
         text_input::{TextInputState, find_path_completions},
+        util::build_help_line,
     },
 };
 
@@ -49,6 +54,8 @@ pub struct PreConnectView {
     pub dir_path_completion: CompletionState,
     /// Last visible height for port list (for half-page scroll).
     last_visible_height: usize,
+    /// Last time ports were auto-refreshed.
+    last_port_refresh: Instant,
 }
 
 /// Configuration state for pre-connection.
@@ -91,7 +98,7 @@ impl Default for PreConnectConfig {
             line_ending_index: 1, // LF
             // File saving defaults
             file_save_enabled: false,
-            file_save_format_index: 1, // Encoded
+            file_save_format_index: 1,   // Encoded
             file_save_encoding_index: 1, // ASCII
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
@@ -233,25 +240,23 @@ static PRECONNECT_CONFIG_SECTIONS: &[Section<PreConnectConfig>] = &[
     },
     Section {
         header: Some("Data Handling"),
-        fields: &[
-            FieldDef {
-                id: "rx_chunking",
-                label: "RX Chunking",
-                kind: FieldKind::Select {
-                    options: RX_CHUNKING_OPTIONS,
-                },
-                get: |c| FieldValue::OptionIndex(c.line_ending_index),
-                set: |c, v| {
-                    if let FieldValue::OptionIndex(i) = v {
-                        c.line_ending_index = i;
-                    }
-                },
-                visible: always_visible,
-                enabled: always_enabled,
-                parent_id: None,
-                validate: always_valid,
+        fields: &[FieldDef {
+            id: "rx_chunking",
+            label: "RX Chunking",
+            kind: FieldKind::Select {
+                options: RX_CHUNKING_OPTIONS,
             },
-        ],
+            get: |c| FieldValue::OptionIndex(c.line_ending_index),
+            set: |c, v| {
+                if let FieldValue::OptionIndex(i) = v {
+                    c.line_ending_index = i;
+                }
+            },
+            visible: always_visible,
+            enabled: always_enabled,
+            parent_id: None,
+            validate: always_valid,
+        }],
     },
     Section {
         header: Some("File Saving"),
@@ -339,6 +344,7 @@ impl PreConnectView {
             dir_path_focused: false,
             dir_path_completion: CompletionState::default(),
             last_visible_height: 20, // Reasonable default
+            last_port_refresh: Instant::now(),
         }
     }
 
@@ -351,6 +357,67 @@ impl PreConnectView {
                 self.port_list.set_ports(vec![]);
             }
         }
+    }
+
+    /// Auto-refreshes ports every 500ms. Returns a toast if ports changed.
+    pub fn tick_auto_refresh(&mut self) -> Option<Toast> {
+        use std::time::Duration;
+        const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+
+        if self.last_port_refresh.elapsed() < REFRESH_INTERVAL {
+            return None;
+        }
+
+        self.last_port_refresh = Instant::now();
+
+        let old_ports: Vec<String> = self
+            .port_list
+            .ports
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+
+        self.refresh_ports();
+
+        let new_ports: Vec<String> = self
+            .port_list
+            .ports
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+
+        // Detect changes
+        let added: Vec<_> = new_ports
+            .iter()
+            .filter(|p| !old_ports.contains(p))
+            .collect();
+        let removed: Vec<_> = old_ports
+            .iter()
+            .filter(|p| !new_ports.contains(p))
+            .collect();
+
+        if !added.is_empty() {
+            return Some(Toast::info(format!(
+                "Port connected: {}",
+                added
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        if !removed.is_empty() {
+            return Some(Toast::info(format!(
+                "Port disconnected: {}",
+                removed
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+
+        None
     }
 
     pub fn is_input_mode(&self) -> bool {
@@ -434,16 +501,10 @@ impl PreConnectView {
 
             // Render completion popup (above the input bar)
             if self.dir_path_completion.visible {
-                let input_inner = Block::default()
-                    .borders(Borders::ALL)
-                    .inner(main_chunks[1]);
-                CompletionPopup::new(
-                    &self.dir_path_completion,
-                    input_inner.y,
-                    input_inner.x,
-                )
-                .disconnected(true)
-                .render(main_area, buf);
+                let input_inner = Block::default().borders(Borders::ALL).inner(main_chunks[1]);
+                CompletionPopup::new(&self.dir_path_completion, input_inner.y, input_inner.x)
+                    .disconnected(true)
+                    .render(main_area, buf);
             }
         }
 
@@ -451,9 +512,10 @@ impl PreConnectView {
         if main_chunks[0].height > 2 {
             let help_y = main_chunks[0].y + main_chunks[0].height - 2;
             let help_line = build_help_line(PRECONNECT_HINTS, Theme::keybind_disconnected());
-            Paragraph::new(help_line)
-                .style(Theme::muted())
-                .render(Rect::new(main_chunks[0].x + 2, help_y, main_chunks[0].width - 4, 1), buf);
+            Paragraph::new(help_line).style(Theme::muted()).render(
+                Rect::new(main_chunks[0].x + 2, help_y, main_chunks[0].width - 4, 1),
+                buf,
+            );
         }
 
         // Config panel
@@ -577,10 +639,6 @@ impl PreConnectView {
                     self.port_list.select_prev();
                 }
             }
-            KeyCode::Char('r') => {
-                self.refresh_ports();
-                return Some(PreConnectAction::Toast(Toast::info("Ports refreshed")));
-            }
             KeyCode::Char('/') => {
                 self.search_focused = true;
             }
@@ -682,7 +740,8 @@ impl PreConnectView {
                     } else if field.kind.is_text_input() {
                         // Open text input bar for text fields
                         if field.id == "file_save_directory" {
-                            self.dir_path_input.set_content(&self.config.file_save_directory);
+                            self.dir_path_input
+                                .set_content(&self.config.file_save_directory);
                             self.dir_path_focused = true;
                         }
                     }
@@ -725,7 +784,8 @@ impl PreConnectView {
     fn update_dir_path_completions(&mut self) {
         let input = self.dir_path_input.content();
         let completions = find_path_completions(input);
-        self.dir_path_completion.show(completions, CompletionKind::Argument);
+        self.dir_path_completion
+            .show(completions, CompletionKind::Argument);
     }
 
     fn apply_dir_path_completion(&mut self) {
@@ -761,7 +821,7 @@ impl PreConnectView {
         self.config.file_save_encoding_index = settings.file_save_encoding_index;
         self.config.file_save_directory = settings.file_save_directory.clone();
     }
-    
+
     /// Extract settings for saving to disk.
     pub fn to_settings(&self) -> PreConnectSettings {
         PreConnectSettings {

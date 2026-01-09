@@ -7,8 +7,8 @@ use std::time::Duration;
 use iced::widget::scrollable;
 use iced::{Element, Subscription, Task};
 use serial_core::{
-    list_ports, ChunkingStrategy, DataBits, Encoding, FlowControl, LineDelimiter, Parity,
-    PortInfo, SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle, StopBits,
+    ChunkingStrategy, DataBits, Encoding, FlowControl, LineDelimiter, Parity, PortInfo,
+    SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle, StopBits, list_ports,
 };
 
 use crate::view::{pre_connect, traffic};
@@ -113,8 +113,6 @@ pub struct ConnectedState {
     pub collapsed_sections: HashSet<String>,
 }
 
-
-
 /// Get the RX chunking strategy from index.
 pub fn rx_chunking_from_index(index: usize) -> ChunkingStrategy {
     match index {
@@ -199,7 +197,10 @@ impl App {
         match message {
             // Pre-connect messages
             Message::RefreshPorts => {
-                return Task::perform(async { list_ports().unwrap_or_default() }, Message::PortsListed);
+                return Task::perform(
+                    async { list_ports().unwrap_or_default() },
+                    Message::PortsListed,
+                );
             }
             Message::PortsListed(ports) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
@@ -276,7 +277,13 @@ impl App {
                                     rx_chunking,
                                     ..Default::default()
                                 };
-                                match Session::connect_with_config(&port, config.clone(), session_config).await {
+                                match Session::connect_with_config(
+                                    &port,
+                                    config.clone(),
+                                    session_config,
+                                )
+                                .await
+                                {
                                     Ok(handle) => {
                                         // Store the result in the shared state
                                         let result = ConnectionResult {
@@ -343,7 +350,10 @@ impl App {
             }
             Message::Disconnected => {
                 // Refresh ports after disconnect
-                return Task::perform(async { list_ports().unwrap_or_default() }, Message::PortsListed);
+                return Task::perform(
+                    async { list_ports().unwrap_or_default() },
+                    Message::PortsListed,
+                );
             }
             Message::SendInput(input) => {
                 if let SessionState::Connected(state) = &mut self.state {
@@ -359,10 +369,10 @@ impl App {
 
                     // Append line ending based on selection
                     match state.send_line_ending_index {
-                        1 => data.push(b'\n'),        // LF
-                        2 => data.push(b'\r'),        // CR
+                        1 => data.push(b'\n'),                // LF
+                        2 => data.push(b'\r'),                // CR
                         3 => data.extend_from_slice(b"\r\n"), // CRLF
-                        _ => {}                       // None
+                        _ => {}                               // None
                     }
 
                     // Use the session handle's send method
@@ -435,15 +445,15 @@ impl App {
                 if let SessionState::Connected(state) = &mut self.state {
                     // Update viewport height for virtual scrolling calculations
                     state.viewport_height = Some(viewport.bounds().height);
-                    
+
                     let content_height = viewport.content_bounds().height;
                     let viewport_height = viewport.bounds().height;
                     let offset = viewport.absolute_offset().y;
                     let max_scroll = (content_height - viewport_height).max(0.0);
-                    
+
                     // Check if we're at the bottom (with small tolerance for float comparison)
                     let at_bottom = offset >= max_scroll - 1.0;
-                    
+
                     match &state.scroll_state {
                         ScrollState::LockedToBottom => {
                             // Stay locked - this shouldn't normally trigger scroll changes

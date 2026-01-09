@@ -340,10 +340,10 @@ mod tests {
     fn test_word_movement() {
         let mut buf = TextBuffer::with_content("hello world");
         buf.move_start();
-        
+
         buf.move_word_right();
         assert_eq!(buf.cursor(), 6); // After "hello "
-        
+
         buf.move_word_left();
         assert_eq!(buf.cursor(), 0);
     }
@@ -365,7 +365,7 @@ mod tests {
 
         buf.move_left();
         assert_eq!(buf.cursor(), 3);
-        
+
         buf.delete_char_before();
         assert_eq!(buf.content(), "本");
     }

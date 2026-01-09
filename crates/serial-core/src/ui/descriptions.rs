@@ -6,7 +6,8 @@
 /// Descriptions for display settings
 pub mod display {
     /// Encoding setting tooltip
-    pub const ENCODING: &str = "How to decode received bytes for display. UTF-8 shows text, Hex shows raw bytes, etc.";
+    pub const ENCODING: &str =
+        "How to decode received bytes for display. UTF-8 shows text, Hex shows raw bytes, etc.";
 
     /// Show TX toggle tooltip
     pub const SHOW_TX: &str = "Show data you send to the device";
@@ -27,7 +28,8 @@ pub mod display {
 /// Descriptions for serial port settings
 pub mod serial {
     /// Baud rate tooltip
-    pub const BAUD_RATE: &str = "Communication speed in bits per second. Must match the device's configured baud rate.";
+    pub const BAUD_RATE: &str =
+        "Communication speed in bits per second. Must match the device's configured baud rate.";
 
     /// Data bits tooltip
     pub const DATA_BITS: &str = "Number of data bits per frame. 8 is most common.";
@@ -42,7 +44,8 @@ pub mod serial {
     pub const FLOW_CONTROL: &str = "Hardware (RTS/CTS) uses dedicated pins. Software (XON/XOFF) uses special bytes. None is most common.";
 
     /// RX chunking tooltip
-    pub const RX_CHUNKING: &str = "How to split incoming data into lines. LF (newline) is most common for text protocols.";
+    pub const RX_CHUNKING: &str =
+        "How to split incoming data into lines. LF (newline) is most common for text protocols.";
 }
 
 /// Descriptions for actions

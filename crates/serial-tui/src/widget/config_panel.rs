@@ -99,9 +99,7 @@ pub fn handle_config_key<T: 'static>(
             }
             ConfigKeyResult::Handled
         }
-        _ => {
-            ConfigKeyResult::NotHandled
-        }
+        _ => ConfigKeyResult::NotHandled,
     }
 }
 
@@ -144,17 +142,16 @@ fn handle_text_edit_key<T: 'static>(
     config: &mut T,
 ) -> ConfigKeyResult {
     // Check if we're editing a numeric field
-    let is_numeric = nav.current_field(sections, config)
+    let is_numeric = nav
+        .current_field(sections, config)
         .map(|f| f.kind.is_numeric_input())
         .unwrap_or(false);
-    
+
     match key.code {
-        KeyCode::Enter => {
-            match nav.apply_text_edit(sections, config) {
-                Ok(()) => ConfigKeyResult::Changed,
-                Err(msg) => ConfigKeyResult::ValidationFailed(msg),
-            }
-        }
+        KeyCode::Enter => match nav.apply_text_edit(sections, config) {
+            Ok(()) => ConfigKeyResult::Changed,
+            Err(msg) => ConfigKeyResult::ValidationFailed(msg),
+        },
         KeyCode::Esc => {
             nav.cancel_text_edit();
             ConfigKeyResult::EditClosed
@@ -285,7 +282,10 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
 
     /// Get info needed to render dropdown overlay after the main panel.
     /// Returns (field_y, options, selected_index, disconnected) if dropdown is open.
-    fn get_dropdown_info(&self, inner: Rect) -> Option<(u16, &'static [&'static str], usize, bool)> {
+    fn get_dropdown_info(
+        &self,
+        inner: Rect,
+    ) -> Option<(u16, &'static [&'static str], usize, bool)> {
         let dropdown_index = self.nav.edit_mode.dropdown_index()?;
         if !self.focused {
             return None;
@@ -351,7 +351,8 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
         let mut field_index = 0;
 
         // Track which fields have visible children (for tree connector rendering)
-        let mut fields_with_children: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut fields_with_children: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
         for section in self.sections {
             for field in section.fields {
                 if !(field.visible)(self.data) {
@@ -393,7 +394,9 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
             }
 
             // Collect visible fields for this section to determine last child
-            let visible_fields: Vec<_> = section.fields.iter()
+            let visible_fields: Vec<_> = section
+                .fields
+                .iter()
                 .filter(|f| (f.visible)(self.data))
                 .collect();
 
@@ -410,11 +413,8 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 let value = (field.get)(self.data);
 
                 // Calculate tree prefix for hierarchical display
-                let tree_prefix = calculate_tree_prefix(
-                    field,
-                    field_in_section_idx,
-                    &visible_fields,
-                );
+                let tree_prefix =
+                    calculate_tree_prefix(field, field_in_section_idx, &visible_fields);
                 let tree_prefix_width = tree_prefix.chars().count();
 
                 // Calculate styles based on enabled state
@@ -455,7 +455,10 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     (FieldKind::TextInput { placeholder }, FieldValue::String(s)) => {
                         if is_text_editing {
                             // Show edit buffer with cursor indicator
-                            let content = self.nav.edit_mode.text_buffer()
+                            let content = self
+                                .nav
+                                .edit_mode
+                                .text_buffer()
                                 .map(|b| b.content())
                                 .unwrap_or("");
                             (format!("{}▏", content), None)
@@ -468,7 +471,10 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     (FieldKind::NumericInput { .. }, FieldValue::Usize(n)) => {
                         if is_text_editing {
                             // Show edit buffer with cursor indicator
-                            let content = self.nav.edit_mode.text_buffer()
+                            let content = self
+                                .nav
+                                .edit_mode
+                                .text_buffer()
                                 .map(|b| b.content())
                                 .unwrap_or("");
                             (format!("{}▏", content), None)
@@ -478,7 +484,10 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     }
                     (FieldKind::NumericInput { .. }, FieldValue::Isize(n)) => {
                         if is_text_editing {
-                            let content = self.nav.edit_mode.text_buffer()
+                            let content = self
+                                .nav
+                                .edit_mode
+                                .text_buffer()
                                 .map(|b| b.content())
                                 .unwrap_or("");
                             (format!("{}▏", content), None)
@@ -488,7 +497,10 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     }
                     (FieldKind::NumericInput { .. }, FieldValue::Float(f)) => {
                         if is_text_editing {
-                            let content = self.nav.edit_mode.text_buffer()
+                            let content = self
+                                .nav
+                                .edit_mode
+                                .text_buffer()
                                 .map(|b| b.content())
                                 .unwrap_or("");
                             (format!("{}▏", content), None)
@@ -514,7 +526,8 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     (*label).to_string()
                 };
 
-                let padding = available.saturating_sub(tree_prefix_width + label_display.len() + value_str.len());
+                let padding = available
+                    .saturating_sub(tree_prefix_width + label_display.len() + value_str.len());
 
                 // Build line with tree prefix
                 let tree_prefix_style = Theme::muted();
@@ -609,12 +622,21 @@ fn render_dropdown_overlay(
         0
     };
 
-    for (i, option) in options.iter().enumerate().skip(scroll_offset).take(visible_options) {
+    for (i, option) in options
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(visible_options)
+    {
         let y = inner.y + (i - scroll_offset) as u16;
         let is_selected = i == selected_idx;
 
         // Highlight selected option (use disconnected color when appropriate)
-        let highlight_color = if disconnected { Theme::DISCONNECTED } else { Theme::PRIMARY };
+        let highlight_color = if disconnected {
+            Theme::DISCONNECTED
+        } else {
+            Theme::PRIMARY
+        };
         if is_selected {
             for x in inner.x..inner.x + inner.width {
                 if let Some(cell) = buf.cell_mut((x, y)) {
@@ -655,28 +677,30 @@ fn calculate_tree_prefix<T>(
     // Build the ancestry chain from root to this field's parent
     let mut ancestry = Vec::new();
     let mut current_parent = Some(parent_id);
-    
+
     while let Some(pid) = current_parent {
         ancestry.push(pid);
         // Find the parent field and get its parent
-        current_parent = visible_fields.iter()
+        current_parent = visible_fields
+            .iter()
             .find(|f| f.id == pid)
             .and_then(|f| f.parent_id);
     }
-    
+
     // Reverse so we go from root to immediate parent
     ancestry.reverse();
-    
+
     let mut prefix = String::new();
-    
+
     // For each ancestor level, determine if we need "│ " (has more siblings) or "  " (no more siblings)
     for (level, &ancestor_id) in ancestry.iter().enumerate() {
         if level == ancestry.len() - 1 {
             // This is the immediate parent - use ├ or └
-            let has_more_siblings = visible_fields.iter()
+            let has_more_siblings = visible_fields
+                .iter()
                 .skip(field_idx + 1)
                 .any(|f| f.parent_id == Some(ancestor_id));
-            
+
             if has_more_siblings {
                 prefix.push_str("├ ");
             } else {
@@ -686,17 +710,16 @@ fn calculate_tree_prefix<T>(
             // This is a grandparent or higher - check if it has more children after current branch
             // Find the child of this ancestor that is an ancestor of our field
             let child_ancestor = ancestry.get(level + 1);
-            
+
             // Check if the ancestor has more children after the branch we're in
-            let ancestor_has_more_children = visible_fields.iter()
-                .skip(field_idx + 1)
-                .any(|f| {
-                    // Check if this field is a direct child of the ancestor
-                    // but NOT in our current branch
-                    f.parent_id == Some(ancestor_id) && 
-                    child_ancestor.is_none_or(|&child| !is_descendant_of(f, child, visible_fields))
-                });
-            
+            let ancestor_has_more_children = visible_fields.iter().skip(field_idx + 1).any(|f| {
+                // Check if this field is a direct child of the ancestor
+                // but NOT in our current branch
+                f.parent_id == Some(ancestor_id)
+                    && child_ancestor
+                        .is_none_or(|&child| !is_descendant_of(f, child, visible_fields))
+            });
+
             if ancestor_has_more_children {
                 prefix.push_str("│ ");
             } else {
@@ -704,18 +727,23 @@ fn calculate_tree_prefix<T>(
             }
         }
     }
-    
+
     prefix
 }
 
 /// Check if a field is a descendant of a given ancestor (by id)
-fn is_descendant_of<T>(field: &FieldDef<T>, ancestor_id: &str, visible_fields: &[&FieldDef<T>]) -> bool {
+fn is_descendant_of<T>(
+    field: &FieldDef<T>,
+    ancestor_id: &str,
+    visible_fields: &[&FieldDef<T>],
+) -> bool {
     let mut current_parent = field.parent_id;
     while let Some(pid) = current_parent {
         if pid == ancestor_id {
             return true;
         }
-        current_parent = visible_fields.iter()
+        current_parent = visible_fields
+            .iter()
             .find(|f| f.id == pid)
             .and_then(|f| f.parent_id);
     }

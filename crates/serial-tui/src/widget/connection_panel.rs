@@ -8,8 +8,8 @@ use ratatui::{
 };
 use serial_core::{SerialConfig, Statistics};
 
-use crate::theme::Theme;
 use super::util::{format_bytes, format_rate};
+use crate::theme::Theme;
 
 /// Widget displaying connection info (port config + statistics).
 pub struct ConnectionPanel<'a> {

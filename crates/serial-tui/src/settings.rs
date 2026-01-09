@@ -5,8 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use serial_core::{
-    DataBits,
-    settings,
+    DataBits, settings,
     ui::serial_config::{COMMON_BAUD_RATES, DATA_BITS_VARIANTS},
 };
 
@@ -326,12 +325,12 @@ impl Default for GlobalSettings {
 
 /// Buffer sizes in bytes corresponding to buffer_size_index options.
 pub const BUFFER_SIZES: &[usize] = &[
-    1024 * 1024,        // 1 MB
-    5 * 1024 * 1024,    // 5 MB
-    10 * 1024 * 1024,   // 10 MB
-    50 * 1024 * 1024,   // 50 MB
-    100 * 1024 * 1024,  // 100 MB
-    usize::MAX,         // Unlimited
+    1024 * 1024,       // 1 MB
+    5 * 1024 * 1024,   // 5 MB
+    10 * 1024 * 1024,  // 10 MB
+    50 * 1024 * 1024,  // 50 MB
+    100 * 1024 * 1024, // 100 MB
+    usize::MAX,        // Unlimited
 ];
 
 impl GlobalSettings {
@@ -372,7 +371,10 @@ impl GlobalSettings {
 
     /// Get the buffer size in bytes (usize::MAX for unlimited).
     pub fn buffer_size(&self) -> usize {
-        BUFFER_SIZES.get(self.buffer_size_index).copied().unwrap_or(usize::MAX)
+        BUFFER_SIZES
+            .get(self.buffer_size_index)
+            .copied()
+            .unwrap_or(usize::MAX)
     }
 }
 

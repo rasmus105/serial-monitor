@@ -48,8 +48,11 @@ pub fn stop_bits_display(value: StopBits) -> &'static str {
 }
 
 /// All `FlowControl` variants in order
-pub const FLOW_CONTROL_VARIANTS: &[FlowControl] =
-    &[FlowControl::None, FlowControl::Software, FlowControl::Hardware];
+pub const FLOW_CONTROL_VARIANTS: &[FlowControl] = &[
+    FlowControl::None,
+    FlowControl::Software,
+    FlowControl::Hardware,
+];
 
 /// Display name for a `FlowControl` value
 pub fn flow_control_display(value: FlowControl) -> &'static str {

@@ -7,7 +7,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Tabs, Widget},
 };
-use serial_core::ui::config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled};
+use serial_core::ui::config::{
+    ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid,
+    always_visible,
+};
 
 use crate::{
     keybind::{KeyContext, Keybind, all_keybinds},
@@ -93,12 +96,16 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
                     options: MAX_SESSIONS_OPTIONS,
                 },
                 get: |c| {
-                    let idx = MAX_SESSIONS_VALUES.iter().position(|&v| v == c.auto_save_max_sessions).unwrap_or(1);
+                    let idx = MAX_SESSIONS_VALUES
+                        .iter()
+                        .position(|&v| v == c.auto_save_max_sessions)
+                        .unwrap_or(1);
                     FieldValue::OptionIndex(idx)
                 },
                 set: |c, v| {
                     if let FieldValue::OptionIndex(i) = v {
-                        c.auto_save_max_sessions = MAX_SESSIONS_VALUES.get(i).copied().unwrap_or(10);
+                        c.auto_save_max_sessions =
+                            MAX_SESSIONS_VALUES.get(i).copied().unwrap_or(10);
                     }
                 },
                 visible: always_visible,
@@ -325,45 +332,41 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
     },
     Section {
         header: Some("Buffer"),
-        fields: &[
-            FieldDef {
-                id: "buffer_size",
-                label: "Buffer Size",
-                kind: FieldKind::Select {
-                    options: BUFFER_SIZE_OPTIONS,
-                },
-                get: |c| FieldValue::OptionIndex(c.buffer_size_index),
-                set: |c, v| {
-                    if let FieldValue::OptionIndex(i) = v {
-                        c.buffer_size_index = i;
-                    }
-                },
-                visible: always_visible,
-                enabled: always_enabled,
-                parent_id: None,
-                validate: always_valid,
+        fields: &[FieldDef {
+            id: "buffer_size",
+            label: "Buffer Size",
+            kind: FieldKind::Select {
+                options: BUFFER_SIZE_OPTIONS,
             },
-        ],
+            get: |c| FieldValue::OptionIndex(c.buffer_size_index),
+            set: |c, v| {
+                if let FieldValue::OptionIndex(i) = v {
+                    c.buffer_size_index = i;
+                }
+            },
+            visible: always_visible,
+            enabled: always_enabled,
+            parent_id: None,
+            validate: always_valid,
+        }],
     },
     Section {
         header: Some("System"),
-        fields: &[
-            FieldDef {
-                id: "keep_awake",
-                label: "Keep Awake",
-                kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.keep_awake),
-                set: |c, v| {
-                    if let FieldValue::Bool(b) = v {
-                        c.keep_awake = b;
-                    }
-                },
-                visible: always_visible,
-                enabled: always_enabled,
-                parent_id: None,
-                validate: always_valid,
+        fields: &[FieldDef {
+            id: "keep_awake",
+            label: "Keep Awake",
+            kind: FieldKind::Toggle,
+            get: |c| FieldValue::Bool(c.keep_awake),
+            set: |c, v| {
+                if let FieldValue::Bool(b) = v {
+                    c.keep_awake = b;
+                }
             },
-        ],
+            visible: always_visible,
+            enabled: always_enabled,
+            parent_id: None,
+            validate: always_valid,
+        }],
     },
 ];
 
@@ -422,7 +425,9 @@ impl HelpOverlayState {
                     self.next_tab();
                 }
             }
-            KeyCode::BackTab | KeyCode::Char('h') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::BackTab | KeyCode::Char('h')
+                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 // Don't switch tab if in dropdown
                 if self.tab != HelpTab::Settings || !self.settings_nav.edit_mode.is_dropdown() {
                     self.prev_tab();
@@ -471,37 +476,65 @@ impl HelpOverlayState {
 
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                self.settings_nav.next_field(SETTINGS_SECTIONS, &self.settings);
+                self.settings_nav
+                    .next_field(SETTINGS_SECTIONS, &self.settings);
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.settings_nav.prev_field(SETTINGS_SECTIONS, &self.settings);
+                self.settings_nav
+                    .prev_field(SETTINGS_SECTIONS, &self.settings);
             }
-            KeyCode::Char('h') | KeyCode::Left if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(field) = self.settings_nav.current_field(SETTINGS_SECTIONS, &self.settings) {
+            KeyCode::Char('h') | KeyCode::Left
+                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                if let Some(field) = self
+                    .settings_nav
+                    .current_field(SETTINGS_SECTIONS, &self.settings)
+                {
                     if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self.settings_nav.toggle_current(SETTINGS_SECTIONS, &mut self.settings);
+                        let _ = self
+                            .settings_nav
+                            .toggle_current(SETTINGS_SECTIONS, &mut self.settings);
                     } else if field.kind.is_select() {
-                        self.settings_nav.dropdown_prev(SETTINGS_SECTIONS, &self.settings);
-                        let _ = self.settings_nav.apply_dropdown(SETTINGS_SECTIONS, &mut self.settings);
+                        self.settings_nav
+                            .dropdown_prev(SETTINGS_SECTIONS, &self.settings);
+                        let _ = self
+                            .settings_nav
+                            .apply_dropdown(SETTINGS_SECTIONS, &mut self.settings);
                     }
                 }
             }
-            KeyCode::Char('l') | KeyCode::Right if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(field) = self.settings_nav.current_field(SETTINGS_SECTIONS, &self.settings) {
+            KeyCode::Char('l') | KeyCode::Right
+                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                if let Some(field) = self
+                    .settings_nav
+                    .current_field(SETTINGS_SECTIONS, &self.settings)
+                {
                     if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self.settings_nav.toggle_current(SETTINGS_SECTIONS, &mut self.settings);
+                        let _ = self
+                            .settings_nav
+                            .toggle_current(SETTINGS_SECTIONS, &mut self.settings);
                     } else if field.kind.is_select() {
-                        self.settings_nav.dropdown_next(SETTINGS_SECTIONS, &self.settings);
-                        let _ = self.settings_nav.apply_dropdown(SETTINGS_SECTIONS, &mut self.settings);
+                        self.settings_nav
+                            .dropdown_next(SETTINGS_SECTIONS, &self.settings);
+                        let _ = self
+                            .settings_nav
+                            .apply_dropdown(SETTINGS_SECTIONS, &mut self.settings);
                     }
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
-                if let Some(field) = self.settings_nav.current_field(SETTINGS_SECTIONS, &self.settings) {
+                if let Some(field) = self
+                    .settings_nav
+                    .current_field(SETTINGS_SECTIONS, &self.settings)
+                {
                     if field.kind.is_select() {
-                        self.settings_nav.open_dropdown(SETTINGS_SECTIONS, &self.settings);
+                        self.settings_nav
+                            .open_dropdown(SETTINGS_SECTIONS, &self.settings);
                     } else if matches!(field.kind, FieldKind::Toggle) {
-                        let _ = self.settings_nav.toggle_current(SETTINGS_SECTIONS, &mut self.settings);
+                        let _ = self
+                            .settings_nav
+                            .toggle_current(SETTINGS_SECTIONS, &mut self.settings);
                     }
                 }
             }
@@ -513,13 +546,17 @@ impl HelpOverlayState {
     fn handle_settings_dropdown_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
-                self.settings_nav.dropdown_next(SETTINGS_SECTIONS, &self.settings);
+                self.settings_nav
+                    .dropdown_next(SETTINGS_SECTIONS, &self.settings);
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.settings_nav.dropdown_prev(SETTINGS_SECTIONS, &self.settings);
+                self.settings_nav
+                    .dropdown_prev(SETTINGS_SECTIONS, &self.settings);
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
-                let _ = self.settings_nav.apply_dropdown(SETTINGS_SECTIONS, &mut self.settings);
+                let _ = self
+                    .settings_nav
+                    .apply_dropdown(SETTINGS_SECTIONS, &mut self.settings);
                 self.settings_nav.close_dropdown();
                 return true; // Need redraw for dropdown close
             }
@@ -531,7 +568,6 @@ impl HelpOverlayState {
         }
         false
     }
-
 }
 
 /// Help overlay widget.
@@ -578,7 +614,10 @@ impl Widget for HelpOverlay<'_> {
         // Tabs
         let tabs_area = Rect::new(inner.x, inner.y, inner.width, 1);
         let titles: Vec<&str> = HelpTab::ALL.iter().map(|t| t.title()).collect();
-        let selected = HelpTab::ALL.iter().position(|t| *t == self.state.tab).unwrap_or(0);
+        let selected = HelpTab::ALL
+            .iter()
+            .position(|t| *t == self.state.tab)
+            .unwrap_or(0);
 
         Tabs::new(titles)
             .select(selected)
@@ -592,7 +631,12 @@ impl Widget for HelpOverlay<'_> {
 
         match self.state.tab {
             HelpTab::Shortcuts => render_shortcuts(content_area, buf, self.state.scroll),
-            HelpTab::Settings => render_settings(content_area, buf, &self.state.settings, &self.state.settings_nav),
+            HelpTab::Settings => render_settings(
+                content_area,
+                buf,
+                &self.state.settings,
+                &self.state.settings_nav,
+            ),
             HelpTab::Commands => render_commands(content_area, buf, self.state.scroll),
         }
     }
@@ -616,7 +660,8 @@ fn render_shortcuts(area: Rect, buf: &mut Buffer, scroll: usize) {
     let mut lines: Vec<Line> = Vec::new();
 
     for (context, name) in contexts {
-        let context_keybinds: Vec<&Keybind> = keybinds.iter().filter(|k| k.context == context).collect();
+        let context_keybinds: Vec<&Keybind> =
+            keybinds.iter().filter(|k| k.context == context).collect();
 
         if context_keybinds.is_empty() {
             continue;
@@ -657,13 +702,15 @@ fn render_settings(area: Rect, buf: &mut Buffer, settings: &AppSettings, nav: &C
     ];
 
     let help_height = help_lines.len() as u16;
-    Paragraph::new(help_lines).render(
-        Rect::new(area.x, area.y, area.width, help_height),
-        buf,
-    );
+    Paragraph::new(help_lines).render(Rect::new(area.x, area.y, area.width, help_height), buf);
 
     // Settings panel below
-    let panel_area = Rect::new(area.x, area.y + help_height, area.width, area.height.saturating_sub(help_height));
+    let panel_area = Rect::new(
+        area.x,
+        area.y + help_height,
+        area.width,
+        area.height.saturating_sub(help_height),
+    );
 
     ConfigPanel::new(SETTINGS_SECTIONS, settings, nav)
         .focused(true)
@@ -697,7 +744,11 @@ fn render_commands(area: Rect, buf: &mut Buffer, scroll: usize) {
 
     // Command list: (command, alias, description)
     let commands = [
-        (":connect <port>", ":c", "Open connection config modal for the specified port"),
+        (
+            ":connect <port>",
+            ":c",
+            "Open connection config modal for the specified port",
+        ),
         (":disconnect", ":d", "Disconnect from the current session"),
         (":save <path>", ":w", "Save buffer contents to a file"),
         (":quit", ":q", "Quit the application"),

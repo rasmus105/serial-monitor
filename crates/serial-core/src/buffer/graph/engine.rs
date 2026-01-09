@@ -230,7 +230,10 @@ impl GraphEngine {
 
         // Parse data as UTF-8 and store data points
         let text = String::from_utf8_lossy(&chunk.data);
-        let values = self.config.parser.parse_str(&text, chunk.timestamp, chunk.direction);
+        let values = self
+            .config
+            .parser
+            .parse_str(&text, chunk.timestamp, chunk.direction);
         for value in values {
             self.next_color = self.next_color.wrapping_add(1);
             let entry = self.series.entry(value.series).or_insert(GraphSeries {
@@ -321,8 +324,8 @@ impl GraphEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::parser::{Csv, Json, Regex, Smart};
+    use super::*;
 
     fn raw_chunk(data: &str) -> RawChunk {
         RawChunk {

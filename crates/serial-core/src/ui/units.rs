@@ -8,7 +8,9 @@ use std::time::Duration;
 use strum::{Display, EnumIter, IntoStaticStr, VariantArray};
 
 /// Size unit for configuring buffer sizes, chunk sizes, etc.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumIter, VariantArray, IntoStaticStr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumIter, VariantArray, IntoStaticStr,
+)]
 pub enum SizeUnit {
     /// Bytes
     #[strum(to_string = "B")]
@@ -50,7 +52,9 @@ impl SizeUnit {
 }
 
 /// Time unit for configuring delays, timeouts, etc.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumIter, VariantArray, IntoStaticStr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Display, EnumIter, VariantArray, IntoStaticStr,
+)]
 pub enum TimeUnit {
     /// Milliseconds
     #[default]

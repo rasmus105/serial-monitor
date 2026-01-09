@@ -63,10 +63,10 @@ mod search;
 
 // Public exports
 pub use chunk::{ChunkView, Direction};
-pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8};
 pub use encoding::{BinaryFormat, Encoding, HexFormat};
+pub use encoding::{encode, encode_ascii, encode_binary, encode_hex, encode_utf8};
 pub use file_saver::{
-    default_cache_directory, AutoSaveConfig, DirectionFilter, SaveFormat, SaveScope, UserSaveConfig,
+    AutoSaveConfig, DirectionFilter, SaveFormat, SaveScope, UserSaveConfig, default_cache_directory,
 };
 pub use pattern::{PatternMatcher, PatternMode};
 pub use search::SearchMatch;

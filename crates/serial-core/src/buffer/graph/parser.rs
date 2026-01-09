@@ -246,11 +246,7 @@ impl Csv {
             .map(|p| p + 1)
             .unwrap_or(0);
 
-        if start >= end {
-            &[]
-        } else {
-            &data[start..end]
-        }
+        if start >= end { &[] } else { &data[start..end] }
     }
 }
 

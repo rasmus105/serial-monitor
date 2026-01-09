@@ -408,9 +408,7 @@ impl<T: 'static> SectionSliceExt<T> for [Section<T>] {
     }
 
     fn nth_visible_field<'a>(&'a self, state: &T, n: usize) -> Option<&'a FieldDef<T>> {
-        self.iter()
-            .flat_map(|s| s.visible_fields(state))
-            .nth(n)
+        self.iter().flat_map(|s| s.visible_fields(state)).nth(n)
     }
 
     fn visible_fields_with_section<'a>(

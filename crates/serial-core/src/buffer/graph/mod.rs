@@ -7,6 +7,4 @@ pub use engine::{
     GraphDataPoint, GraphEngine, GraphEngineConfig, GraphMode, GraphSeries, PacketRateData,
     PacketRateSample,
 };
-pub use parser::{
-    Csv, GraphParser, GraphParserType, Json, ParsedValue, Regex, Smart,
-};
+pub use parser::{Csv, GraphParser, GraphParserType, Json, ParsedValue, Regex, Smart};

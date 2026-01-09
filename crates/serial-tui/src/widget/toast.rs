@@ -170,11 +170,11 @@ impl Widget for ToastsWidget<'_> {
             // Minimum width: 30, Maximum width: 70% of screen or 60 chars
             let max_width = (area.width * 70 / 100).clamp(30, 60) as usize;
             let msg_len = toast.message.len();
-            
+
             // Toast width: message length + borders (2) + padding (2), clamped
             let toast_width = (msg_len + 4).clamp(30, max_width) as u16;
             let toast_width = toast_width.min(area.width.saturating_sub(4));
-            
+
             // Calculate how many lines we need for the message
             // Inner width is toast_width - 2 (borders)
             let inner_width = toast_width.saturating_sub(2) as usize;
@@ -182,11 +182,12 @@ impl Widget for ToastsWidget<'_> {
                 msg_len.div_ceil(inner_width)
             } else {
                 1
-            }).clamp(1, 4); // max 4 lines of text
-            
+            })
+            .clamp(1, 4); // max 4 lines of text
+
             // Toast height: lines + borders (2)
             let toast_height = (num_lines as u16) + 2;
-            
+
             if y + toast_height > area.y + area.height {
                 break;
             }

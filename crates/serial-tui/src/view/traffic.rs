@@ -9,14 +9,20 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget},
+    widgets::{
+        Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget,
+        Widget,
+    },
 };
 use serial_core::{
     Direction as DataDirection, SerialConfig, SessionHandle,
     buffer::{PatternMode, SearchMatch},
     ui::{
         TimestampFormat,
-        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_valid, always_visible, always_enabled},
+        config::{
+            ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid,
+            always_visible,
+        },
         encoding::{ENCODING_DISPLAY_NAMES, ENCODING_VARIANTS},
         slice_by_display_width,
     },
@@ -100,10 +106,10 @@ impl Default for TrafficConfig {
             lock_to_bottom: false,
             search_mode_index: 0, // Normal
             filter_mode_index: 0, // Normal
-            wrap_text: true, // Wrap by default
+            wrap_text: true,      // Wrap by default
             // File saving defaults
             file_save_enabled: false,
-            file_save_format_index: 1, // Encoded
+            file_save_format_index: 1,   // Encoded
             file_save_encoding_index: 1, // ASCII
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
@@ -344,8 +350,6 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
     },
 ];
 
-
-
 impl TrafficView {
     pub fn new() -> Self {
         Self {
@@ -375,11 +379,11 @@ impl TrafficView {
     /// Sync config changes to the session buffer
     pub fn sync_config_to_buffer(&self, handle: &SessionHandle) {
         let mut buffer = handle.buffer_mut();
-        
+
         // Sync encoding
         let encoding = ENCODING_VARIANTS[self.config.encoding_index];
         buffer.set_encoding(encoding);
-        
+
         // Sync show_tx/show_rx
         buffer.set_show_tx(self.config.show_tx);
         buffer.set_show_rx(self.config.show_rx);
@@ -395,7 +399,10 @@ impl TrafficView {
         focus: Focus,
     ) {
         // Main area layout: traffic + optional search/filter/send/dir bar
-        let show_input_bar = self.search_focused || self.filter_focused || self.send_focused || self.dir_path_focused;
+        let show_input_bar = self.search_focused
+            || self.filter_focused
+            || self.send_focused
+            || self.dir_path_focused;
         let main_chunks = if show_input_bar {
             Layout::default()
                 .direction(Direction::Vertical)
@@ -414,18 +421,12 @@ impl TrafficView {
         // Draw input bar if active
         if show_input_bar {
             self.draw_input_bar(main_chunks[1], buf, handle);
-            
+
             // Render directory path completion popup (above the input bar)
             if self.dir_path_focused && self.dir_path_completion.visible {
-                let input_inner = Block::default()
-                    .borders(Borders::ALL)
-                    .inner(main_chunks[1]);
-                CompletionPopup::new(
-                    &self.dir_path_completion,
-                    input_inner.y,
-                    input_inner.x,
-                )
-                .render(main_area, buf);
+                let input_inner = Block::default().borders(Borders::ALL).inner(main_chunks[1]);
+                CompletionPopup::new(&self.dir_path_completion, input_inner.y, input_inner.x)
+                    .render(main_area, buf);
             }
         }
 
@@ -439,20 +440,20 @@ impl TrafficView {
         // Update search matches before we get an immutable borrow
         // This ensures matches are current for highlighting
         let _ = handle.buffer_mut().matches();
-        
+
         let buffer = handle.buffer();
         let current_match = buffer.current_match().copied();
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(if focus == Focus::Main && !self.is_input_mode() {
+        let block = Block::default().borders(Borders::ALL).border_style(
+            if focus == Focus::Main && !self.is_input_mode() {
                 Theme::border_focused()
             } else {
                 Theme::border()
-            });
+            },
+        );
 
         let inner = block.inner(area);
-        
+
         if inner.height == 0 || inner.width == 0 {
             block.render(area, buf);
             return;
@@ -466,7 +467,12 @@ impl TrafficView {
         // 3. Paragraph::render() only writes actual content, not trailing spaces
         // Without this, old content bleeds through when lines get shorter or positions shift.
         for y in inner.y..inner.y + inner.height {
-            buf.set_string(inner.x, y, " ".repeat(inner.width as usize), ratatui::style::Style::default());
+            buf.set_string(
+                inner.x,
+                y,
+                " ".repeat(inner.width as usize),
+                ratatui::style::Style::default(),
+            );
         }
 
         let visible_height = inner.height as usize;
@@ -474,7 +480,7 @@ impl TrafficView {
 
         // Calculate prefix width: "TX " or "RX " = 3 chars
         let base_prefix_width = 3;
-        
+
         // For relative timestamps, calculate the max width needed for alignment
         let timestamp_width = if self.config.show_timestamps {
             match self.config.timestamp_format() {
@@ -484,7 +490,10 @@ impl TrafficView {
                     buffer
                         .chunks()
                         .map(|chunk| {
-                            let elapsed = chunk.timestamp.duration_since(session_start).unwrap_or_default();
+                            let elapsed = chunk
+                                .timestamp
+                                .duration_since(session_start)
+                                .unwrap_or_default();
                             let secs = elapsed.as_secs_f64();
                             format!("+{:.3}s", secs).len()
                         })
@@ -498,7 +507,12 @@ impl TrafficView {
             0
         };
 
-        let prefix_width = base_prefix_width + if self.config.show_timestamps { timestamp_width + 1 } else { 0 };
+        let prefix_width = base_prefix_width
+            + if self.config.show_timestamps {
+                timestamp_width + 1
+            } else {
+                0
+            };
         let content_width = inner_width.saturating_sub(prefix_width);
 
         // Store for key handler calculations
@@ -506,14 +520,30 @@ impl TrafficView {
 
         if self.config.wrap_text {
             self.draw_traffic_wrapped(
-                area, buf, handle, &buffer, inner, visible_height, 
-                content_width, prefix_width, timestamp_width, block,
+                area,
+                buf,
+                handle,
+                &buffer,
+                inner,
+                visible_height,
+                content_width,
+                prefix_width,
+                timestamp_width,
+                block,
                 current_match.as_ref(),
             );
         } else {
             self.draw_traffic_truncated(
-                area, buf, handle, &buffer, inner, visible_height,
-                content_width, prefix_width, timestamp_width, block,
+                area,
+                buf,
+                handle,
+                &buffer,
+                inner,
+                visible_height,
+                content_width,
+                prefix_width,
+                timestamp_width,
+                block,
                 current_match.as_ref(),
             );
         }
@@ -535,17 +565,22 @@ impl TrafficView {
         current_match: Option<&SearchMatch>,
     ) {
         let total = buffer.len();
-        
+
         // Update last visible height for key handler scroll bounds
         self.last_visible_height = visible_height;
-        
+
         // Calculate scroll position with proper bounds
         // Add 10% bottom padding so user can clearly see when they've hit the bottom
         // Only apply padding when there's actually scrollable content
         let max_scroll_content = total.saturating_sub(visible_height);
-        let bottom_padding = if max_scroll_content > 0 { visible_height / 10 } else { 0 };
+        let bottom_padding = if max_scroll_content > 0 {
+            visible_height / 10
+        } else {
+            0
+        };
         let max_scroll = max_scroll_content + bottom_padding;
-        let should_auto_scroll = self.config.lock_to_bottom || (self.config.auto_scroll && self.at_bottom);
+        let should_auto_scroll =
+            self.config.lock_to_bottom || (self.config.auto_scroll && self.at_bottom);
         let scroll = if should_auto_scroll && total > 0 {
             max_scroll
         } else {
@@ -567,11 +602,7 @@ impl TrafficView {
         } else {
             ""
         };
-        let save_indicator = if buffer.is_saving() {
-            " [SAVING]"
-        } else {
-            ""
-        };
+        let save_indicator = if buffer.is_saving() { " [SAVING]" } else { "" };
         // Cap displayed scroll position at content max (don't show padding in title)
         let display_scroll = scroll.min(max_scroll_content);
         let block = block.title(format!(
@@ -586,7 +617,12 @@ impl TrafficView {
 
         // Render chunks
         let mut y = inner.y;
-        for (visible_idx, chunk) in buffer.chunks().enumerate().skip(scroll).take(visible_height) {
+        for (visible_idx, chunk) in buffer
+            .chunks()
+            .enumerate()
+            .skip(scroll)
+            .take(visible_height)
+        {
             if y >= inner.y + inner.height {
                 break;
             }
@@ -594,8 +630,13 @@ impl TrafficView {
             // Get matches for this chunk
             let matches = buffer.matches_in_chunk(visible_idx);
             let line = self.format_chunk_line_highlighted(
-                &chunk, timestamp_width, content_width, prefix_width, true,
-                matches, current_match,
+                &chunk,
+                timestamp_width,
+                content_width,
+                prefix_width,
+                true,
+                matches,
+                current_match,
             );
             let line_area = Rect::new(inner.x, y, inner.width, 1);
             Paragraph::new(line).render(line_area, buf);
@@ -634,7 +675,7 @@ impl TrafficView {
         // Calculate total display lines (each chunk may span multiple lines when wrapped)
         let chunks: Vec<_> = buffer.chunks().collect();
         let mut display_lines: Vec<(usize, usize)> = Vec::new(); // (chunk_index, line_within_chunk)
-        
+
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             // Use display width, not byte length, for line wrapping calculations
             let content_display_width = chunk.encoded.width();
@@ -642,25 +683,31 @@ impl TrafficView {
                 (content_display_width + content_width - 1) / content_width.max(1)
             } else {
                 1
-            }.max(1); // At least one line per chunk
-            
+            }
+            .max(1); // At least one line per chunk
+
             for line_idx in 0..num_lines {
                 display_lines.push((chunk_idx, line_idx));
             }
         }
 
         let total_display_lines = display_lines.len();
-        
+
         // Update last visible height for key handler scroll bounds
         self.last_visible_height = visible_height;
-        
+
         // Calculate scroll position with proper bounds (in display lines)
         // Add 10% bottom padding so user can clearly see when they've hit the bottom
         // Only apply padding when there's actually scrollable content
         let max_scroll_content = total_display_lines.saturating_sub(visible_height);
-        let bottom_padding = if max_scroll_content > 0 { visible_height / 10 } else { 0 };
+        let bottom_padding = if max_scroll_content > 0 {
+            visible_height / 10
+        } else {
+            0
+        };
         let max_scroll = max_scroll_content + bottom_padding;
-        let should_auto_scroll = self.config.lock_to_bottom || (self.config.auto_scroll && self.at_bottom);
+        let should_auto_scroll =
+            self.config.lock_to_bottom || (self.config.auto_scroll && self.at_bottom);
         let scroll = if should_auto_scroll && total_display_lines > 0 {
             max_scroll
         } else {
@@ -685,11 +732,7 @@ impl TrafficView {
         } else {
             ""
         };
-        let save_indicator = if buffer.is_saving() {
-            " [SAVING]"
-        } else {
-            ""
-        };
+        let save_indicator = if buffer.is_saving() { " [SAVING]" } else { "" };
         let block = block.title(format!(
             " Traffic [{}/{}]{}{}{} ",
             display_scroll + 1,
@@ -702,17 +745,19 @@ impl TrafficView {
 
         // Render display lines starting from scroll position
         let mut y = inner.y;
-        for &(chunk_idx, line_within_chunk) in display_lines.iter().skip(scroll).take(visible_height) {
+        for &(chunk_idx, line_within_chunk) in
+            display_lines.iter().skip(scroll).take(visible_height)
+        {
             if y >= inner.y + inner.height {
                 break;
             }
 
             let chunk = &chunks[chunk_idx];
             let content = &chunk.encoded;
-            
+
             // Get matches for this chunk
             let matches = buffer.matches_in_chunk(chunk_idx);
-            
+
             // Calculate which part of content to show (using display width, not bytes)
             let display_start = line_within_chunk * content_width;
             let display_end = display_start + content_width;
@@ -723,19 +768,26 @@ impl TrafficView {
             // Only show prefix on first line of chunk
             if line_within_chunk == 0 {
                 let line = self.format_chunk_line_with_content_highlighted(
-                    chunk, timestamp_width, content, start, end, matches, current_match
+                    chunk,
+                    timestamp_width,
+                    content,
+                    start,
+                    end,
+                    matches,
+                    current_match,
                 );
                 Paragraph::new(line).render(line_area, buf);
             } else {
                 // Continuation line - indent to align with content
                 let indent = " ".repeat(prefix_width);
-                let content_spans = self.create_highlighted_spans(content, start, end, matches, current_match);
+                let content_spans =
+                    self.create_highlighted_spans(content, start, end, matches, current_match);
                 let mut spans = vec![Span::raw(indent)];
                 spans.extend(content_spans);
                 let line = Line::from(spans);
                 Paragraph::new(line).render(line_area, buf);
             }
-            
+
             y += 1;
         }
 
@@ -773,14 +825,17 @@ impl TrafficView {
 
         if self.config.show_timestamps {
             let session_start = self.session_start.unwrap_or(chunk.timestamp);
-            let formatted = self.config.timestamp_format().format(chunk.timestamp, session_start);
+            let formatted = self
+                .config
+                .timestamp_format()
+                .format(chunk.timestamp, session_start);
             let padded = format!("{:>width$} ", formatted, width = timestamp_width);
             spans.push(Span::styled(padded, Theme::muted()));
         }
 
         let content = &chunk.encoded;
         let content_display_width = content.width();
-        
+
         // Calculate display bounds - use display width for comparison, then convert to bytes
         let byte_end = if truncate && content_display_width > content_width {
             // Truncate to content_width - 3 (for "...") display columns
@@ -789,11 +844,12 @@ impl TrafficView {
         } else {
             content.len()
         };
-        
+
         // Add highlighted content spans
-        let content_spans = self.create_highlighted_spans(content, 0, byte_end, matches, current_match);
+        let content_spans =
+            self.create_highlighted_spans(content, 0, byte_end, matches, current_match);
         spans.extend(content_spans);
-        
+
         // Add ellipsis if truncated
         if truncate && content_display_width > content_width {
             spans.push(Span::raw("...".to_string()));
@@ -822,12 +878,21 @@ impl TrafficView {
 
         if self.config.show_timestamps {
             let session_start = self.session_start.unwrap_or(chunk.timestamp);
-            let formatted = self.config.timestamp_format().format(chunk.timestamp, session_start);
+            let formatted = self
+                .config
+                .timestamp_format()
+                .format(chunk.timestamp, session_start);
             let padded = format!("{:>width$} ", formatted, width = timestamp_width);
             spans.push(Span::styled(padded, Theme::muted()));
         }
 
-        let content_spans = self.create_highlighted_spans(full_content, byte_start, byte_end, matches, current_match);
+        let content_spans = self.create_highlighted_spans(
+            full_content,
+            byte_start,
+            byte_end,
+            matches,
+            current_match,
+        );
         spans.extend(content_spans);
 
         Line::from(spans)
@@ -910,7 +975,13 @@ impl TrafficView {
         spans
     }
 
-    fn render_scrollbar(&self, area: Rect, buf: &mut Buffer, content_length: usize, position: usize) {
+    fn render_scrollbar(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        content_length: usize,
+        position: usize,
+    ) {
         let mut scrollbar_state = ScrollbarState::new(content_length).position(position);
         let scrollbar_area = Rect::new(
             area.x + area.width - 1,
@@ -1037,25 +1108,32 @@ impl TrafficView {
         let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let buffer = handle.buffer();
-        
+
         // Calculate total scrollable items based on wrap mode
         let total = if self.config.wrap_text {
             // Count display lines (wrapped) using display width
             let content_width = self.last_content_width.max(1);
-            buffer.chunks().map(|chunk| {
-                let content_display_width = chunk.encoded.width();
-                content_display_width.div_ceil(content_width).max(1)
-            }).sum()
+            buffer
+                .chunks()
+                .map(|chunk| {
+                    let content_display_width = chunk.encoded.width();
+                    content_display_width.div_ceil(content_width).max(1)
+                })
+                .sum()
         } else {
             // Count chunks
             buffer.len()
         };
-        
+
         // Use the last known visible height for accurate scroll bounds
         // Add 10% bottom padding to clearly show when at the very bottom
         // Only apply padding when there's actually scrollable content
         let max_scroll_content = total.saturating_sub(self.last_visible_height);
-        let bottom_padding = if max_scroll_content > 0 { self.last_visible_height / 10 } else { 0 };
+        let bottom_padding = if max_scroll_content > 0 {
+            self.last_visible_height / 10
+        } else {
+            0
+        };
         let max_scroll = max_scroll_content + bottom_padding;
 
         match key.code {
@@ -1125,7 +1203,8 @@ impl TrafficView {
                 let scroll_pos = if self.config.wrap_text {
                     let content_width = self.last_content_width.max(1);
                     // Pre-calculate display line offsets for each chunk using display width
-                    let display_offsets: Vec<usize> = buffer.chunks()
+                    let display_offsets: Vec<usize> = buffer
+                        .chunks()
                         .scan(0usize, |acc, chunk| {
                             let offset = *acc;
                             let content_display_width = chunk.encoded.width();
@@ -1135,14 +1214,15 @@ impl TrafficView {
                         })
                         .collect();
                     drop(buffer);
-                    handle.buffer_mut().goto_next_match().map(|idx| {
-                        display_offsets.get(idx).copied().unwrap_or(0)
-                    })
+                    handle
+                        .buffer_mut()
+                        .goto_next_match()
+                        .map(|idx| display_offsets.get(idx).copied().unwrap_or(0))
                 } else {
                     drop(buffer);
                     handle.buffer_mut().goto_next_match()
                 };
-                
+
                 if let Some(pos) = scroll_pos {
                     // Only navigate if not in lock mode, or if match is visible from bottom
                     if !self.config.lock_to_bottom {
@@ -1158,7 +1238,8 @@ impl TrafficView {
                 let scroll_pos = if self.config.wrap_text {
                     let content_width = self.last_content_width.max(1);
                     // Pre-calculate display line offsets for each chunk using display width
-                    let display_offsets: Vec<usize> = buffer.chunks()
+                    let display_offsets: Vec<usize> = buffer
+                        .chunks()
                         .scan(0usize, |acc, chunk| {
                             let offset = *acc;
                             let content_display_width = chunk.encoded.width();
@@ -1168,14 +1249,15 @@ impl TrafficView {
                         })
                         .collect();
                     drop(buffer);
-                    handle.buffer_mut().goto_prev_match().map(|idx| {
-                        display_offsets.get(idx).copied().unwrap_or(0)
-                    })
+                    handle
+                        .buffer_mut()
+                        .goto_prev_match()
+                        .map(|idx| display_offsets.get(idx).copied().unwrap_or(0))
                 } else {
                     drop(buffer);
                     handle.buffer_mut().goto_prev_match()
                 };
-                
+
                 if let Some(pos) = scroll_pos {
                     // Only navigate if not in lock mode
                     if !self.config.lock_to_bottom {
@@ -1191,34 +1273,47 @@ impl TrafficView {
         None
     }
 
-    fn handle_config_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
+    fn handle_config_key(
+        &mut self,
+        key: KeyEvent,
+        handle: &SessionHandle,
+    ) -> Option<TrafficAction> {
         // Keys that can trigger a toggle: Enter, Space, h, l, Left, Right
         let is_toggle_key = matches!(
             key.code,
-            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('h') | KeyCode::Char('l') 
-            | KeyCode::Left | KeyCode::Right
+            KeyCode::Enter
+                | KeyCode::Char(' ')
+                | KeyCode::Char('h')
+                | KeyCode::Char('l')
+                | KeyCode::Left
+                | KeyCode::Right
         );
-        
+
         // Track if we're about to toggle file_save_enabled
         let mut toggling_file_save = false;
         let file_save_was_enabled = self.config.file_save_enabled;
-        
+
         // Track if we're about to toggle a filter option (show_tx, show_rx)
         let mut toggling_filter = false;
         let (show_tx_was, show_rx_was) = (self.config.show_tx, self.config.show_rx);
-        
-        if is_toggle_key && !self.config_nav.edit_mode.is_dropdown()
-            && let Some(field) = self.config_nav.current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
+
+        if is_toggle_key
+            && !self.config_nav.edit_mode.is_dropdown()
+            && let Some(field) = self
+                .config_nav
+                .current_field(TRAFFIC_CONFIG_SECTIONS, &self.config)
         {
             // Handle text input field (directory)
-            if field.kind.is_text_input() && field.id == "file_save_directory"
+            if field.kind.is_text_input()
+                && field.id == "file_save_directory"
                 && matches!(key.code, KeyCode::Enter | KeyCode::Char(' '))
             {
-                self.dir_path_input.set_content(&self.config.file_save_directory);
+                self.dir_path_input
+                    .set_content(&self.config.file_save_directory);
                 self.dir_path_focused = true;
                 return Some(TrafficAction::RequestClear);
             }
-            
+
             // Intercept file_save_enabled toggle
             if field.id == "file_save_enabled" && matches!(field.kind, FieldKind::Toggle) {
                 if !self.config.file_save_enabled {
@@ -1229,9 +1324,10 @@ impl TrafficView {
                 }
                 toggling_file_save = true;
             }
-            
+
             // Check if toggling a filter option
-            if matches!(field.id, "show_tx" | "show_rx") && matches!(field.kind, FieldKind::Toggle) {
+            if matches!(field.id, "show_tx" | "show_rx") && matches!(field.kind, FieldKind::Toggle)
+            {
                 toggling_filter = true;
             }
         }
@@ -1253,15 +1349,15 @@ impl TrafficView {
         match result {
             ConfigKeyResult::Changed => {
                 self.sync_config_to_buffer(handle);
-                
+
                 // If filter was toggled, adjust scroll to keep the same line centered
-                if toggling_filter 
+                if toggling_filter
                     && (self.config.show_tx != show_tx_was || self.config.show_rx != show_rx_was)
                     && let Some(raw_idx) = middle_raw_index
                 {
                     self.scroll_to_center_raw_index(raw_idx, handle);
                 }
-                
+
                 // Check if file_save_enabled was toggled
                 if toggling_file_save && self.config.file_save_enabled != file_save_was_enabled {
                     if self.config.file_save_enabled {
@@ -1272,14 +1368,14 @@ impl TrafficView {
                         return Some(TrafficAction::StopFileSaving);
                     }
                 }
-                
+
                 Some(TrafficAction::RequestClear)
             }
             ConfigKeyResult::EditClosed => Some(TrafficAction::RequestClear),
             _ => None,
         }
     }
-    
+
     /// Calculate the raw chunk index at the middle of the visible area.
     fn calculate_middle_raw_index(&self, handle: &SessionHandle) -> Option<usize> {
         let buffer = handle.buffer();
@@ -1320,7 +1416,7 @@ impl TrafficView {
     /// Scroll to center a raw chunk index in the view.
     fn scroll_to_center_raw_index(&mut self, raw_index: usize, handle: &SessionHandle) {
         let buffer = handle.buffer();
-        
+
         // Find where this raw index ends up in the new filtered view
         let visible_idx = match buffer.nearest_visible_from_raw(raw_index) {
             Some(idx) => idx,
@@ -1351,11 +1447,11 @@ impl TrafficView {
             self.scroll = visible_idx.saturating_sub(self.last_visible_height / 2);
         }
     }
-    
+
     /// Validate the save directory. Returns Some(error_message) if invalid, None if valid.
     fn validate_save_directory(&self) -> Option<String> {
         let path = std::path::Path::new(&self.config.file_save_directory);
-        
+
         // Check if directory exists
         if !path.exists() {
             // Try to create it
@@ -1363,12 +1459,12 @@ impl TrafficView {
                 return Some(format!("Cannot create directory: {}", e));
             }
         }
-        
+
         // Check if it's actually a directory
         if !path.is_dir() {
             return Some("Path is not a directory".to_string());
         }
-        
+
         // Check if writable by trying to create a temp file
         let test_file = path.join(".serial-monitor-test");
         match std::fs::File::create(&test_file) {
@@ -1379,11 +1475,15 @@ impl TrafficView {
                 return Some(format!("Directory not writable: {}", e));
             }
         }
-        
+
         None // Valid
     }
 
-    fn handle_search_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
+    fn handle_search_key(
+        &mut self,
+        key: KeyEvent,
+        handle: &SessionHandle,
+    ) -> Option<TrafficAction> {
         match key.code {
             KeyCode::Enter => {
                 // Confirm search and exit search mode
@@ -1420,20 +1520,24 @@ impl TrafficView {
                     (middle_idx, Some(offsets))
                 } else {
                     // In truncated mode, scroll position = chunk index
-                    let middle_idx = (self.scroll + self.last_visible_height / 2).min(buffer.len().saturating_sub(1));
+                    let middle_idx = (self.scroll + self.last_visible_height / 2)
+                        .min(buffer.len().saturating_sub(1));
                     (middle_idx, None)
                 };
 
                 drop(buffer);
 
                 // Jump to the first match at or after the middle chunk
-                let scroll_pos = handle.buffer_mut().goto_match_from(middle_chunk_idx).map(|idx| {
-                    if let Some(offsets) = &display_offsets {
-                        offsets.get(idx).copied().unwrap_or(0)
-                    } else {
-                        idx
-                    }
-                });
+                let scroll_pos = handle
+                    .buffer_mut()
+                    .goto_match_from(middle_chunk_idx)
+                    .map(|idx| {
+                        if let Some(offsets) = &display_offsets {
+                            offsets.get(idx).copied().unwrap_or(0)
+                        } else {
+                            idx
+                        }
+                    });
 
                 if let Some(pos) = scroll_pos {
                     // Position match with 20% of visible height above it (like vim scrolloff)
@@ -1454,7 +1558,7 @@ impl TrafficView {
             _ => {
                 // Handle the key input first
                 self.search_input.handle_key(key);
-                
+
                 // Then update search pattern incrementally
                 let pattern = self.search_input.content();
                 if !pattern.is_empty() {
@@ -1473,7 +1577,11 @@ impl TrafficView {
         None
     }
 
-    fn handle_filter_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
+    fn handle_filter_key(
+        &mut self,
+        key: KeyEvent,
+        handle: &SessionHandle,
+    ) -> Option<TrafficAction> {
         match key.code {
             KeyCode::Enter => {
                 // Confirm filter and exit filter mode
@@ -1485,26 +1593,26 @@ impl TrafficView {
             KeyCode::Esc => {
                 // Capture middle line before clearing filter
                 let middle_raw_index = self.calculate_middle_raw_index(handle);
-                
+
                 self.filter_focused = false;
                 self.filter_input.clear();
                 handle.buffer_mut().clear_filter();
-                
+
                 // Restore scroll position to keep same line centered
                 if let Some(raw_idx) = middle_raw_index {
                     self.scroll_to_center_raw_index(raw_idx, handle);
                 }
-                
+
                 // Layout changed - request clear to avoid artifacts
                 return Some(TrafficAction::RequestClear);
             }
             _ => {
                 // Capture middle line before filter change
                 let middle_raw_index = self.calculate_middle_raw_index(handle);
-                
+
                 // Handle the key input first
                 self.filter_input.handle_key(key);
-                
+
                 // Then update filter pattern incrementally
                 let pattern = self.filter_input.content();
                 if !pattern.is_empty() {
@@ -1518,7 +1626,7 @@ impl TrafficView {
                 } else {
                     handle.buffer_mut().clear_filter();
                 }
-                
+
                 // Restore scroll position to keep same line centered
                 if let Some(raw_idx) = middle_raw_index {
                     self.scroll_to_center_raw_index(raw_idx, handle);
@@ -1604,7 +1712,8 @@ impl TrafficView {
     fn update_dir_path_completions(&mut self) {
         let input = self.dir_path_input.content();
         let completions = find_path_completions(input);
-        self.dir_path_completion.show(completions, CompletionKind::Argument);
+        self.dir_path_completion
+            .show(completions, CompletionKind::Argument);
     }
 
     fn apply_dir_path_completion(&mut self) {
@@ -1644,7 +1753,7 @@ impl TrafficView {
         self.config.file_save_encoding_index = settings.file_save_encoding_index;
         self.config.file_save_directory = settings.file_save_directory.clone();
     }
-    
+
     /// Extract settings for saving to disk.
     pub fn to_settings(&self) -> TrafficSettings {
         TrafficSettings {

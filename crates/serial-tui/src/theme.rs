@@ -14,7 +14,7 @@ impl Theme {
     pub const PRIMARY: Color = Color::Cyan;
     pub const SECONDARY: Color = Color::Blue;
     pub const ACCENT: Color = Color::Magenta;
-    
+
     // Disconnected/pre-connect accent (yellow to indicate "not connected")
     pub const DISCONNECTED: Color = Color::Yellow;
 
@@ -46,11 +46,15 @@ impl Theme {
     }
 
     pub fn title() -> Style {
-        Style::default().fg(Self::PRIMARY).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Self::PRIMARY)
+            .add_modifier(Modifier::BOLD)
     }
-    
+
     pub fn title_disconnected() -> Style {
-        Style::default().fg(Self::DISCONNECTED).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Self::DISCONNECTED)
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn border() -> Style {
@@ -60,7 +64,7 @@ impl Theme {
     pub fn border_focused() -> Style {
         Style::default().fg(Self::BORDER_FOCUSED)
     }
-    
+
     pub fn border_disconnected() -> Style {
         Style::default().fg(Self::BORDER_DISCONNECTED)
     }
@@ -70,7 +74,9 @@ impl Theme {
     }
 
     pub fn highlight() -> Style {
-        Style::default().fg(Self::HIGHLIGHT).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Self::HIGHLIGHT)
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn muted() -> Style {
@@ -102,11 +108,15 @@ impl Theme {
     }
 
     pub fn keybind() -> Style {
-        Style::default().fg(Self::PRIMARY).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Self::PRIMARY)
+            .add_modifier(Modifier::BOLD)
     }
-    
+
     pub fn keybind_disconnected() -> Style {
-        Style::default().fg(Self::DISCONNECTED).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Self::DISCONNECTED)
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn keybind_desc() -> Style {
@@ -124,7 +134,9 @@ impl Theme {
     }
 
     pub fn search_match() -> Style {
-        Style::default().fg(Self::WARNING).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Self::WARNING)
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn search_match_current() -> Style {

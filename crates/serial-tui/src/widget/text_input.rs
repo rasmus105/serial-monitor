@@ -231,10 +231,7 @@ impl TextInputState {
             let completed = &matches[0];
             self.buffer.set_content(completed.clone());
             // Store state so subsequent tabs can cycle (if it's a directory)
-            self.completion = Some(PathCompletionState {
-                matches,
-                index: 0,
-            });
+            self.completion = Some(PathCompletionState { matches, index: 0 });
             return true;
         }
 
@@ -243,16 +240,10 @@ impl TextInputState {
         if common.len() > self.buffer.len() {
             // We can extend the input
             self.buffer.set_content(common);
-            self.completion = Some(PathCompletionState {
-                matches,
-                index: 0,
-            });
+            self.completion = Some(PathCompletionState { matches, index: 0 });
         } else {
             // Already at common prefix, start cycling
-            self.completion = Some(PathCompletionState {
-                matches,
-                index: 0,
-            });
+            self.completion = Some(PathCompletionState { matches, index: 0 });
             // Apply first match
             if let Some(ref state) = self.completion {
                 self.buffer.set_content(state.matches[0].clone());
@@ -349,9 +340,7 @@ impl Widget for TextInput<'_> {
             })
             .collect();
 
-        Paragraph::new(visible_text)
-            .style(style)
-            .render(inner, buf);
+        Paragraph::new(visible_text).style(style).render(inner, buf);
 
         // Draw cursor if focused and not showing placeholder
         if self.focused && !content.is_empty() {

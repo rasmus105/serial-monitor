@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
 use super::chunk::{Direction, RawChunk};
-use super::encoding::{encode, Encoding};
+use super::encoding::{Encoding, encode};
 
 // ============================================================================
 // Save Format Configuration
@@ -497,7 +497,7 @@ async fn streaming_saver_task(
     format: SaveFormat,
     file_path: PathBuf,
 ) {
-    use tokio::time::{interval, Duration};
+    use tokio::time::{Duration, interval};
 
     let mut flush_interval = interval(Duration::from_secs(1));
 

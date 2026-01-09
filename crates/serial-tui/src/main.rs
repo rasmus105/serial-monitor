@@ -1,14 +1,14 @@
 use std::{
     io,
-    sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use serial_tui::app::App;
 
 #[tokio::main]
@@ -49,7 +49,7 @@ async fn main() -> io::Result<()> {
 fn setup_signal_handlers(shutdown_flag: Arc<AtomicBool>) {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
         // SIGTERM (kill command, systemd stop)
         let flag = shutdown_flag.clone();

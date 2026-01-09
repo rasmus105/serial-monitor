@@ -197,9 +197,8 @@ impl SearchState {
             .partition_point(|m| m.visible_index < visible_index);
 
         // Find end of matches with this visible_index
-        let end = self.matches[start..]
-            .partition_point(|m| m.visible_index == visible_index)
-            + start;
+        let end =
+            self.matches[start..].partition_point(|m| m.visible_index == visible_index) + start;
 
         &self.matches[start..end]
     }
@@ -359,11 +358,8 @@ mod tests {
         search.set_pattern("hello", PatternMode::Normal).unwrap();
 
         // Initial search
-        let encoded: VecDeque<String> = vec![
-            "hello world".to_string(),
-            "goodbye".to_string(),
-        ]
-        .into();
+        let encoded: VecDeque<String> =
+            vec!["hello world".to_string(), "goodbye".to_string()].into();
         search.update(std::iter::empty(), false, &encoded);
         assert_eq!(search.matches.len(), 1);
         assert_eq!(search.matches[0].visible_index, 0);
@@ -408,7 +404,7 @@ mod tests {
 
         // Drop oldest chunk (which had a match)
         search.drop_oldest_chunk();
-        
+
         // Should now have 2 matches with adjusted indices
         assert_eq!(search.matches.len(), 2);
         assert_eq!(search.matches[0].visible_index, 1); // was 2, now 1
@@ -424,13 +420,10 @@ mod tests {
         let mut search = SearchState::default();
         search.set_pattern("hello", PatternMode::Normal).unwrap();
 
-        let encoded: VecDeque<String> = vec![
-            "hello one".to_string(),
-            "hello two".to_string(),
-        ]
-        .into();
+        let encoded: VecDeque<String> =
+            vec!["hello one".to_string(), "hello two".to_string()].into();
         search.update(std::iter::empty(), false, &encoded);
-        
+
         // Navigate to first match
         search.goto_next();
         assert_eq!(search.current_match, Some(0));
@@ -438,7 +431,7 @@ mod tests {
 
         // Drop oldest - this removes the current match
         search.drop_oldest_chunk();
-        
+
         // Current match should be None since it was in the dropped chunk
         assert_eq!(search.current_match, None);
         // One match remaining
@@ -468,7 +461,7 @@ mod tests {
 
         // Add new chunk with match
         search.add_chunk(3, "test 4");
-        
+
         // Navigation state preserved
         assert_eq!(search.current_match, Some(1));
         assert_eq!(search.matches.len(), 4);

@@ -55,7 +55,9 @@ impl Widget for ConfirmOverlay<'_> {
         // Width: message + padding, plus room for the hint line
         let hint = "[y]es  [n]o";
         let content_width = message_len.max(hint.len() as u16);
-        let width = (content_width + 6).min(area.width.saturating_sub(4)).max(20);
+        let width = (content_width + 6)
+            .min(area.width.saturating_sub(4))
+            .max(20);
         let height = 5; // border + message + blank + hint + border
 
         let x = area.x + (area.width.saturating_sub(width)) / 2;

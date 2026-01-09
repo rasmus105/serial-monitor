@@ -9,14 +9,20 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget},
+    widgets::{
+        Block, Borders, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        StatefulWidget, Widget,
+    },
 };
 use serial_core::{
     ChunkMode, Delimiter, FileSendConfig, FileSendHandle, FileSendProgress, SerialConfig,
     SessionHandle, send_file,
     ui::{
         SizeUnit, TimeUnit,
-        config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid, always_visible},
+        config::{
+            ConfigNav, FieldDef, FieldKind, FieldValue, Section, always_enabled, always_valid,
+            always_visible,
+        },
     },
 };
 
@@ -24,15 +30,15 @@ use crate::{
     app::{FileSenderAction, Focus},
     theme::Theme,
     widget::{
-        CompletionKind, CompletionPopup, CompletionState, ConfigPanel, ConnectionPanel,
-        Toast, format_bytes, handle_config_key,
+        CompletionKind, CompletionPopup, CompletionState, ConfigPanel, ConnectionPanel, Toast,
+        format_bytes, handle_config_key,
         text_input::{TextInputState, find_path_completions},
     },
 };
 
 // Highlight colors for progress indication (foreground only for subtlety)
-const SENT_COLOR: Color = Color::Green;         // Green text for already-sent data
-const CURRENT_COLOR: Color = Color::Yellow;     // Yellow text for the current chunk
+const SENT_COLOR: Color = Color::Green; // Green text for already-sent data
+const CURRENT_COLOR: Color = Color::Yellow; // Yellow text for the current chunk
 
 /// File sender view state.
 pub struct FileSenderView {
@@ -122,7 +128,7 @@ impl Default for FileSenderConfig {
             delay_unit_index: 0, // Milliseconds
             repeat: false,
             is_sending: false,
-            preview_limit_value: 1,     // 1 MB default
+            preview_limit_value: 1,      // 1 MB default
             preview_limit_unit_index: 1, // MB
             auto_follow: true,
         }
@@ -140,25 +146,23 @@ const SIZE_UNIT_OPTIONS: &[&str] = &["B", "KiB", "MiB"];
 static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
     Section {
         header: Some("File"),
-        fields: &[
-            FieldDef {
-                id: "file_path",
-                label: "Path",
-                kind: FieldKind::TextInput {
-                    placeholder: "Enter file path...",
-                },
-                get: |c| FieldValue::string(c.file_path.clone()),
-                set: |c, v| {
-                    if let FieldValue::String(s) = v {
-                        c.file_path = s.into_owned();
-                    }
-                },
-                visible: always_visible,
-                enabled: |c| !c.is_sending,
-                parent_id: None,
-                validate: always_valid,
+        fields: &[FieldDef {
+            id: "file_path",
+            label: "Path",
+            kind: FieldKind::TextInput {
+                placeholder: "Enter file path...",
             },
-        ],
+            get: |c| FieldValue::string(c.file_path.clone()),
+            set: |c, v| {
+                if let FieldValue::String(s) = v {
+                    c.file_path = s.into_owned();
+                }
+            },
+            visible: always_visible,
+            enabled: |c| !c.is_sending,
+            parent_id: None,
+            validate: always_valid,
+        }],
     },
     Section {
         header: Some("Chunking"),
@@ -215,7 +219,10 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
             FieldDef {
                 id: "lines_per_chunk",
                 label: "Lines per Chunk",
-                kind: FieldKind::NumericInput { min: Some(1), max: None },
+                kind: FieldKind::NumericInput {
+                    min: Some(1),
+                    max: None,
+                },
                 get: |c| FieldValue::Usize(c.lines_per_chunk),
                 set: |c, v| {
                     if let FieldValue::Usize(n) = v {
@@ -237,7 +244,10 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
             FieldDef {
                 id: "byte_chunk_value",
                 label: "Size",
-                kind: FieldKind::NumericInput { min: Some(1), max: None },
+                kind: FieldKind::NumericInput {
+                    min: Some(1),
+                    max: None,
+                },
                 get: |c| FieldValue::Usize(c.byte_chunk_value),
                 set: |c, v| {
                     if let FieldValue::Usize(n) = v {
@@ -313,7 +323,10 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
             FieldDef {
                 id: "delay_value",
                 label: "Delay",
-                kind: FieldKind::NumericInput { min: Some(0), max: None },
+                kind: FieldKind::NumericInput {
+                    min: Some(0),
+                    max: None,
+                },
                 get: |c| FieldValue::Usize(c.delay_value),
                 set: |c, v| {
                     if let FieldValue::Usize(n) = v {
@@ -365,7 +378,10 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
             FieldDef {
                 id: "preview_limit_value",
                 label: "Max Size",
-                kind: FieldKind::NumericInput { min: Some(1), max: None },
+                kind: FieldKind::NumericInput {
+                    min: Some(1),
+                    max: None,
+                },
                 get: |c| FieldValue::Usize(c.preview_limit_value),
                 set: |c, v| {
                     if let FieldValue::Usize(n) = v {
@@ -420,23 +436,21 @@ static FILE_SENDER_CONFIG_SECTIONS: &[Section<FileSenderConfig>] = &[
     },
     Section {
         header: Some("Control"),
-        fields: &[
-            FieldDef {
-                id: "send_active",
-                label: "Send",
-                kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.is_sending),
-                set: |c, v| {
-                    if let FieldValue::Bool(b) = v {
-                        c.is_sending = b;
-                    }
-                },
-                visible: always_visible,
-                enabled: |c| !c.file_path.is_empty() || c.is_sending,
-                parent_id: None,
-                validate: always_valid,
+        fields: &[FieldDef {
+            id: "send_active",
+            label: "Send",
+            kind: FieldKind::Toggle,
+            get: |c| FieldValue::Bool(c.is_sending),
+            set: |c, v| {
+                if let FieldValue::Bool(b) = v {
+                    c.is_sending = b;
+                }
             },
-        ],
+            visible: always_visible,
+            enabled: |c| !c.file_path.is_empty() || c.is_sending,
+            parent_id: None,
+            validate: always_valid,
+        }],
     },
 ];
 
@@ -521,38 +535,50 @@ impl FileSenderView {
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Min(6),     // Preview
-                    Constraint::Length(4),  // Progress
-                    Constraint::Length(3),  // Input bar
+                    Constraint::Min(6),    // Preview
+                    Constraint::Length(4), // Progress
+                    Constraint::Length(3), // Input bar
                 ])
                 .split(main_area)
         } else {
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Min(6),     // Preview
-                    Constraint::Length(4),  // Progress
+                    Constraint::Min(6),    // Preview
+                    Constraint::Length(4), // Progress
                 ])
                 .split(main_area)
         };
 
         // Preview
-        let preview_title = if let (Some(path), Some(preview)) = (&self.selected_path, &self.preview) {
-            let filename = path.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let size_str = format_bytes(preview.size);
+        let preview_title =
+            if let (Some(path), Some(preview)) = (&self.selected_path, &self.preview) {
+                let filename = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let size_str = format_bytes(preview.size);
 
-            let truncated_indicator = if preview.truncated { " [truncated]" } else { "" };
+                let truncated_indicator = if preview.truncated {
+                    " [truncated]"
+                } else {
+                    ""
+                };
 
-            if let Some(lines) = preview.line_count {
-                format!(" Preview: {} ({}, {} lines){} ", filename, size_str, lines, truncated_indicator)
+                if let Some(lines) = preview.line_count {
+                    format!(
+                        " Preview: {} ({}, {} lines){} ",
+                        filename, size_str, lines, truncated_indicator
+                    )
+                } else {
+                    format!(
+                        " Preview: {} ({}, binary){} ",
+                        filename, size_str, truncated_indicator
+                    )
+                }
             } else {
-                format!(" Preview: {} ({}, binary){} ", filename, size_str, truncated_indicator)
-            }
-        } else {
-            " Preview ".to_string()
-        };
+                " Preview ".to_string()
+            };
 
         let preview_block = Block::default()
             .title(preview_title)
@@ -644,18 +670,12 @@ impl FileSenderView {
         // Draw input bar if file path input is focused
         if show_input_bar {
             self.draw_input_bar(main_chunks[2], buf);
-            
+
             // Render file path completion popup (above the input bar)
             if self.file_path_completion.visible {
-                let input_inner = Block::default()
-                    .borders(Borders::ALL)
-                    .inner(main_chunks[2]);
-                CompletionPopup::new(
-                    &self.file_path_completion,
-                    input_inner.y,
-                    input_inner.x,
-                )
-                .render(main_area, buf);
+                let input_inner = Block::default().borders(Borders::ALL).inner(main_chunks[2]);
+                CompletionPopup::new(&self.file_path_completion, input_inner.y, input_inner.x)
+                    .render(main_area, buf);
             }
         }
 
@@ -667,7 +687,7 @@ impl FileSenderView {
 
     fn draw_input_bar(&self, area: Rect, buf: &mut Buffer) {
         use crate::widget::TextInput;
-        
+
         let block = Block::default()
             .title(" File Path ")
             .borders(Borders::ALL)
@@ -731,7 +751,13 @@ impl FileSenderView {
     }
 
     /// Draw the file preview with scrolling and progress highlighting.
-    fn draw_preview(&self, outer_area: Rect, inner_area: Rect, buf: &mut Buffer, preview: &FilePreview) {
+    fn draw_preview(
+        &self,
+        outer_area: Rect,
+        inner_area: Rect,
+        buf: &mut Buffer,
+        preview: &FilePreview,
+    ) {
         if inner_area.width == 0 || inner_area.height == 0 {
             return;
         }
@@ -739,7 +765,8 @@ impl FileSenderView {
         let visible_height = inner_area.height as usize;
 
         // Calculate chunk boundaries for highlighting
-        let (bytes_sent, current_chunk_start, current_chunk_end) = self.get_chunk_boundaries(preview);
+        let (bytes_sent, current_chunk_start, current_chunk_end) =
+            self.get_chunk_boundaries(preview);
 
         // Build display lines with highlighting
         let display_lines = if preview.is_binary {
@@ -752,10 +779,12 @@ impl FileSenderView {
         let mut all_lines = display_lines;
         if preview.truncated {
             all_lines.push(Line::from(Span::styled(
-                format!("... [truncated - showing {} of {}]", 
+                format!(
+                    "... [truncated - showing {} of {}]",
                     format_bytes(preview.raw_bytes.len() as u64),
-                    format_bytes(preview.size)),
-                Style::default().fg(Theme::WARNING).bold()
+                    format_bytes(preview.size)
+                ),
+                Style::default().fg(Theme::WARNING).bold(),
             )));
         }
 
@@ -786,8 +815,7 @@ impl FileSenderView {
                 1,
                 outer_area.height.saturating_sub(2),
             );
-            let mut scrollbar_state = ScrollbarState::new(max_scroll.max(1))
-                .position(scroll);
+            let mut scrollbar_state = ScrollbarState::new(max_scroll.max(1)).position(scroll);
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
                 .end_symbol(None)
@@ -808,10 +836,10 @@ impl FileSenderView {
         }
 
         let bytes_sent = progress.bytes_sent;
-        
+
         // Current chunk starts where we've sent up to
         let current_chunk_start = bytes_sent;
-        
+
         // Calculate where the current chunk ends based on chunking mode
         let current_chunk_end = if self.config.chunk_mode_index == 1 {
             // Bytes mode - fixed chunk size
@@ -822,7 +850,7 @@ impl FileSenderView {
             // Delimiter mode - find the next delimiter in the preview data
             let delimiter = Delimiter::from_index(self.config.delimiter_index);
             let delimiter_bytes = delimiter.as_bytes();
-            
+
             let start_idx = bytes_sent as usize;
             if start_idx >= preview.raw_bytes.len() {
                 preview.size
@@ -868,11 +896,16 @@ impl FileSenderView {
 
             for ch in line_text.chars() {
                 let ch_len = ch.len_utf8() as u64;
-                let style = if self.is_sending() || self.progress.as_ref().is_some_and(|p| p.bytes_sent > 0) {
+                let style = if self.is_sending()
+                    || self.progress.as_ref().is_some_and(|p| p.bytes_sent > 0)
+                {
                     if char_offset < bytes_sent {
                         // Already sent - green foreground
                         Style::default().fg(SENT_COLOR)
-                    } else if char_offset >= current_chunk_start && char_offset < current_chunk_end && self.is_sending() {
+                    } else if char_offset >= current_chunk_start
+                        && char_offset < current_chunk_end
+                        && self.is_sending()
+                    {
                         // Current chunk - yellow foreground
                         Style::default().fg(CURRENT_COLOR)
                     } else {
@@ -912,16 +945,21 @@ impl FileSenderView {
             // Address prefix
             spans.push(Span::styled(
                 format!("{:08X}  ", line_start),
-                Theme::muted()
+                Theme::muted(),
             ));
 
             // Hex bytes
             for (i, &byte) in chunk.iter().enumerate() {
                 let byte_offset = line_start + i as u64;
-                let style = if self.is_sending() || self.progress.as_ref().is_some_and(|p| p.bytes_sent > 0) {
+                let style = if self.is_sending()
+                    || self.progress.as_ref().is_some_and(|p| p.bytes_sent > 0)
+                {
                     if byte_offset < bytes_sent {
                         Style::default().fg(SENT_COLOR)
-                    } else if byte_offset >= current_chunk_start && byte_offset < current_chunk_end && self.is_sending() {
+                    } else if byte_offset >= current_chunk_start
+                        && byte_offset < current_chunk_end
+                        && self.is_sending()
+                    {
                         Style::default().fg(CURRENT_COLOR)
                     } else {
                         Theme::muted()
@@ -950,10 +988,15 @@ impl FileSenderView {
                 } else {
                     '.'
                 };
-                let style = if self.is_sending() || self.progress.as_ref().is_some_and(|p| p.bytes_sent > 0) {
+                let style = if self.is_sending()
+                    || self.progress.as_ref().is_some_and(|p| p.bytes_sent > 0)
+                {
                     if byte_offset < bytes_sent {
                         Style::default().fg(SENT_COLOR)
-                    } else if byte_offset >= current_chunk_start && byte_offset < current_chunk_end && self.is_sending() {
+                    } else if byte_offset >= current_chunk_start
+                        && byte_offset < current_chunk_end
+                        && self.is_sending()
+                    {
                         Style::default().fg(CURRENT_COLOR)
                     } else {
                         Theme::muted()
@@ -1021,7 +1064,9 @@ impl FileSenderView {
     }
 
     fn handle_main_key(&mut self, key: KeyEvent) -> Option<FileSenderAction> {
-        let has_ctrl = key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL);
+        let has_ctrl = key
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL);
         let half_page = self.last_visible_height / 2;
         let total_lines = self.total_display_lines();
         let max_scroll = total_lines.saturating_sub(self.last_visible_height);
@@ -1062,13 +1107,13 @@ impl FileSenderView {
 
     fn handle_config_key(&mut self, key: KeyEvent) -> Option<FileSenderAction> {
         // Keys that can trigger text input activation: Enter, Space
-        let is_toggle_key = matches!(
-            key.code,
-            KeyCode::Enter | KeyCode::Char(' ')
-        );
+        let is_toggle_key = matches!(key.code, KeyCode::Enter | KeyCode::Char(' '));
 
-        if is_toggle_key && !self.config_nav.edit_mode.is_dropdown()
-            && let Some(field) = self.config_nav.current_field(FILE_SENDER_CONFIG_SECTIONS, &self.config)
+        if is_toggle_key
+            && !self.config_nav.edit_mode.is_dropdown()
+            && let Some(field) = self
+                .config_nav
+                .current_field(FILE_SENDER_CONFIG_SECTIONS, &self.config)
         {
             // Handle text input field (file path)
             if field.kind.is_text_input() && field.id == "file_path" {
@@ -1164,7 +1209,8 @@ impl FileSenderView {
     fn update_file_path_completions(&mut self) {
         let input = self.file_path_input.content();
         let completions = find_path_completions(input);
-        self.file_path_completion.show(completions, CompletionKind::Argument);
+        self.file_path_completion
+            .show(completions, CompletionKind::Argument);
     }
 
     fn apply_file_path_completion(&mut self) {
@@ -1196,7 +1242,9 @@ impl FileSenderView {
                 }
 
                 // Check if binary (null bytes or control chars except newline/tab/cr)
-                let is_binary = raw_bytes.iter().any(|&b| b == 0 || (b < 32 && b != b'\n' && b != b'\r' && b != b'\t'));
+                let is_binary = raw_bytes
+                    .iter()
+                    .any(|&b| b == 0 || (b < 32 && b != b'\n' && b != b'\r' && b != b'\t'));
 
                 let line_count = if is_binary {
                     None
@@ -1213,14 +1261,17 @@ impl FileSenderView {
                     line_count,
                     truncated,
                 });
-                
+
                 // Reset scroll when loading new file
                 self.scroll = 0;
             }
         }
     }
 
-    pub async fn start_sending(&mut self, handle: &SessionHandle) -> Result<(), serial_core::Error> {
+    pub async fn start_sending(
+        &mut self,
+        handle: &SessionHandle,
+    ) -> Result<(), serial_core::Error> {
         if let Some(path) = &self.selected_path {
             // Build chunk mode
             let chunk_mode = if self.config.chunk_mode_index == 0 {

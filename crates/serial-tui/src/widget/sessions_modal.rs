@@ -8,11 +8,11 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
+use super::util::{format_bytes, format_duration};
 use crate::{
     app::{SessionEntry, SessionState},
     theme::Theme,
 };
-use super::util::{format_bytes, format_duration};
 
 /// State for the sessions modal.
 #[derive(Debug, Clone, Default)]
@@ -134,7 +134,9 @@ impl Widget for SessionsModal<'_> {
         let width = 60.min(area.width.saturating_sub(4));
         // Height: border + sessions + blank + hint + border
         let content_height = self.sessions.len() as u16 + 2; // sessions + hint lines
-        let height = (content_height + 2).min(area.height.saturating_sub(4)).max(8);
+        let height = (content_height + 2)
+            .min(area.height.saturating_sub(4))
+            .max(8);
 
         let x = area.x + (area.width.saturating_sub(width)) / 2;
         let y = area.y + (area.height.saturating_sub(height)) / 2;
@@ -160,7 +162,12 @@ impl Widget for SessionsModal<'_> {
             let is_selected = idx == self.state.selected;
             let is_active = Some(idx) == self.active_index;
 
-            let line = build_session_line(entry, is_selected, is_active, self.state.confirming_disconnect);
+            let line = build_session_line(
+                entry,
+                is_selected,
+                is_active,
+                self.state.confirming_disconnect,
+            );
             lines.push(line);
         }
 
@@ -249,11 +256,7 @@ fn build_session_line(
             let buffer = state.handle.buffer();
             let chunk_count = buffer.len();
             let buffer_size = buffer.size() as u64;
-            let stats_str = format!(
-                "  {} chunks  {}",
-                chunk_count,
-                format_bytes(buffer_size),
-            );
+            let stats_str = format!("  {} chunks  {}", chunk_count, format_bytes(buffer_size),);
             let stats_style = Theme::muted();
             spans.push(Span::styled(stats_str, stats_style));
 
