@@ -820,7 +820,7 @@ impl App {
 
                 // Global keybindings
                 match key.code {
-                    KeyCode::Char('q') => {
+                    KeyCode::Char('q') if !self.is_input_mode() => {
                         // When connected, show confirmation prompt instead of quitting
                         if matches!(
                             self.sessions.active_state(),
@@ -832,7 +832,7 @@ impl App {
                         }
                         return;
                     }
-                    KeyCode::Char('?') => {
+                    KeyCode::Char('?') if !self.is_input_mode() => {
                         if self.help.toggle() {
                             self.needs_clear = true;
                         }
