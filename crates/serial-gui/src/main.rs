@@ -3,6 +3,7 @@
 mod app;
 mod theme;
 mod view;
+mod widget_options;
 
 use app::App;
 

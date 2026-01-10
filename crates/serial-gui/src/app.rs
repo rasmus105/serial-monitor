@@ -12,6 +12,21 @@ use serial_core::{
 };
 
 use crate::view::{pre_connect, traffic};
+use crate::widget_options::ScrollModeOption;
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/// Tick interval for polling session events (in milliseconds)
+const TICK_INTERVAL_MS: u64 = 50;
+
+/// Tolerance for scroll position comparison
+const SCROLL_BOTTOM_TOLERANCE: f32 = 1.0;
+
+// =============================================================================
+// Application state
+// =============================================================================
 
 /// Main application state.
 pub struct App {
@@ -66,7 +81,7 @@ impl Default for PreConnectState {
 pub enum ScrollState {
     /// Locked to bottom - always shows latest data, user cannot scroll up
     LockedToBottom,
-    /// Auto-scroll - stays at bottom when new data arrives, but allows scrolling up
+    /// Auto-scroll - stays at bottom when new data arrives, but allows scrolling up.
     /// When scrolled up, new data doesn't auto-scroll. When scrolled back to bottom, resumes.
     AutoScroll { offset: f32 },
     /// Manual scroll - user has scrolled away from bottom, stays where user left it
@@ -113,21 +128,24 @@ pub struct ConnectedState {
     pub collapsed_sections: HashSet<String>,
 }
 
-/// Get the RX chunking strategy from index.
-pub fn rx_chunking_from_index(index: usize) -> ChunkingStrategy {
-    match index {
-        0 => ChunkingStrategy::Raw,
-        1 => ChunkingStrategy::with_delimiter(LineDelimiter::Newline),
-        2 => ChunkingStrategy::with_delimiter(LineDelimiter::Cr),
-        3 => ChunkingStrategy::with_delimiter(LineDelimiter::CrLf),
-        _ => ChunkingStrategy::Raw,
-    }
-}
+// =============================================================================
+// Messages
+// =============================================================================
 
 /// Application messages.
 #[derive(Debug, Clone)]
 pub enum Message {
-    // Pre-connect messages
+    /// Messages for pre-connect state
+    PreConnect(PreConnectMsg),
+    /// Messages for connected state
+    Connected(ConnectedMsg),
+    /// Periodic tick for polling events
+    Tick,
+}
+
+/// Messages for pre-connect state
+#[derive(Debug, Clone)]
+pub enum PreConnectMsg {
     RefreshPorts,
     PortsListed(Vec<PortInfo>),
     SelectPort(String),
@@ -141,8 +159,11 @@ pub enum Message {
     Connect,
     ConnectionComplete,
     ConnectionFailed(String),
+}
 
-    // Connected messages
+/// Messages for connected state
+#[derive(Debug, Clone)]
+pub enum ConnectedMsg {
     Disconnect,
     Disconnected,
     SendInput(String),
@@ -158,8 +179,29 @@ pub enum Message {
     SelectTimestampFormat(usize),
     ToggleSectionCollapse(String),
     ScrollChanged(scrollable::Viewport),
-    SelectScrollMode(crate::view::traffic::ScrollModeOption),
-    Tick,
+    SelectScrollMode(ScrollModeOption),
+}
+
+// Convenience constructor for views
+impl Message {
+    pub fn refresh_ports() -> Self {
+        Self::PreConnect(PreConnectMsg::RefreshPorts)
+    }
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/// Get the RX chunking strategy from index.
+pub fn rx_chunking_from_index(index: usize) -> ChunkingStrategy {
+    match index {
+        0 => ChunkingStrategy::Raw,
+        1 => ChunkingStrategy::with_delimiter(LineDelimiter::Newline),
+        2 => ChunkingStrategy::with_delimiter(LineDelimiter::Cr),
+        3 => ChunkingStrategy::with_delimiter(LineDelimiter::CrLf),
+        _ => ChunkingStrategy::Raw,
+    }
 }
 
 /// Connection result that can be stored and retrieved.
@@ -168,6 +210,10 @@ struct ConnectionResult {
     port_name: String,
     config: SerialConfig,
 }
+
+// =============================================================================
+// App implementation
+// =============================================================================
 
 impl Default for App {
     fn default() -> Self {
@@ -181,7 +227,7 @@ impl App {
             state: SessionState::PreConnect(PreConnectState::default()),
             pending_connection: Arc::new(Mutex::new(None)),
         };
-        (app, Task::done(Message::RefreshPorts))
+        (app, Task::done(Message::refresh_ports()))
     }
 
     pub fn title(&self) -> String {
@@ -195,119 +241,107 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            // Pre-connect messages
-            Message::RefreshPorts => {
-                return Task::perform(
-                    async { list_ports().unwrap_or_default() },
-                    Message::PortsListed,
-                );
+            Message::PreConnect(msg) => self.handle_pre_connect(msg),
+            Message::Connected(msg) => self.handle_connected(msg),
+            Message::Tick => self.handle_tick(),
+        }
+    }
+
+    pub fn view(&self) -> Element<'_, Message> {
+        match &self.state {
+            SessionState::PreConnect(state) => pre_connect::view(state),
+            SessionState::Connected(state) => traffic::view(state),
+        }
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        match &self.state {
+            SessionState::PreConnect(_) => Subscription::none(),
+            SessionState::Connected(_) => {
+                iced::time::every(Duration::from_millis(TICK_INTERVAL_MS)).map(|_| Message::Tick)
             }
-            Message::PortsListed(ports) => {
+        }
+    }
+
+    // =========================================================================
+    // Pre-connect message handlers
+    // =========================================================================
+
+    fn handle_pre_connect(&mut self, msg: PreConnectMsg) -> Task<Message> {
+        use PreConnectMsg::*;
+        match msg {
+            RefreshPorts => Task::perform(async { list_ports().unwrap_or_default() }, |ports| {
+                Message::PreConnect(PortsListed(ports))
+            }),
+            PortsListed(ports) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
-                    // Auto-select first port if none selected
                     if state.selected_port.is_none() && !ports.is_empty() {
                         state.selected_port = Some(ports[0].name.clone());
                     }
                     state.ports = ports;
                 }
+                Task::none()
             }
-            Message::SelectPort(port) => {
+            SelectPort(port) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
                     state.selected_port = Some(port);
-                    state.custom_port_path.clear(); // Clear custom path when selecting from list
+                    state.custom_port_path.clear();
                 }
+                Task::none()
             }
-            Message::CustomPortPathChanged(path) => {
+            CustomPortPathChanged(path) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
-                    state.custom_port_path = path;
-                    if !state.custom_port_path.is_empty() {
-                        state.selected_port = None; // Clear selected when using custom path
+                    if !path.is_empty() {
+                        state.selected_port = None;
                     }
+                    state.custom_port_path = path;
                 }
+                Task::none()
             }
-            Message::SelectBaudRate(baud) => {
+            SelectBaudRate(baud) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
                     state.config.baud_rate = baud;
                 }
+                Task::none()
             }
-            Message::SelectDataBits(data_bits) => {
+            SelectDataBits(data_bits) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
                     state.config.data_bits = data_bits;
                 }
+                Task::none()
             }
-            Message::SelectParity(parity) => {
+            SelectParity(parity) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
                     state.config.parity = parity;
                 }
+                Task::none()
             }
-            Message::SelectStopBits(stop_bits) => {
+            SelectStopBits(stop_bits) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
                     state.config.stop_bits = stop_bits;
                 }
+                Task::none()
             }
-            Message::SelectFlowControl(flow_control) => {
+            SelectFlowControl(flow_control) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
                     state.config.flow_control = flow_control;
                 }
+                Task::none()
             }
-            Message::SelectRxChunking(index) => {
+            SelectRxChunking(index) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
                     state.rx_chunking_index = index;
                 }
+                Task::none()
             }
-            Message::Connect => {
-                if let SessionState::PreConnect(state) = &mut self.state {
-                    // Determine port to connect to: custom path takes priority
-                    let port = if !state.custom_port_path.is_empty() {
-                        state.custom_port_path.clone()
-                    } else {
-                        state.selected_port.clone().unwrap_or_default()
-                    };
-
-                    if !port.is_empty() {
-                        state.connecting = true;
-                        state.error = None;
-                        let config = state.config.clone();
-                        let rx_chunking = rx_chunking_from_index(state.rx_chunking_index);
-                        let pending = Arc::clone(&self.pending_connection);
-
-                        return Task::perform(
-                            async move {
-                                let session_config = SessionConfig {
-                                    rx_chunking,
-                                    ..Default::default()
-                                };
-                                match Session::connect_with_config(
-                                    &port,
-                                    config.clone(),
-                                    session_config,
-                                )
-                                .await
-                                {
-                                    Ok(handle) => {
-                                        // Store the result in the shared state
-                                        let result = ConnectionResult {
-                                            handle,
-                                            port_name: port,
-                                            config,
-                                        };
-                                        *pending.lock().unwrap() = Some(result);
-                                        Ok(())
-                                    }
-                                    Err(e) => Err(e.to_string()),
-                                }
-                            },
-                            |result: Result<(), String>| match result {
-                                Ok(()) => Message::ConnectionComplete,
-                                Err(e) => Message::ConnectionFailed(e),
-                            },
-                        );
-                    }
-                }
-            }
-            Message::ConnectionComplete => {
-                // Take the connection result from shared state
-                if let Some(result) = self.pending_connection.lock().unwrap().take() {
+            Connect => self.handle_connect(),
+            ConnectionComplete => {
+                if let Some(result) = self
+                    .pending_connection
+                    .lock()
+                    .expect("mutex poisoned")
+                    .take()
+                {
                     self.state = SessionState::Connected(ConnectedState {
                         handle: result.handle,
                         port_name: result.port_name,
@@ -326,113 +360,136 @@ impl App {
                         collapsed_sections: HashSet::from(["Statistics".to_string()]),
                     });
                 }
+                Task::none()
             }
-            Message::ConnectionFailed(error) => {
+            ConnectionFailed(error) => {
                 if let SessionState::PreConnect(state) = &mut self.state {
                     state.connecting = false;
                     state.error = Some(error);
                 }
+                Task::none()
             }
+        }
+    }
 
-            // Connected messages
-            Message::Disconnect => {
-                if let SessionState::Connected(state) = std::mem::replace(
-                    &mut self.state,
-                    SessionState::PreConnect(PreConnectState::default()),
-                ) {
-                    return Task::perform(
-                        async move {
-                            let _ = state.handle.disconnect().await;
-                        },
-                        |_| Message::Disconnected,
-                    );
+    fn handle_connect(&mut self) -> Task<Message> {
+        let SessionState::PreConnect(state) = &mut self.state else {
+            return Task::none();
+        };
+
+        let port = if !state.custom_port_path.is_empty() {
+            state.custom_port_path.clone()
+        } else {
+            state.selected_port.clone().unwrap_or_default()
+        };
+
+        if port.is_empty() {
+            return Task::none();
+        }
+
+        state.connecting = true;
+        state.error = None;
+        let config = state.config.clone();
+        let rx_chunking = rx_chunking_from_index(state.rx_chunking_index);
+        let pending = Arc::clone(&self.pending_connection);
+
+        Task::perform(
+            async move {
+                let session_config = SessionConfig {
+                    rx_chunking,
+                    ..Default::default()
+                };
+                match Session::connect_with_config(&port, config.clone(), session_config).await {
+                    Ok(handle) => {
+                        let result = ConnectionResult {
+                            handle,
+                            port_name: port,
+                            config,
+                        };
+                        *pending.lock().expect("mutex poisoned") = Some(result);
+                        Ok(())
+                    }
+                    Err(e) => Err(e.to_string()),
                 }
-            }
-            Message::Disconnected => {
-                // Refresh ports after disconnect
-                return Task::perform(
-                    async { list_ports().unwrap_or_default() },
-                    Message::PortsListed,
-                );
-            }
-            Message::SendInput(input) => {
+            },
+            |result: Result<(), String>| match result {
+                Ok(()) => Message::PreConnect(PreConnectMsg::ConnectionComplete),
+                Err(e) => Message::PreConnect(PreConnectMsg::ConnectionFailed(e)),
+            },
+        )
+    }
+
+    // =========================================================================
+    // Connected message handlers
+    // =========================================================================
+
+    fn handle_connected(&mut self, msg: ConnectedMsg) -> Task<Message> {
+        use ConnectedMsg::*;
+        match msg {
+            Disconnect => self.handle_disconnect(),
+            Disconnected => Task::perform(async { list_ports().unwrap_or_default() }, |ports| {
+                Message::PreConnect(PreConnectMsg::PortsListed(ports))
+            }),
+            SendInput(input) => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.send_input = input;
                 }
+                Task::none()
             }
-            Message::Send => {
-                if let SessionState::Connected(state) = &mut self.state
-                    && !state.send_input.is_empty()
-                {
-                    let mut data = state.send_input.clone().into_bytes();
-                    state.send_input.clear();
-
-                    // Append line ending based on selection
-                    match state.send_line_ending_index {
-                        1 => data.push(b'\n'),                // LF
-                        2 => data.push(b'\r'),                // CR
-                        3 => data.extend_from_slice(b"\r\n"), // CRLF
-                        _ => {}                               // None
-                    }
-
-                    // Use the session handle's send method
-                    let sender = state.handle.clone_command_sender();
-                    return Task::perform(
-                        async move {
-                            let _ = sender.send(serial_core::SessionCommand::Send(data)).await;
-                        },
-                        |_| Message::SendComplete,
-                    );
-                }
-            }
-            Message::SendComplete => {
-                // Data was sent, tick will update the display
-            }
-            Message::SelectEncoding(encoding) => {
+            Send => self.handle_send(),
+            SendComplete => Task::none(),
+            SelectEncoding(encoding) => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.encoding = encoding;
-                    // Update buffer encoding
                     state.handle.buffer_mut().set_encoding(encoding);
                 }
+                Task::none()
             }
-            Message::ToggleShowTx => {
+            ToggleShowTx => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.show_tx = !state.show_tx;
                     state.handle.buffer_mut().set_show_tx(state.show_tx);
                 }
+                Task::none()
             }
-            Message::ToggleShowRx => {
+            ToggleShowRx => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.show_rx = !state.show_rx;
                     state.handle.buffer_mut().set_show_rx(state.show_rx);
                 }
+                Task::none()
             }
-            Message::SelectSendLineEnding(index) => {
+            SelectSendLineEnding(index) => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.send_line_ending_index = index;
                 }
+                Task::none()
             }
-            Message::ClearBuffer => {
+            ClearBuffer => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.handle.buffer_mut().clear();
                 }
+                Task::none()
             }
-            Message::ToggleConfigPanel => {
+            ToggleConfigPanel => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.show_config_panel = !state.show_config_panel;
                 }
+                Task::none()
             }
-            Message::ToggleTimestamps => {
+            ToggleTimestamps => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.show_timestamps = !state.show_timestamps;
                 }
+                Task::none()
             }
-            Message::SelectTimestampFormat(index) => {
+            SelectTimestampFormat(index) => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.timestamp_format_index = index;
                 }
+                Task::none()
             }
-            Message::ToggleSectionCollapse(section) => {
+            ToggleSectionCollapse(section) => {
                 if let SessionState::Connected(state) = &mut self.state {
                     if state.collapsed_sections.contains(&section) {
                         state.collapsed_sections.remove(&section);
@@ -440,99 +497,130 @@ impl App {
                         state.collapsed_sections.insert(section);
                     }
                 }
+                Task::none()
             }
-            Message::ScrollChanged(viewport) => {
-                if let SessionState::Connected(state) = &mut self.state {
-                    // Update viewport height for virtual scrolling calculations
-                    state.viewport_height = Some(viewport.bounds().height);
-
-                    let content_height = viewport.content_bounds().height;
-                    let viewport_height = viewport.bounds().height;
-                    let offset = viewport.absolute_offset().y;
-                    let max_scroll = (content_height - viewport_height).max(0.0);
-
-                    // Check if we're at the bottom (with small tolerance for float comparison)
-                    let at_bottom = offset >= max_scroll - 1.0;
-
-                    match &state.scroll_state {
-                        ScrollState::LockedToBottom => {
-                            // Stay locked - this shouldn't normally trigger scroll changes
-                        }
-                        ScrollState::AutoScroll { .. } => {
-                            if at_bottom {
-                                // Stay in auto-scroll mode at bottom
-                                state.scroll_state = ScrollState::AutoScroll { offset };
-                            } else {
-                                // User scrolled up - switch to manual mode
-                                state.scroll_state = ScrollState::Manual { offset };
-                            }
-                        }
-                        ScrollState::Manual { .. } => {
-                            if at_bottom {
-                                // User scrolled back to bottom - resume auto-scroll
-                                state.scroll_state = ScrollState::AutoScroll { offset };
-                            } else {
-                                // Update offset
-                                state.scroll_state = ScrollState::Manual { offset };
-                            }
-                        }
-                    }
-                }
+            ScrollChanged(viewport) => {
+                self.handle_scroll_changed(viewport);
+                Task::none()
             }
-            Message::SelectScrollMode(mode) => {
+            SelectScrollMode(mode) => {
                 if let SessionState::Connected(state) = &mut self.state {
-                    use crate::view::traffic::ScrollModeOption;
                     state.scroll_state = match mode {
                         ScrollModeOption::Auto => ScrollState::AutoScroll { offset: 0.0 },
                         ScrollModeOption::Locked => ScrollState::LockedToBottom,
                     };
                 }
+                Task::none()
             }
-            Message::Tick => {
-                if let SessionState::Connected(state) = &mut self.state {
-                    // Poll for session events - no need to copy buffer data,
-                    // the view will borrow directly from the buffer
-                    while let Some(event) = state.handle.try_recv_event() {
-                        match event {
-                            SessionEvent::Disconnected { error } => {
-                                let msg = error.unwrap_or_else(|| "Disconnected".to_string());
-                                self.state = SessionState::PreConnect(PreConnectState {
-                                    config: state.config.clone(),
-                                    error: Some(msg),
-                                    ..Default::default()
-                                });
-                                return Task::perform(
-                                    async { list_ports().unwrap_or_default() },
-                                    Message::PortsListed,
-                                );
-                            }
-                            SessionEvent::Error(_e) => {
-                                // Errors are now shown via other means (toast, etc.)
-                                // No message field needed
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
+        }
+    }
+
+    fn handle_disconnect(&mut self) -> Task<Message> {
+        if let SessionState::Connected(state) = std::mem::replace(
+            &mut self.state,
+            SessionState::PreConnect(PreConnectState::default()),
+        ) {
+            return Task::perform(
+                async move {
+                    let _ = state.handle.disconnect().await;
+                },
+                |_| Message::Connected(ConnectedMsg::Disconnected),
+            );
         }
         Task::none()
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
-        match &self.state {
-            SessionState::PreConnect(state) => pre_connect::view(state),
-            SessionState::Connected(state) => traffic::view(state),
+    fn handle_send(&mut self) -> Task<Message> {
+        let SessionState::Connected(state) = &mut self.state else {
+            return Task::none();
+        };
+
+        if state.send_input.is_empty() {
+            return Task::none();
+        }
+
+        let mut data = state.send_input.clone().into_bytes();
+        state.send_input.clear();
+
+        // Append line ending based on selection
+        match state.send_line_ending_index {
+            1 => data.push(b'\n'),
+            2 => data.push(b'\r'),
+            3 => data.extend_from_slice(b"\r\n"),
+            _ => {}
+        }
+
+        let sender = state.handle.clone_command_sender();
+        Task::perform(
+            async move {
+                let _ = sender.send(serial_core::SessionCommand::Send(data)).await;
+            },
+            |_| Message::Connected(ConnectedMsg::SendComplete),
+        )
+    }
+
+    fn handle_scroll_changed(&mut self, viewport: scrollable::Viewport) {
+        let SessionState::Connected(state) = &mut self.state else {
+            return;
+        };
+
+        state.viewport_height = Some(viewport.bounds().height);
+
+        let content_height = viewport.content_bounds().height;
+        let viewport_height = viewport.bounds().height;
+        let offset = viewport.absolute_offset().y;
+        let max_scroll = (content_height - viewport_height).max(0.0);
+        let at_bottom = offset >= max_scroll - SCROLL_BOTTOM_TOLERANCE;
+
+        match &state.scroll_state {
+            ScrollState::LockedToBottom => {
+                // Stay locked
+            }
+            ScrollState::AutoScroll { .. } => {
+                state.scroll_state = if at_bottom {
+                    ScrollState::AutoScroll { offset }
+                } else {
+                    ScrollState::Manual { offset }
+                };
+            }
+            ScrollState::Manual { .. } => {
+                state.scroll_state = if at_bottom {
+                    ScrollState::AutoScroll { offset }
+                } else {
+                    ScrollState::Manual { offset }
+                };
+            }
         }
     }
 
-    pub fn subscription(&self) -> Subscription<Message> {
-        match &self.state {
-            SessionState::PreConnect(_) => Subscription::none(),
-            SessionState::Connected(_) => {
-                // Poll for updates every 50ms
-                iced::time::every(Duration::from_millis(50)).map(|_| Message::Tick)
+    // =========================================================================
+    // Tick handler
+    // =========================================================================
+
+    fn handle_tick(&mut self) -> Task<Message> {
+        let SessionState::Connected(state) = &mut self.state else {
+            return Task::none();
+        };
+
+        while let Some(event) = state.handle.try_recv_event() {
+            match event {
+                SessionEvent::Disconnected { error } => {
+                    let msg = error.unwrap_or_else(|| "Disconnected".to_string());
+                    self.state = SessionState::PreConnect(PreConnectState {
+                        config: state.config.clone(),
+                        error: Some(msg),
+                        ..Default::default()
+                    });
+                    return Task::perform(async { list_ports().unwrap_or_default() }, |ports| {
+                        Message::PreConnect(PreConnectMsg::PortsListed(ports))
+                    });
+                }
+                SessionEvent::Error(_e) => {
+                    // Errors are shown via other means (toast, etc.)
+                }
+                _ => {}
             }
         }
+        Task::none()
     }
 }

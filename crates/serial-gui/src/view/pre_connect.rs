@@ -2,68 +2,19 @@
 
 use iced::widget::{Space, button, column, container, pick_list, row, text, text_input};
 use iced::{Alignment, Element, Fill, Length};
-use serial_core::ui::serial_config::{
-    COMMON_BAUD_RATES, DATA_BITS_VARIANTS, FLOW_CONTROL_VARIANTS, PARITY_VARIANTS,
-    STOP_BITS_VARIANTS, data_bits_display, flow_control_display, parity_display, stop_bits_display,
-};
-use serial_core::{DataBits, FlowControl, Parity, StopBits};
-use std::fmt;
+use serial_core::ui::serial_config::COMMON_BAUD_RATES;
 
-use crate::app::{Message, PreConnectState};
+use crate::app::{Message, PreConnectMsg, PreConnectState};
 use crate::theme::Theme;
+use crate::widget_options::{
+    DATA_BITS_OPTIONS, DataBitsOption, FLOW_CONTROL_OPTIONS, FlowControlOption, PARITY_OPTIONS,
+    ParityOption, RX_CHUNKING_OPTIONS, RxChunkingOption, STOP_BITS_OPTIONS, StopBitsOption,
+};
 
-// Wrapper types for pick_list (need Display + PartialEq)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DataBitsOption(pub DataBits);
-
-impl fmt::Display for DataBitsOption {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", data_bits_display(self.0))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ParityOption(pub Parity);
-
-impl fmt::Display for ParityOption {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", parity_display(self.0))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StopBitsOption(pub StopBits);
-
-impl fmt::Display for StopBitsOption {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", stop_bits_display(self.0))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FlowControlOption(pub FlowControl);
-
-impl fmt::Display for FlowControlOption {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", flow_control_display(self.0))
-    }
-}
-
-// RX Chunking wrapper
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RxChunkingOption(pub usize);
-
-impl fmt::Display for RxChunkingOption {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            0 => write!(f, "None (Raw)"),
-            1 => write!(f, "LF (\\n)"),
-            2 => write!(f, "CR (\\r)"),
-            3 => write!(f, "CRLF (\\r\\n)"),
-            _ => write!(f, "Unknown"),
-        }
-    }
-}
+/// Width for port-related inputs
+const PORT_INPUT_WIDTH: u32 = 300;
+/// Width for config labels
+const LABEL_WIDTH: u32 = 100;
 
 /// Render the pre-connect view.
 pub fn view(state: &PreConnectState) -> Element<'_, Message> {
@@ -71,15 +22,14 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
 
     // Port selection
     let port_options: Vec<String> = state.ports.iter().map(|p| p.name.clone()).collect();
-    let port_picker = pick_list(
-        port_options,
-        state.selected_port.clone(),
-        Message::SelectPort,
-    )
+    let port_picker = pick_list(port_options, state.selected_port.clone(), |port| {
+        Message::PreConnect(PreConnectMsg::SelectPort(port))
+    })
     .placeholder("Select a port...")
-    .width(300);
+    .width(PORT_INPUT_WIDTH);
 
-    let refresh_btn = button(text("Refresh")).on_press(Message::RefreshPorts);
+    let refresh_btn =
+        button(text("Refresh")).on_press(Message::PreConnect(PreConnectMsg::RefreshPorts));
 
     let port_row = row![port_picker, refresh_btn]
         .spacing(10)
@@ -108,98 +58,77 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
         "Or enter custom path (e.g., /dev/pts/5)...",
         &state.custom_port_path,
     )
-    .on_input(Message::CustomPortPathChanged)
-    .width(300);
+    .on_input(|path| Message::PreConnect(PreConnectMsg::CustomPortPathChanged(path)))
+    .width(PORT_INPUT_WIDTH);
 
     // Baud rate selection
     let baud_options: Vec<u32> = COMMON_BAUD_RATES.to_vec();
-    let baud_picker = pick_list(
-        baud_options,
-        Some(state.config.baud_rate),
-        Message::SelectBaudRate,
-    )
+    let baud_picker = pick_list(baud_options, Some(state.config.baud_rate), |baud| {
+        Message::PreConnect(PreConnectMsg::SelectBaudRate(baud))
+    })
     .width(120);
 
-    // Data bits selection
-    let data_bits_options: Vec<DataBitsOption> = DATA_BITS_VARIANTS
-        .iter()
-        .copied()
-        .map(DataBitsOption)
-        .collect();
+    // Data bits selection (using static array)
     let data_bits_picker = pick_list(
-        data_bits_options,
+        DATA_BITS_OPTIONS,
         Some(DataBitsOption(state.config.data_bits)),
-        |opt| Message::SelectDataBits(opt.0),
+        |opt| Message::PreConnect(PreConnectMsg::SelectDataBits(opt.0)),
     )
     .width(80);
 
-    // Parity selection
-    let parity_options: Vec<ParityOption> =
-        PARITY_VARIANTS.iter().copied().map(ParityOption).collect();
+    // Parity selection (using static array)
     let parity_picker = pick_list(
-        parity_options,
+        PARITY_OPTIONS,
         Some(ParityOption(state.config.parity)),
-        |opt| Message::SelectParity(opt.0),
+        |opt| Message::PreConnect(PreConnectMsg::SelectParity(opt.0)),
     )
     .width(80);
 
-    // Stop bits selection
-    let stop_bits_options: Vec<StopBitsOption> = STOP_BITS_VARIANTS
-        .iter()
-        .copied()
-        .map(StopBitsOption)
-        .collect();
+    // Stop bits selection (using static array)
     let stop_bits_picker = pick_list(
-        stop_bits_options,
+        STOP_BITS_OPTIONS,
         Some(StopBitsOption(state.config.stop_bits)),
-        |opt| Message::SelectStopBits(opt.0),
+        |opt| Message::PreConnect(PreConnectMsg::SelectStopBits(opt.0)),
     )
     .width(80);
 
-    // Flow control selection
-    let flow_control_options: Vec<FlowControlOption> = FLOW_CONTROL_VARIANTS
-        .iter()
-        .copied()
-        .map(FlowControlOption)
-        .collect();
+    // Flow control selection (using static array)
     let flow_control_picker = pick_list(
-        flow_control_options,
+        FLOW_CONTROL_OPTIONS,
         Some(FlowControlOption(state.config.flow_control)),
-        |opt| Message::SelectFlowControl(opt.0),
+        |opt| Message::PreConnect(PreConnectMsg::SelectFlowControl(opt.0)),
     )
     .width(180);
 
-    // RX Chunking selection
-    let rx_chunking_options: Vec<RxChunkingOption> = (0..4).map(RxChunkingOption).collect();
+    // RX Chunking selection (using static array)
     let rx_chunking_picker = pick_list(
-        rx_chunking_options,
+        RX_CHUNKING_OPTIONS,
         Some(RxChunkingOption(state.rx_chunking_index)),
-        |opt| Message::SelectRxChunking(opt.0),
+        |opt| Message::PreConnect(PreConnectMsg::SelectRxChunking(opt.0)),
     )
     .width(150);
 
     // Config rows
-    let label_width = 100;
     let config_rows = column![
-        row![text("Baud Rate:").width(label_width), baud_picker,]
+        row![text("Baud Rate:").width(LABEL_WIDTH), baud_picker,]
             .spacing(10)
             .align_y(Alignment::Center),
-        row![text("Data Bits:").width(label_width), data_bits_picker,]
+        row![text("Data Bits:").width(LABEL_WIDTH), data_bits_picker,]
             .spacing(10)
             .align_y(Alignment::Center),
-        row![text("Parity:").width(label_width), parity_picker,]
+        row![text("Parity:").width(LABEL_WIDTH), parity_picker,]
             .spacing(10)
             .align_y(Alignment::Center),
-        row![text("Stop Bits:").width(label_width), stop_bits_picker,]
+        row![text("Stop Bits:").width(LABEL_WIDTH), stop_bits_picker,]
             .spacing(10)
             .align_y(Alignment::Center),
         row![
-            text("Flow Control:").width(label_width),
+            text("Flow Control:").width(LABEL_WIDTH),
             flow_control_picker,
         ]
         .spacing(10)
         .align_y(Alignment::Center),
-        row![text("RX Chunking:").width(label_width), rx_chunking_picker,]
+        row![text("RX Chunking:").width(LABEL_WIDTH), rx_chunking_picker,]
             .spacing(10)
             .align_y(Alignment::Center),
     ]
@@ -210,7 +139,7 @@ pub fn view(state: &PreConnectState) -> Element<'_, Message> {
     let connect_btn = if state.connecting {
         button(text("Connecting..."))
     } else if can_connect {
-        button(text("Connect")).on_press(Message::Connect)
+        button(text("Connect")).on_press(Message::PreConnect(PreConnectMsg::Connect))
     } else {
         button(text("Connect"))
     };
