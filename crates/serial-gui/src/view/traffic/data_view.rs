@@ -8,7 +8,7 @@ use serial_core::Direction;
 use serial_core::ui::TimestampFormat;
 use std::time::{Duration, SystemTime};
 
-use crate::app::{ConnectedMsg, ConnectedState, Message, ScrollState};
+use crate::app::{ConnectedMsg, ConnectedState, Message, ScrollState, VisibleChunkCache};
 use crate::theme::{Theme, font_size, spacing};
 
 use super::widgets::{LINE_ENDING_OPTIONS, LineEndingOption};
@@ -32,6 +32,9 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
 
     // Data display with virtual scrolling
     let data_content: Element<'_, Message> = if total_lines == 0 {
+        // Clear cache when buffer is empty
+        *state.visible_cache.borrow_mut() = None;
+
         container(
             text("No data yet...")
                 .color(Theme::TEXT_SECONDARY)
@@ -77,22 +80,48 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
         // Top spacer to maintain scroll position
         let top_spacer_height = visible_start as f32 * ROW_HEIGHT;
 
-        // Collect visible chunk data - we need to clone only the visible lines
-        // because Iced widgets need to own their data (unlike ratatui which renders directly).
-        // This is MUCH better than cloning ALL lines every tick.
-        let visible_chunk_data: Vec<_> = buffer
-            .chunks()
-            .skip(visible_start)
-            .take(visible_end - visible_start)
-            .map(|chunk| (chunk.direction, chunk.encoded.to_string(), chunk.timestamp))
-            .collect();
+        // Check if cache is valid and update if needed
+        // Cache is valid if: same visible range, same buffer length, same encoding
+        let needs_rebuild = {
+            let cache = state.visible_cache.borrow();
+            match cache.as_ref() {
+                Some(c) => {
+                    c.start_index != visible_start
+                        || c.end_index != visible_end
+                        || c.buffer_len != total_lines
+                        || c.encoding != state.encoding
+                }
+                None => true,
+            }
+        };
+
+        if needs_rebuild {
+            // Clone visible chunks and store in cache
+            let chunks: Vec<_> = buffer
+                .chunks()
+                .skip(visible_start)
+                .take(visible_end - visible_start)
+                .map(|chunk| (chunk.direction, chunk.encoded.to_string(), chunk.timestamp))
+                .collect();
+
+            *state.visible_cache.borrow_mut() = Some(VisibleChunkCache {
+                chunks,
+                start_index: visible_start,
+                end_index: visible_end,
+                buffer_len: total_lines,
+                encoding: state.encoding,
+            });
+        }
 
         // Drop the buffer guard before building widgets
         drop(buffer);
 
-        // Build visible lines from collected data
-        let visible_lines: Vec<Element<'_, Message>> = visible_chunk_data
-            .into_iter()
+        // Build visible lines from cached data
+        let cache = state.visible_cache.borrow();
+        let cached_chunks = &cache.as_ref().expect("cache should be populated").chunks;
+
+        let visible_lines: Vec<Element<'_, Message>> = cached_chunks
+            .iter()
             .map(|(direction, content, timestamp)| {
                 let (prefix, color) = match direction {
                     Direction::Tx => ("TX", Theme::TX),
@@ -108,7 +137,7 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
 
                 if state.show_timestamps {
                     let ts_str = format_timestamp(
-                        timestamp,
+                        *timestamp,
                         state.session_start,
                         state.timestamp_format_index,
                     );
@@ -122,10 +151,14 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                     line_row = line_row.push(Space::new().width(10));
                 }
 
-                line_row = line_row.push(text(content).size(font_size::BODY));
+                line_row = line_row.push(text(content.clone()).size(font_size::BODY));
                 line_row.into()
             })
             .collect();
+
+        // Must drop the cache borrow before we can create the scrollable
+        // (because we're returning an Element that borrows from state)
+        drop(cache);
 
         // Bottom spacer to maintain total scroll height
         let bottom_spacer_height = (total_lines - visible_end) as f32 * ROW_HEIGHT;

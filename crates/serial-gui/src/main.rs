@@ -21,6 +21,7 @@ fn main() -> iced::Result {
     iced::application(App::new, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
+        .scale_factor(App::scale_factor)
         .default_font(JETBRAINS_MONO)
         .font(JETBRAINS_MONO_REGULAR)
         .font(JETBRAINS_MONO_BOLD)

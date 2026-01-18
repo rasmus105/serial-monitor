@@ -1,13 +1,14 @@
 //! Main application state and logic.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use iced::widget::scrollable;
-use iced::{Element, Subscription, Task};
+use iced::{Element, Subscription, Task, event, keyboard};
 use serial_core::{
-    ChunkingStrategy, DataBits, Encoding, FlowControl, LineDelimiter, Parity, PortInfo,
+    ChunkingStrategy, DataBits, Direction, Encoding, FlowControl, LineDelimiter, Parity, PortInfo,
     SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle, StopBits, list_ports,
 };
 
@@ -28,12 +29,21 @@ const SCROLL_BOTTOM_TOLERANCE: f32 = 1.0;
 // Application state
 // =============================================================================
 
+/// Minimum zoom level (50%)
+const MIN_ZOOM: f32 = 0.5;
+/// Maximum zoom level (200%)
+const MAX_ZOOM: f32 = 2.0;
+/// Zoom step per key press
+const ZOOM_STEP: f32 = 0.1;
+
 /// Main application state.
 pub struct App {
     /// Current session state.
     state: SessionState,
     /// Pending connection result (used to transfer SessionHandle from async task).
     pending_connection: Arc<Mutex<Option<ConnectionResult>>>,
+    /// Current zoom level (1.0 = 100%)
+    pub zoom_level: f32,
 }
 
 /// State of the current session.
@@ -96,6 +106,24 @@ impl Default for ScrollState {
     }
 }
 
+/// Cached visible chunks to avoid cloning encoded strings on every scroll event.
+///
+/// Hex/binary encodings produce strings 3-9x longer than UTF-8, making per-scroll
+/// cloning expensive. This cache stores the cloned data and is only rebuilt when
+/// the visible range, buffer content, or encoding changes.
+pub struct VisibleChunkCache {
+    /// Cloned data for visible chunks: (direction, encoded_string, timestamp)
+    pub chunks: Vec<(Direction, String, SystemTime)>,
+    /// Start index in buffer (visible index, respecting filters)
+    pub start_index: usize,
+    /// End index in buffer (exclusive)
+    pub end_index: usize,
+    /// Buffer length when cache was built (to detect new data)
+    pub buffer_len: usize,
+    /// Encoding when cache was built
+    pub encoding: Encoding,
+}
+
 /// State when connected to a serial port.
 pub struct ConnectedState {
     /// Session handle for serial communication.
@@ -128,6 +156,8 @@ pub struct ConnectedState {
     pub viewport_height: Option<f32>,
     /// Collapsed sections in the config panel (by section name).
     pub collapsed_sections: HashSet<String>,
+    /// Cached visible chunks to avoid per-scroll cloning (uses RefCell for interior mutability in view).
+    pub visible_cache: RefCell<Option<VisibleChunkCache>>,
 }
 
 // =============================================================================
@@ -143,6 +173,10 @@ pub enum Message {
     Connected(ConnectedMsg),
     /// Periodic tick for polling events
     Tick,
+    /// Zoom in (increase font size)
+    ZoomIn,
+    /// Zoom out (decrease font size)
+    ZoomOut,
 }
 
 /// Messages for pre-connect state
@@ -228,6 +262,7 @@ impl App {
         let app = Self {
             state: SessionState::PreConnect(PreConnectState::default()),
             pending_connection: Arc::new(Mutex::new(None)),
+            zoom_level: 1.0,
         };
         (app, Task::done(Message::refresh_ports()))
     }
@@ -241,11 +276,31 @@ impl App {
         }
     }
 
+    pub fn scale_factor(&self) -> f32 {
+        self.zoom_level
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::PreConnect(msg) => self.handle_pre_connect(msg),
             Message::Connected(msg) => self.handle_connected(msg),
             Message::Tick => self.handle_tick(),
+            Message::ZoomIn => {
+                self.zoom_level = (self.zoom_level + ZOOM_STEP).min(MAX_ZOOM);
+                // Invalidate visible cache when zoom changes
+                if let SessionState::Connected(state) = &mut self.state {
+                    *state.visible_cache.get_mut() = None;
+                }
+                Task::none()
+            }
+            Message::ZoomOut => {
+                self.zoom_level = (self.zoom_level - ZOOM_STEP).max(MIN_ZOOM);
+                // Invalidate visible cache when zoom changes
+                if let SessionState::Connected(state) = &mut self.state {
+                    *state.visible_cache.get_mut() = None;
+                }
+                Task::none()
+            }
         }
     }
 
@@ -257,10 +312,37 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
+        // Listen to all keyboard events (including captured ones) for zoom
+        let keyboard_sub = event::listen_with(|event, _status, _window| {
+            if let iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event
+            {
+                // Only allow zoom with no modifiers (except shift for '+')
+                // Reject if ctrl, alt, or logo/super are pressed
+                if modifiers.control() || modifiers.alt() || modifiers.logo() {
+                    return None;
+                }
+
+                match key {
+                    // '+' is shift+= on most keyboards - iced reports "=" with SHIFT modifier
+                    keyboard::Key::Character(ref c) if c == "=" && modifiers.shift() => {
+                        return Some(Message::ZoomIn);
+                    }
+                    // '-' should have no modifiers at all
+                    keyboard::Key::Character(ref c) if c == "-" && !modifiers.shift() => {
+                        return Some(Message::ZoomOut);
+                    }
+                    _ => {}
+                }
+            }
+            None
+        });
+
         match &self.state {
-            SessionState::PreConnect(_) => Subscription::none(),
+            SessionState::PreConnect(_) => keyboard_sub,
             SessionState::Connected(_) => {
-                iced::time::every(Duration::from_millis(TICK_INTERVAL_MS)).map(|_| Message::Tick)
+                let tick = iced::time::every(Duration::from_millis(TICK_INTERVAL_MS))
+                    .map(|_| Message::Tick);
+                Subscription::batch([keyboard_sub, tick])
             }
         }
     }
@@ -360,6 +442,7 @@ impl App {
                         scroll_state: ScrollState::default(),
                         viewport_height: None,
                         collapsed_sections: HashSet::from(["Statistics".to_string()]),
+                        visible_cache: RefCell::new(None),
                     });
                 }
                 Task::none()
@@ -444,6 +527,7 @@ impl App {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.encoding = encoding;
                     state.handle.buffer_mut().set_encoding(encoding);
+                    *state.visible_cache.get_mut() = None; // Invalidate cache
                 }
                 Task::none()
             }
@@ -451,6 +535,7 @@ impl App {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.show_tx = !state.show_tx;
                     state.handle.buffer_mut().set_show_tx(state.show_tx);
+                    *state.visible_cache.get_mut() = None; // Invalidate cache
                 }
                 Task::none()
             }
@@ -458,6 +543,7 @@ impl App {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.show_rx = !state.show_rx;
                     state.handle.buffer_mut().set_show_rx(state.show_rx);
+                    *state.visible_cache.get_mut() = None; // Invalidate cache
                 }
                 Task::none()
             }
@@ -470,6 +556,7 @@ impl App {
             ClearBuffer => {
                 if let SessionState::Connected(state) = &mut self.state {
                     state.handle.buffer_mut().clear();
+                    *state.visible_cache.get_mut() = None; // Invalidate cache
                 }
                 Task::none()
             }
