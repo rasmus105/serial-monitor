@@ -3,13 +3,13 @@
 use iced::widget::{
     Space, button, column, container, pick_list, row, scrollable, text, text_input,
 };
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Element, Fill, Length};
 use serial_core::Direction;
 use serial_core::ui::TimestampFormat;
 use std::time::{Duration, SystemTime};
 
 use crate::app::{ConnectedMsg, ConnectedState, Message, ScrollState};
-use crate::theme::Theme;
+use crate::theme::{Theme, font_size, spacing};
 
 use super::widgets::{LINE_ENDING_OPTIONS, LineEndingOption};
 
@@ -21,6 +21,8 @@ const RENDER_BUFFER: usize = 10;
 const DEFAULT_VIEWPORT_LINES: usize = 50;
 /// Default viewport height when unknown
 const DEFAULT_VIEWPORT_HEIGHT: f32 = 500.0;
+/// Fixed width for TX/RX prefix container
+const PREFIX_WIDTH: f32 = 24.0;
 
 /// Build the main traffic display area (data lines + send input)
 pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
@@ -30,12 +32,16 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
 
     // Data display with virtual scrolling
     let data_content: Element<'_, Message> = if total_lines == 0 {
-        container(text("No data yet...").color(Theme::MUTED).size(14))
-            .width(Fill)
-            .height(Fill)
-            .center_x(Fill)
-            .center_y(Fill)
-            .into()
+        container(
+            text("No data yet...")
+                .color(Theme::TEXT_SECONDARY)
+                .size(font_size::BODY),
+        )
+        .width(Fill)
+        .height(Fill)
+        .center_x(Fill)
+        .center_y(Fill)
+        .into()
     } else {
         let timestamp_width = if state.show_timestamps {
             max_timestamp_width(state.timestamp_format_index, state.session_start)
@@ -91,7 +97,12 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                     Direction::Rx => ("RX", Theme::RX),
                 };
 
-                let mut line_row = row![text(prefix).color(color).size(14), Space::new().width(8),];
+                // Fixed-width container for TX/RX prefix
+                let prefix_container = container(text(prefix).color(color).size(font_size::BODY))
+                    .width(Length::Fixed(PREFIX_WIDTH));
+
+                let mut line_row =
+                    row![prefix_container, Space::new().width(8),].align_y(Alignment::Center);
 
                 if state.show_timestamps {
                     let ts_str = format_timestamp(
@@ -101,11 +112,15 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                     );
                     // Right-align timestamp within fixed width
                     let padded_timestamp = format!("{:>width$}", ts_str, width = timestamp_width);
-                    line_row = line_row.push(text(padded_timestamp).color(Theme::MUTED).size(12));
+                    line_row = line_row.push(
+                        text(padded_timestamp)
+                            .color(Theme::TEXT_SECONDARY)
+                            .size(font_size::BODY),
+                    );
                     line_row = line_row.push(Space::new().width(10));
                 }
 
-                line_row = line_row.push(text(content).size(14));
+                line_row = line_row.push(text(content).size(font_size::BODY));
                 line_row.into()
             })
             .collect();
@@ -119,7 +134,7 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
             column(visible_lines).spacing(2),
             Space::new().width(Fill).height(bottom_spacer_height),
         ]
-        .padding(10)
+        .padding(spacing::CONTAINER)
         .width(Fill);
 
         // Determine if we should anchor to bottom
@@ -129,7 +144,8 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
             .on_scroll(|viewport| Message::Connected(ConnectedMsg::ScrollChanged(viewport)))
             .direction(scrollable::Direction::Vertical(
                 scrollable::Scrollbar::new().width(8).scroller_width(8),
-            ));
+            ))
+            .style(Theme::scrollbar);
 
         // Only anchor to bottom when locked
         let scrollable_widget = if matches!(state.scroll_state, ScrollState::LockedToBottom) {
@@ -146,25 +162,29 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
     let line_ending_picker = pick_list(LINE_ENDING_OPTIONS, Some(current_line_ending), |opt| {
         Message::Connected(ConnectedMsg::SelectSendLineEnding(opt.0))
     })
-    .width(120);
+    .width(120)
+    .style(Theme::pick_list);
 
     // Send input
     let send_input = text_input("Type to send...", &state.send_input)
         .on_input(|input| Message::Connected(ConnectedMsg::SendInput(input)))
         .on_submit(Message::Connected(ConnectedMsg::Send))
-        .width(Fill);
+        .width(Fill)
+        .style(Theme::text_input);
 
-    let send_btn = button(text("Send")).on_press(Message::Connected(ConnectedMsg::Send));
+    let send_btn = button(text("Send"))
+        .on_press(Message::Connected(ConnectedMsg::Send))
+        .style(Theme::button_primary);
 
     let send_row = row![
         send_input,
-        Space::new().width(10),
+        Space::new().width(spacing::ROW_GAP as f32),
         line_ending_picker,
-        Space::new().width(10),
+        Space::new().width(spacing::ROW_GAP as f32),
         send_btn,
     ]
     .spacing(0)
-    .padding(10)
+    .padding([0, spacing::CONTAINER])
     .align_y(Alignment::Center);
 
     container(
@@ -173,9 +193,10 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                 .width(Fill)
                 .height(Fill)
                 .style(Theme::bordered_container),
+            Space::new().height(5),
             send_row,
         ]
-        .spacing(5),
+        .spacing(0),
     )
     .width(Fill)
     .into()
