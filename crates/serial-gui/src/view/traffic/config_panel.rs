@@ -27,7 +27,7 @@ pub fn view(state: &ConnectedState) -> Element<'_, Message> {
     // === Panel Header with close button ===
     let header = row![
         text("●")
-            .size(font_size::SMALL)
+            .size(font_size::BODY)
             .color(Theme::STATUS_CONNECTED),
         Space::new().width(4),
         text("Settings")
@@ -279,6 +279,7 @@ fn build_options_section(state: &ConnectedState) -> Element<'_, Message> {
 
         // Auto-scroll settings
         let current_scroll_mode = match &state.scroll_state {
+            ScrollState::Off { .. } => ScrollModeOption::Off,
             ScrollState::LockedToBottom => ScrollModeOption::Locked,
             ScrollState::AutoScroll { .. } | ScrollState::Manual { .. } => ScrollModeOption::Auto,
         };
@@ -295,20 +296,6 @@ fn build_options_section(state: &ConnectedState) -> Element<'_, Message> {
             5,
         );
 
-        // Show current scroll state indicator when in manual mode
-        let scroll_status_row: Element<'_, Message> = match &state.scroll_state {
-            ScrollState::Manual { .. } => config_row_styled_indented_with_tooltip(
-                "Status",
-                text("Paused (scroll down to resume)")
-                    .size(font_size::SMALL)
-                    .color(Theme::MUTED),
-                false,
-                "", // No tooltip for status
-                6,
-            ),
-            _ => Space::new().height(0).into(),
-        };
-
         column![
             collapsible_section_header("Options", false),
             encoding_row,
@@ -317,7 +304,6 @@ fn build_options_section(state: &ConnectedState) -> Element<'_, Message> {
             timestamps_row,
             timestamp_format_row,
             auto_scroll_row,
-            scroll_status_row,
         ]
         .spacing(0)
         .padding(8)

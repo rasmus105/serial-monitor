@@ -39,8 +39,8 @@ pub mod spacing {
     pub const ROW_GAP: u16 = 8;
     /// Gap between sections
     pub const SECTION_GAP: u16 = 4;
-    /// Standard row height for config rows
-    pub const ROW_HEIGHT: f32 = 28.0;
+    /// Vertical padding for config rows
+    pub const ROW_PADDING: u16 = 6;
 }
 
 // =============================================================================
@@ -146,8 +146,8 @@ impl Theme {
     /// RX (received data) color - teal green
     pub const RX: Color = Self::STATUS_SUCCESS;
 
-    /// Connected/active status indicator
-    pub const STATUS_CONNECTED: Color = Self::STATUS_SUCCESS;
+    /// Connected/active status indicator - vivid green (not teal)
+    pub const STATUS_CONNECTED: Color = Color::from_rgb(0.30, 0.75, 0.35); // #4dbf59
 
     // =========================================================================
     // Container Style Functions
@@ -268,6 +268,28 @@ impl Theme {
                 color: Color::TRANSPARENT,
                 width: 0.0,
                 radius: 4.0.into(),
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Section header button style (transparent, full width clickable)
+    pub fn button_section_header(_theme: &iced::Theme, status: button::Status) -> button::Style {
+        // The inner container handles the background, so we just need hover effects
+        let text_color = match status {
+            button::Status::Active => Self::TEXT_PRIMARY,
+            button::Status::Hovered => Self::TEXT_PRIMARY,
+            button::Status::Pressed => Self::TEXT_PRIMARY,
+            button::Status::Disabled => Self::TEXT_DISABLED,
+        };
+
+        button::Style {
+            background: Some(Background::Color(Color::TRANSPARENT)),
+            text_color,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 2.0.into(),
             },
             ..Default::default()
         }

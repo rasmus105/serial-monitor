@@ -3,8 +3,9 @@
 #![allow(dead_code)]
 
 use iced::widget::{Space, button, column, container, row, text, tooltip};
-use iced::{Alignment, Element, Fill};
+use iced::{Alignment, Element, Fill, Font, font};
 
+use crate::JETBRAINS_MONO;
 use crate::app::{ConnectedMsg, Message};
 use crate::theme::{Theme, font_size, spacing};
 
@@ -12,6 +13,12 @@ use crate::theme::{Theme, font_size, spacing};
 pub use crate::widget_options::{
     ENCODING_OPTIONS, EncodingOption, LINE_ENDING_OPTIONS, LineEndingOption, SCROLL_MODE_OPTIONS,
     ScrollModeOption, TIMESTAMP_FORMAT_OPTIONS, TimestampFormatOption,
+};
+
+/// JetBrains Mono Bold font
+const FONT_BOLD: Font = Font {
+    weight: font::Weight::Bold,
+    ..JETBRAINS_MONO
 };
 
 // =============================================================================
@@ -72,27 +79,32 @@ pub fn collapsible_section_header<'a>(
 ) -> Element<'a, Message> {
     let icon = if collapsed { "+" } else { "-" };
 
-    container(
-        button(
+    // Make the entire header area clickable by putting the button as the outer element
+    button(
+        container(
             row![
                 text(icon)
                     .size(font_size::HEADER)
-                    .color(Theme::TEXT_PRIMARY),
+                    .color(Theme::TEXT_PRIMARY)
+                    .font(FONT_BOLD),
                 Space::new().width(4),
                 text(title)
                     .size(font_size::HEADER)
-                    .color(Theme::TEXT_PRIMARY),
+                    .color(Theme::TEXT_PRIMARY)
+                    .font(FONT_BOLD),
             ]
             .align_y(Alignment::Center),
         )
-        .on_press(Message::Connected(ConnectedMsg::ToggleSectionCollapse(
-            title.to_string(),
-        )))
         .padding([4, 8])
-        .style(Theme::button_ghost),
+        .width(Fill)
+        .style(Theme::section_header_container),
     )
+    .on_press(Message::Connected(ConnectedMsg::ToggleSectionCollapse(
+        title.to_string(),
+    )))
+    .padding(0)
     .width(Fill)
-    .style(Theme::section_header_container)
+    .style(Theme::button_section_header)
     .into()
 }
 
@@ -136,8 +148,7 @@ pub fn config_row_styled<'a>(
         ]
         .align_y(Alignment::Center),
     )
-    .padding([0, 8])
-    .height(spacing::ROW_HEIGHT)
+    .padding([spacing::ROW_PADDING, 8])
     .width(Fill)
     .style(row_style)
     .into()
@@ -169,8 +180,7 @@ pub fn config_row_styled_with_tooltip<'a>(
         row![label_with_tooltip, Space::new().width(Fill), widget.into(),]
             .align_y(Alignment::Center),
     )
-    .padding([0, 8])
-    .height(spacing::ROW_HEIGHT)
+    .padding([spacing::ROW_PADDING, 8])
     .width(Fill)
     .style(row_style)
     .into()
@@ -199,8 +209,7 @@ pub fn config_row_styled_indented<'a>(
         ]
         .align_y(Alignment::Center),
     )
-    .padding([0, 8])
-    .height(spacing::ROW_HEIGHT)
+    .padding([spacing::ROW_PADDING, 8])
     .width(Fill)
     .style(row_style)
     .into()
@@ -239,8 +248,7 @@ pub fn config_row_styled_indented_with_tooltip<'a>(
         ]
         .align_y(Alignment::Center),
     )
-    .padding([0, 8])
-    .height(spacing::ROW_HEIGHT)
+    .padding([spacing::ROW_PADDING, 8])
     .width(Fill)
     .style(row_style)
     .into()

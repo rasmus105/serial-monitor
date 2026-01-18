@@ -116,6 +116,8 @@ impl fmt::Display for TimestampFormatOption {
 /// Wrapper type for scroll mode in pick_list
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollModeOption {
+    /// Off: No automatic scrolling whatsoever
+    Off,
     /// Auto-scroll: stays at bottom when new data arrives, allows scrolling up
     Auto,
     /// Locked: always shows latest, cannot scroll up
@@ -125,6 +127,7 @@ pub enum ScrollModeOption {
 impl fmt::Display for ScrollModeOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ScrollModeOption::Off => write!(f, "Off"),
             ScrollModeOption::Auto => write!(f, "Auto-scroll"),
             ScrollModeOption::Locked => write!(f, "Lock to bottom"),
         }
@@ -185,8 +188,11 @@ pub const TIMESTAMP_FORMAT_OPTIONS: &[TimestampFormatOption] = &[
 ];
 
 /// Scroll mode options
-pub const SCROLL_MODE_OPTIONS: &[ScrollModeOption] =
-    &[ScrollModeOption::Auto, ScrollModeOption::Locked];
+pub const SCROLL_MODE_OPTIONS: &[ScrollModeOption] = &[
+    ScrollModeOption::Off,
+    ScrollModeOption::Auto,
+    ScrollModeOption::Locked,
+];
 
 /// Static encoding options
 pub const ENCODING_OPTIONS: &[EncodingOption] = &[

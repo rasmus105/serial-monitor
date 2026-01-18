@@ -60,7 +60,9 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                 let start = total_lines.saturating_sub(viewport_lines + RENDER_BUFFER);
                 (start, total_lines)
             }
-            ScrollState::AutoScroll { offset } | ScrollState::Manual { offset } => {
+            ScrollState::Off { offset }
+            | ScrollState::AutoScroll { offset }
+            | ScrollState::Manual { offset } => {
                 // Calculate which lines are visible based on scroll offset
                 let viewport_height = state.viewport_height.unwrap_or(DEFAULT_VIEWPORT_HEIGHT);
                 let start_line = (*offset / ROW_HEIGHT).floor() as usize;
@@ -184,8 +186,12 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
         send_btn,
     ]
     .spacing(0)
-    .padding([0, spacing::CONTAINER])
     .align_y(Alignment::Center);
+
+    // Wrap send row in a container with matching horizontal padding to the traffic content
+    // Traffic content has: 1px border + CONTAINER padding inside
+    // So send row needs: CONTAINER + 1 padding to align with the inner content
+    let send_container = container(send_row).padding([0, spacing::CONTAINER + 1]);
 
     container(
         column![
@@ -194,7 +200,7 @@ pub fn traffic_area(state: &ConnectedState) -> Element<'_, Message> {
                 .height(Fill)
                 .style(Theme::bordered_container),
             Space::new().height(5),
-            send_row,
+            send_container,
         ]
         .spacing(0),
     )

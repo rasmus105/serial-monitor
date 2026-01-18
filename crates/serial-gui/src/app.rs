@@ -79,12 +79,14 @@ impl Default for PreConnectState {
 /// Scroll behavior for the traffic view
 #[derive(Debug, Clone)]
 pub enum ScrollState {
+    /// Off - no automatic scrolling whatsoever, just manual scroll
+    Off { offset: f32 },
     /// Locked to bottom - always shows latest data, user cannot scroll up
     LockedToBottom,
     /// Auto-scroll - stays at bottom when new data arrives, but allows scrolling up.
     /// When scrolled up, new data doesn't auto-scroll. When scrolled back to bottom, resumes.
     AutoScroll { offset: f32 },
-    /// Manual scroll - user has scrolled away from bottom, stays where user left it
+    /// Manual scroll - user has scrolled away from bottom in AutoScroll mode
     Manual { offset: f32 },
 }
 
@@ -505,8 +507,20 @@ impl App {
             }
             SelectScrollMode(mode) => {
                 if let SessionState::Connected(state) = &mut self.state {
+                    // Preserve current offset when switching modes
+                    let current_offset = match &state.scroll_state {
+                        ScrollState::Off { offset }
+                        | ScrollState::AutoScroll { offset }
+                        | ScrollState::Manual { offset } => *offset,
+                        ScrollState::LockedToBottom => 0.0,
+                    };
                     state.scroll_state = match mode {
-                        ScrollModeOption::Auto => ScrollState::AutoScroll { offset: 0.0 },
+                        ScrollModeOption::Off => ScrollState::Off {
+                            offset: current_offset,
+                        },
+                        ScrollModeOption::Auto => ScrollState::AutoScroll {
+                            offset: current_offset,
+                        },
                         ScrollModeOption::Locked => ScrollState::LockedToBottom,
                     };
                 }
@@ -573,6 +587,10 @@ impl App {
         let at_bottom = offset >= max_scroll - SCROLL_BOTTOM_TOLERANCE;
 
         match &state.scroll_state {
+            ScrollState::Off { .. } => {
+                // Just update the offset, no automatic behavior
+                state.scroll_state = ScrollState::Off { offset };
+            }
             ScrollState::LockedToBottom => {
                 // Stay locked
             }
