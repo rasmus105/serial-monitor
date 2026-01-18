@@ -278,6 +278,33 @@ impl SearchState {
         Some(self.matches[match_idx].visible_index)
     }
 
+    /// Go to the last match at or before a visible index (wrapping)
+    ///
+    /// Finds the last match with `visible_index <= from_visible_index`.
+    /// If no match is found backward, wraps to the last match.
+    /// Returns the visible index of the new current match.
+    pub fn goto_match_before(&mut self, from_visible_index: usize) -> Option<usize> {
+        if self.matches.is_empty() {
+            return None;
+        }
+
+        // Binary search for first match strictly after from_visible_index
+        let forward_idx = self
+            .matches
+            .partition_point(|m| m.visible_index <= from_visible_index);
+
+        // The match before that is the last one at or before from_visible_index
+        let match_idx = if forward_idx > 0 {
+            forward_idx - 1
+        } else {
+            // No match at or before, wrap to last match
+            self.matches.len() - 1
+        };
+
+        self.current_match = Some(match_idx);
+        Some(self.matches[match_idx].visible_index)
+    }
+
     // -------------------------------------------------------------------------
     // Status
     // -------------------------------------------------------------------------

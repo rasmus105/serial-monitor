@@ -652,6 +652,7 @@ fn render_shortcuts(area: Rect, buf: &mut Buffer, scroll: usize) {
         (KeyContext::PreConnect, "Pre-Connection"),
         (KeyContext::Connected, "Connected"),
         (KeyContext::Traffic, "Traffic View"),
+        (KeyContext::Visual, "Visual Mode"),
         (KeyContext::Graph, "Graph View"),
         (KeyContext::FileSender, "File Sender"),
         (KeyContext::Input, "Input Mode"),
@@ -754,6 +755,7 @@ fn render_commands(area: Rect, buf: &mut Buffer, scroll: usize) {
         (":quit", ":q", "Quit the application"),
         (":help", ":h", "Open this help panel"),
         (":sessions", ":s", "Open the sessions manager modal"),
+        (":settings", ":set", "Open the settings panel"),
     ];
 
     for (cmd, alias, desc) in commands {

@@ -35,6 +35,10 @@ impl Theme {
     /// Selection background - using indexed color 236 (very dark gray) for subtle highlighting
     /// that doesn't wash out foreground colors. Falls back gracefully on 16-color terminals.
     pub const SELECTION: Color = Color::Indexed(236);
+    /// Visual mode selection background - more prominent blue for visual selection
+    pub const VISUAL_SELECTION: Color = Color::Indexed(24);
+    /// Visual mode cursor line - slightly brighter than selection to show current position
+    pub const VISUAL_CURSOR: Color = Color::Indexed(31);
     pub const MUTED: Color = Color::DarkGray;
     pub const HIGHLIGHT: Color = Color::White;
     /// Gauge/progress bar unfilled background - slightly visible against terminal background
@@ -71,6 +75,11 @@ impl Theme {
 
     pub fn selected() -> Style {
         Style::default().bg(Self::SELECTION)
+    }
+
+    /// Visual mode selection style (for 'v' visual mode yanking).
+    pub fn visual_selection() -> Style {
+        Style::default().bg(Self::VISUAL_SELECTION)
     }
 
     pub fn highlight() -> Style {

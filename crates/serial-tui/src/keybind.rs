@@ -25,6 +25,8 @@ pub enum KeyContext {
     Connected,
     /// Active in traffic view
     Traffic,
+    /// Active in visual mode (traffic view)
+    Visual,
     /// Active in graph view
     Graph,
     /// Active in file sender view
@@ -111,7 +113,11 @@ pub fn all_keybinds() -> Vec<Keybind> {
             "Quit / Disconnect prompt",
             KeyContext::Global,
         ),
-        Keybind::new(key(KeyCode::Char('?')), "Help/Settings", KeyContext::Global),
+        Keybind::new(
+            key(KeyCode::Char('?')),
+            "Search backwards",
+            KeyContext::Traffic,
+        ),
         Keybind::new(
             key(KeyCode::Char('c')),
             "Toggle config panel",
@@ -203,7 +209,11 @@ pub fn all_keybinds() -> Vec<Keybind> {
         Keybind::new(key(KeyCode::Char('d')), "Disconnect", KeyContext::Connected),
         // Traffic view
         Keybind::new(key(KeyCode::Char('s')), "Send data", KeyContext::Traffic),
-        Keybind::new(key(KeyCode::Char('/')), "Search", KeyContext::Traffic),
+        Keybind::new(
+            key(KeyCode::Char('/')),
+            "Search forward",
+            KeyContext::Traffic,
+        ),
         Keybind::new(key(KeyCode::Char('n')), "Next match", KeyContext::Traffic),
         Keybind::new(
             key(KeyCode::Char('N')),
@@ -216,6 +226,18 @@ pub fn all_keybinds() -> Vec<Keybind> {
             "Toggle lock to bottom",
             KeyContext::Traffic,
         ),
+        Keybind::new(
+            key(KeyCode::Char('v')),
+            "Enter visual mode",
+            KeyContext::Traffic,
+        ),
+        // Visual mode
+        Keybind::new(
+            key(KeyCode::Char('y')),
+            "Yank selection to clipboard",
+            KeyContext::Visual,
+        ),
+        Keybind::new(key(KeyCode::Esc), "Exit visual mode", KeyContext::Visual),
         // Graph view
         Keybind::new(
             key(KeyCode::Char('g')),
@@ -275,7 +297,7 @@ pub const PRECONNECT_HINTS: &[KeyHint] = &[
     KeyHint::new("Enter", "connect"),
     KeyHint::new("/", "search"),
     KeyHint::new("Ctrl+h/l", "panels"),
-    KeyHint::new("?", "help"),
+    KeyHint::new(":settings", "help"),
 ];
 
 /// Common key hints for the traffic view status bar.
@@ -283,8 +305,9 @@ pub const TRAFFIC_HINTS: &[KeyHint] = &[
     KeyHint::new("s", "send"),
     KeyHint::new("/", "search"),
     KeyHint::new("f", "filter"),
+    KeyHint::new("v", "visual"),
     KeyHint::new("Ctrl+b", "lock bottom"),
-    KeyHint::new("?", "help"),
+    KeyHint::new(":settings", "help"),
 ];
 
 /// Common key hints for the graph view status bar.
@@ -292,7 +315,7 @@ pub const GRAPH_HINTS: &[KeyHint] = &[
     KeyHint::new("g", "toggle graph"),
     KeyHint::new("Tab", "settings/series"),
     KeyHint::new("t", "toggle series"),
-    KeyHint::new("?", "help"),
+    KeyHint::new(":settings", "help"),
 ];
 
 /// Common key hints for the file sender view status bar.
@@ -300,5 +323,5 @@ pub const FILE_SENDER_HINTS: &[KeyHint] = &[
     KeyHint::new("o", "open file"),
     KeyHint::new("Enter", "start sending"),
     KeyHint::new("x", "cancel"),
-    KeyHint::new("?", "help"),
+    KeyHint::new(":settings", "help"),
 ];

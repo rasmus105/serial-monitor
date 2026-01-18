@@ -86,6 +86,11 @@ const COMMANDS: &[CommandInfo] = &[
         alias: "s",
         arg: CommandArg::None,
     },
+    CommandInfo {
+        name: "settings",
+        alias: "set",
+        arg: CommandArg::None,
+    },
 ];
 
 /// Main application state.
@@ -832,12 +837,7 @@ impl App {
                         }
                         return;
                     }
-                    KeyCode::Char('?') if !self.is_input_mode() => {
-                        if self.help.toggle() {
-                            self.needs_clear = true;
-                        }
-                        return;
-                    }
+
                     KeyCode::Char('c') if !self.is_input_mode() => {
                         self.show_config = !self.show_config;
                         // If hiding config panel and focus was on Config, move focus to Main
@@ -1036,6 +1036,10 @@ impl App {
             }
             "sessions" | "s" => {
                 self.sessions_modal.show();
+            }
+            "settings" | "set" => {
+                self.help.visible = true;
+                self.help.tab = crate::widget::help_overlay::HelpTab::Settings;
             }
             _ => {
                 self.toasts.error(format!("Unknown command: {}", parts[0]));

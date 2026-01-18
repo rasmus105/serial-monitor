@@ -625,6 +625,15 @@ impl DataBuffer {
         self.search.goto_match_from(from_visible_index)
     }
 
+    /// Go to the last match at or before a visible index (wrapping)
+    ///
+    /// Finds the last match with `visible_index <= from_visible_index`.
+    /// If no match is found backward, wraps to the last match.
+    pub fn goto_match_before(&mut self, from_visible_index: usize) -> Option<usize> {
+        self.ensure_search_updated();
+        self.search.goto_match_before(from_visible_index)
+    }
+
     /// Ensure search results are up-to-date (internal helper)
     fn ensure_search_updated(&mut self) {
         let is_filtered = self.is_filter_active();

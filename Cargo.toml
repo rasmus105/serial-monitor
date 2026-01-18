@@ -51,6 +51,9 @@ dirs = "6"
 # Date/time
 chrono = "0.4"
 
+# Clipboard
+arboard = { version = "3", features = ["wayland-data-control"] }
+
 # Keep awake (prevent system sleep)
 keepawake = "0.6"
 

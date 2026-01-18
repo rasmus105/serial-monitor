@@ -422,41 +422,6 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
             },
         ],
     },
-    Section {
-        header: Some("Rate Display"),
-        fields: &[
-            FieldDef {
-                id: "show_rx",
-                label: "Show RX",
-                kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.show_rx),
-                set: |c, v| {
-                    if let FieldValue::Bool(b) = v {
-                        c.show_rx = b;
-                    }
-                },
-                visible: always_visible,
-                enabled: |c| c.mode_index == 1, // RX/TX Rate mode
-                parent_id: None,
-                validate: always_valid,
-            },
-            FieldDef {
-                id: "show_tx",
-                label: "Show TX",
-                kind: FieldKind::Toggle,
-                get: |c| FieldValue::Bool(c.show_tx),
-                set: |c, v| {
-                    if let FieldValue::Bool(b) = v {
-                        c.show_tx = b;
-                    }
-                },
-                visible: always_visible,
-                enabled: |c| c.mode_index == 1, // RX/TX Rate mode
-                parent_id: None,
-                validate: always_valid,
-            },
-        ],
-    },
 ];
 
 impl Default for GraphView {
@@ -818,12 +783,25 @@ impl GraphView {
         let hint_height = if show_hint { 1 } else { 0 };
 
         // Calculate how much space we need for series section
-        let series_count = buffer.graph().map(|g| g.series.len()).unwrap_or(0);
-        let series_height = if self.config.mode_index == 0 && series_count > 0 {
-            // Header (2) + series items + 1 for borders
-            (series_count as u16 + 3).min(12)
-        } else {
-            0
+        // For ParsedData mode: show actual series from graph
+        // For PacketRate mode: always show RX and TX (2 items)
+        let series_height = match self.config.mode_index {
+            0 => {
+                // ParsedData mode - show graph series if any
+                let series_count = buffer.graph().map(|g| g.series.len()).unwrap_or(0);
+                if series_count > 0 {
+                    // Header (2) + series items + 1 for borders
+                    (series_count as u16 + 3).min(12)
+                } else {
+                    0
+                }
+            }
+            1 => {
+                // PacketRate mode - always show RX and TX (2 items)
+                // Header (2) + 2 items + 1 for borders = 5
+                5
+            }
+            _ => 0,
         };
 
         let chunks = Layout::default()
@@ -873,8 +851,8 @@ impl GraphView {
             Paragraph::new(hint).render(chunks[2], buf);
         }
 
-        // Series visibility section (only for Parsed Data mode)
-        if self.config.mode_index == 0 && series_height > 0 {
+        // Series visibility section (both modes)
+        if series_height > 0 {
             self.draw_series_section(chunks[3], buf, buffer, focus);
         }
     }
@@ -904,6 +882,20 @@ impl GraphView {
             return;
         }
 
+        match self.config.mode_index {
+            0 => self.draw_parsed_data_series(inner, buf, buffer, is_focused),
+            1 => self.draw_packet_rate_series(inner, buf, buffer, is_focused),
+            _ => {}
+        }
+    }
+
+    fn draw_parsed_data_series(
+        &self,
+        inner: Rect,
+        buf: &mut Buffer,
+        buffer: &serial_core::DataBuffer,
+        is_focused: bool,
+    ) {
         let Some(graph) = buffer.graph() else {
             return;
         };
@@ -972,6 +964,75 @@ impl GraphView {
         }
     }
 
+    fn draw_packet_rate_series(
+        &self,
+        inner: Rect,
+        buf: &mut Buffer,
+        buffer: &serial_core::DataBuffer,
+        is_focused: bool,
+    ) {
+        // Get current rate values from graph data
+        let (rx_rate, tx_rate) = buffer
+            .graph()
+            .and_then(|g| {
+                let packet_rate = &g.config.packet_rate;
+                packet_rate.samples.back().map(|sample| {
+                    let window_secs = packet_rate.window_size.as_secs_f64();
+                    (
+                        sample.rx_count as f64 / window_secs,
+                        sample.tx_count as f64 / window_secs,
+                    )
+                })
+            })
+            .unwrap_or((0.0, 0.0));
+
+        // RX and TX series items
+        let items = [
+            ("RX", self.config.show_rx, Theme::SUCCESS, rx_rate),
+            ("TX", self.config.show_tx, Theme::PRIMARY, tx_rate),
+        ];
+
+        for (i, (name, visible, color, rate)) in items.iter().enumerate() {
+            if i as u16 >= inner.height {
+                break;
+            }
+
+            let visibility = if *visible { "[x]" } else { "[ ]" };
+            let is_selected = i == self.selected_series && is_focused;
+            let prefix = if is_selected { "> " } else { "  " };
+
+            let rate_str = format!(" = {:.1}/s", rate);
+
+            let line = Line::from(vec![
+                Span::raw(prefix),
+                Span::styled(
+                    visibility,
+                    if *visible {
+                        Style::default().fg(*color)
+                    } else {
+                        Theme::muted()
+                    },
+                ),
+                Span::raw(" "),
+                Span::styled(*name, Style::default().fg(*color)),
+                Span::styled(rate_str, Theme::muted()),
+            ]);
+
+            let y = inner.y + i as u16;
+
+            // Highlight selected row only when focused
+            if is_selected {
+                for x in inner.x..inner.x + inner.width {
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        cell.set_bg(Theme::SELECTION);
+                    }
+                }
+            }
+
+            Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
+        }
+    }
+
     /// Returns true if the view is in a mode that captures text input.
     ///
     /// This is used to prevent global keybindings (like 'd' to disconnect)
@@ -1019,12 +1080,24 @@ impl GraphView {
 
     fn handle_config_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<GraphAction> {
         // Check if we have series to show (for Tab navigation)
-        let has_series = self.config.mode_index == 0
-            && handle
+        // ParsedData mode: show if graph has series
+        // PacketRate mode: always show RX/TX (2 items)
+        let has_series = match self.config.mode_index {
+            0 => handle
                 .buffer()
                 .graph()
                 .map(|g| !g.series.is_empty())
-                .unwrap_or(false);
+                .unwrap_or(false),
+            1 => true, // PacketRate always has RX and TX
+            _ => false,
+        };
+
+        // Get series count for navigation
+        let series_count = match self.config.mode_index {
+            0 => handle.buffer().graph().map(|g| g.series.len()).unwrap_or(0),
+            1 => 2, // RX and TX
+            _ => 0,
+        };
 
         // Track if we were editing text before this key
         let was_text_editing = self.config_nav.edit_mode.is_text_input();
@@ -1092,15 +1165,11 @@ impl GraphView {
                 let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
                 match key.code {
                     KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
-                        let series_count =
-                            handle.buffer().graph().map(|g| g.series.len()).unwrap_or(0);
                         if series_count > 0 {
                             self.selected_series = (self.selected_series + 1) % series_count;
                         }
                     }
                     KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
-                        let series_count =
-                            handle.buffer().graph().map(|g| g.series.len()).unwrap_or(0);
                         if series_count > 0 {
                             self.selected_series = if self.selected_series == 0 {
                                 series_count - 1
@@ -1116,15 +1185,30 @@ impl GraphView {
                     | KeyCode::Char('l')
                     | KeyCode::Left
                     | KeyCode::Right => {
-                        // Toggle series visibility
-                        let mut buffer = handle.buffer_mut();
-                        if let Some(graph) = buffer.graph_mut() {
-                            let series_names: Vec<String> = graph.series.keys().cloned().collect();
-                            if let Some(name) = series_names.get(self.selected_series)
-                                && let Some(series) = graph.series.get_mut(name)
-                            {
-                                series.visible = !series.visible;
+                        // Toggle series visibility based on mode
+                        match self.config.mode_index {
+                            0 => {
+                                // ParsedData mode: toggle graph series visibility
+                                let mut buffer = handle.buffer_mut();
+                                if let Some(graph) = buffer.graph_mut() {
+                                    let series_names: Vec<String> =
+                                        graph.series.keys().cloned().collect();
+                                    if let Some(name) = series_names.get(self.selected_series)
+                                        && let Some(series) = graph.series.get_mut(name)
+                                    {
+                                        series.visible = !series.visible;
+                                    }
+                                }
                             }
+                            1 => {
+                                // PacketRate mode: toggle show_rx/show_tx
+                                match self.selected_series {
+                                    0 => self.config.show_rx = !self.config.show_rx,
+                                    1 => self.config.show_tx = !self.config.show_tx,
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     _ => {}

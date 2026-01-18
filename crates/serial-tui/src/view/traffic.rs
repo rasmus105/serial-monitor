@@ -46,6 +46,8 @@ pub struct TrafficView {
     pub search_input: TextInputState,
     /// Whether search input is focused.
     pub search_focused: bool,
+    /// Search direction (true = forward with '/', false = backward with '?').
+    pub search_forward: bool,
     /// Search input history.
     pub search_history: InputHistory,
     /// Filter input state.
@@ -78,6 +80,12 @@ pub struct TrafficView {
     last_content_width: usize,
     /// Whether the view is currently scrolled to the bottom.
     at_bottom: bool,
+    /// Visual mode state: whether visual selection is active.
+    pub visual_mode: bool,
+    /// Visual mode anchor: the chunk index where selection started.
+    pub visual_anchor: usize,
+    /// Visual mode cursor: the current chunk index in selection.
+    pub visual_cursor: usize,
 }
 
 /// Traffic view configuration.
@@ -384,6 +392,7 @@ impl TrafficView {
             scroll: 0,
             search_input: TextInputState::default().with_placeholder("Search pattern..."),
             search_focused: false,
+            search_forward: true,
             search_history: InputHistory::default(),
             filter_input: TextInputState::default().with_placeholder("Filter pattern..."),
             filter_focused: false,
@@ -400,11 +409,137 @@ impl TrafficView {
             last_visible_height: 20, // Conservative default
             last_content_width: 80,  // Conservative default
             at_bottom: true,         // Start at bottom
+            visual_mode: false,
+            visual_anchor: 0,
+            visual_cursor: 0,
         }
     }
 
     pub fn is_input_mode(&self) -> bool {
         self.search_focused || self.filter_focused || self.send_focused || self.dir_path_focused
+    }
+
+    /// Enter visual mode at the current scroll position.
+    fn enter_visual_mode(&mut self, handle: &SessionHandle) {
+        let chunk_idx = self.scroll_to_chunk_index(handle);
+        self.visual_mode = true;
+        self.visual_anchor = chunk_idx;
+        self.visual_cursor = chunk_idx;
+    }
+
+    /// Exit visual mode.
+    fn exit_visual_mode(&mut self) {
+        self.visual_mode = false;
+    }
+
+    /// Move visual cursor and update scroll position.
+    fn visual_move(&mut self, new_cursor: usize, handle: &SessionHandle) {
+        let chunk_count = handle.buffer().len();
+        self.visual_cursor = new_cursor.min(chunk_count.saturating_sub(1));
+
+        // Update scroll to keep cursor visible
+        let display_line = self.chunk_to_scroll_position(self.visual_cursor, handle);
+        let visible_start = self.scroll;
+        let visible_end = self.scroll + self.last_visible_height;
+
+        if display_line < visible_start {
+            self.scroll = display_line;
+        } else if display_line >= visible_end {
+            self.scroll = display_line.saturating_sub(self.last_visible_height - 1);
+        }
+    }
+
+    /// Get the selected chunk range (start, end) inclusive.
+    fn visual_selection_range(&self) -> (usize, usize) {
+        let start = self.visual_anchor.min(self.visual_cursor);
+        let end = self.visual_anchor.max(self.visual_cursor);
+        (start, end)
+    }
+
+    /// Convert scroll position to chunk index at the center of visible area.
+    fn scroll_to_chunk_index(&self, handle: &SessionHandle) -> usize {
+        // Target the center of the visible area, not the top
+        let center_line = self.scroll + self.last_visible_height / 2;
+
+        if !self.config.wrap_text {
+            return center_line;
+        }
+
+        // In wrap mode, need to find which chunk contains this display line
+        let buffer = handle.buffer();
+        let content_width = self.last_content_width.max(1);
+        let mut display_line = 0;
+
+        for (idx, chunk) in buffer.chunks().enumerate() {
+            let chunk_lines = chunk.encoded.width().div_ceil(content_width).max(1);
+            if display_line + chunk_lines > center_line {
+                return idx;
+            }
+            display_line += chunk_lines;
+        }
+
+        buffer.len().saturating_sub(1)
+    }
+
+    /// Convert chunk index to scroll position (display line in wrap mode).
+    fn chunk_to_scroll_position(&self, chunk_idx: usize, handle: &SessionHandle) -> usize {
+        if !self.config.wrap_text {
+            return chunk_idx;
+        }
+
+        // In wrap mode, sum display lines of all chunks before this one
+        let buffer = handle.buffer();
+        let content_width = self.last_content_width.max(1);
+        let mut display_line = 0;
+
+        for (idx, chunk) in buffer.chunks().enumerate() {
+            if idx >= chunk_idx {
+                break;
+            }
+            display_line += chunk.encoded.width().div_ceil(content_width).max(1);
+        }
+
+        display_line
+    }
+
+    /// Yank selected chunks to clipboard and return success message.
+    fn yank_visual_selection(&mut self, handle: &SessionHandle) -> Option<String> {
+        let (start, end) = self.visual_selection_range();
+        let buffer = handle.buffer();
+
+        // Collect content from selected chunks (just the data, no timestamps/direction)
+        let mut content = String::new();
+        for (idx, chunk) in buffer.chunks().enumerate() {
+            if idx >= start && idx <= end {
+                if !content.is_empty() {
+                    content.push('\n');
+                }
+                content.push_str(chunk.encoded);
+            }
+        }
+
+        // Copy to clipboard
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => match clipboard.set_text(&content) {
+                Ok(()) => {
+                    let chunk_count = end - start + 1;
+                    self.exit_visual_mode();
+                    Some(format!(
+                        "{} chunk{} yanked",
+                        chunk_count,
+                        if chunk_count == 1 { "" } else { "s" }
+                    ))
+                }
+                Err(e) => {
+                    self.exit_visual_mode();
+                    Some(format!("Clipboard error: {}", e))
+                }
+            },
+            Err(e) => {
+                self.exit_visual_mode();
+                Some(format!("Clipboard error: {}", e))
+            }
+        }
     }
 
     /// Sync config changes to the session buffer
@@ -654,19 +789,33 @@ impl TrafficView {
         };
         // Cap displayed scroll position at content max (don't show padding in title)
         let display_scroll = scroll.min(max_scroll_content);
+        let visual_indicator = if self.visual_mode {
+            let (start, end) = self.visual_selection_range();
+            format!(" [VISUAL {}-{}]", start + 1, end + 1)
+        } else {
+            String::new()
+        };
         let block = block.title(format!(
-            " Traffic [{}/{}]{}{}{}{} ",
+            " Traffic [{}/{}]{}{}{}{}{} ",
             display_scroll + 1,
             total.max(1),
             filter_info,
             search_info,
             lock_indicator,
             save_indicator,
+            visual_indicator,
         ));
         block.render(area, buf);
 
         // Render chunks
         let mut y = inner.y;
+        // Get visual selection range if in visual mode
+        let visual_range = if self.visual_mode {
+            Some(self.visual_selection_range())
+        } else {
+            None
+        };
+
         for (visible_idx, chunk) in buffer
             .chunks()
             .enumerate()
@@ -675,6 +824,24 @@ impl TrafficView {
         {
             if y >= inner.y + inner.height {
                 break;
+            }
+
+            // Apply visual selection/cursor background if this chunk is selected
+            if let Some((start, end)) = visual_range
+                && visible_idx >= start
+                && visible_idx <= end
+            {
+                // Use brighter color for cursor line, darker for rest of selection
+                let bg_color = if visible_idx == self.visual_cursor {
+                    Theme::VISUAL_CURSOR
+                } else {
+                    Theme::VISUAL_SELECTION
+                };
+                for x in inner.x..inner.x + inner.width {
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        cell.set_bg(bg_color);
+                    }
+                }
             }
 
             // Get matches for this chunk
@@ -793,24 +960,56 @@ impl TrafficView {
         } else {
             String::new()
         };
+        let visual_indicator = if self.visual_mode {
+            let (start, end) = self.visual_selection_range();
+            format!(" [VISUAL {}-{}]", start + 1, end + 1)
+        } else {
+            String::new()
+        };
         let block = block.title(format!(
-            " Traffic [{}/{}]{}{}{}{} ",
+            " Traffic [{}/{}]{}{}{}{}{} ",
             display_scroll + 1,
             total_display_lines.max(1),
             filter_info,
             search_info,
             lock_indicator,
             save_indicator,
+            visual_indicator,
         ));
         block.render(area, buf);
 
         // Render display lines starting from scroll position
         let mut y = inner.y;
+        // Get visual selection range if in visual mode
+        let visual_range = if self.visual_mode {
+            Some(self.visual_selection_range())
+        } else {
+            None
+        };
+
         for &(chunk_idx, line_within_chunk) in
             display_lines.iter().skip(scroll).take(visible_height)
         {
             if y >= inner.y + inner.height {
                 break;
+            }
+
+            // Apply visual selection/cursor background if this chunk is selected
+            if let Some((start, end)) = visual_range
+                && chunk_idx >= start
+                && chunk_idx <= end
+            {
+                // Use brighter color for cursor line, darker for rest of selection
+                let bg_color = if chunk_idx == self.visual_cursor {
+                    Theme::VISUAL_CURSOR
+                } else {
+                    Theme::VISUAL_SELECTION
+                };
+                for x in inner.x..inner.x + inner.width {
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        cell.set_bg(bg_color);
+                    }
+                }
             }
 
             let chunk = &chunks[chunk_idx];
@@ -1061,10 +1260,11 @@ impl TrafficView {
             // Get search status from buffer
             let buffer = handle.buffer();
             let status = buffer.search_status();
+            let direction = if self.search_forward { "/" } else { "?" };
             let title = if status.is_empty() {
-                "Search".to_string()
+                format!("Search {}", direction)
             } else {
-                format!("Search [{}]", status)
+                format!("Search {} [{}]", direction, status)
             };
             (title, &self.search_input)
         } else if self.filter_focused {
@@ -1162,6 +1362,11 @@ impl TrafficView {
     }
 
     fn handle_main_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
+        // Handle visual mode keys first
+        if self.visual_mode {
+            return self.handle_visual_mode_key(key, handle);
+        }
+
         // Half-page scroll amount based on actual visible height
         let half_page = self.last_visible_height / 2;
 
@@ -1251,6 +1456,11 @@ impl TrafficView {
             }
             KeyCode::Char('/') => {
                 self.search_focused = true;
+                self.search_forward = true;
+            }
+            KeyCode::Char('?') => {
+                self.search_focused = true;
+                self.search_forward = false;
             }
             KeyCode::Char('f') => {
                 self.filter_focused = true;
@@ -1287,8 +1497,8 @@ impl TrafficView {
                 if let Some(pos) = scroll_pos {
                     // Only navigate if not in lock mode, or if match is visible from bottom
                     if !self.config.lock_to_bottom {
-                        // Position match with 20% of visible height above it (like vim scrolloff)
-                        let offset = self.last_visible_height / 5;
+                        // Center the match in the middle of the visible area (like vim's nzz)
+                        let offset = self.last_visible_height / 2;
                         self.scroll = pos.saturating_sub(offset);
                         self.at_bottom = self.scroll >= max_scroll;
                     }
@@ -1322,11 +1532,69 @@ impl TrafficView {
                 if let Some(pos) = scroll_pos {
                     // Only navigate if not in lock mode
                     if !self.config.lock_to_bottom {
-                        // Position match with 20% of visible height above it (like vim scrolloff)
-                        let offset = self.last_visible_height / 5;
+                        // Center the match in the middle of the visible area (like vim's nzz)
+                        let offset = self.last_visible_height / 2;
                         self.scroll = pos.saturating_sub(offset);
                         self.at_bottom = self.scroll >= max_scroll;
                     }
+                }
+            }
+            KeyCode::Char('v') => {
+                // Enter visual mode
+                drop(buffer);
+                self.enter_visual_mode(handle);
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn handle_visual_mode_key(
+        &mut self,
+        key: KeyEvent,
+        handle: &SessionHandle,
+    ) -> Option<TrafficAction> {
+        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let chunk_count = handle.buffer().len();
+        let half_page = self.last_visible_height / 2;
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('v') => {
+                self.exit_visual_mode();
+            }
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
+                let new_cursor = self.visual_cursor.saturating_add(1);
+                self.visual_move(new_cursor, handle);
+            }
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
+                let new_cursor = self.visual_cursor.saturating_sub(1);
+                self.visual_move(new_cursor, handle);
+            }
+            KeyCode::Char('d') if has_ctrl => {
+                // Half-page down
+                let new_cursor = self
+                    .visual_cursor
+                    .saturating_add(half_page)
+                    .min(chunk_count.saturating_sub(1));
+                self.visual_move(new_cursor, handle);
+            }
+            KeyCode::Char('u') if has_ctrl => {
+                // Half-page up
+                let new_cursor = self.visual_cursor.saturating_sub(half_page);
+                self.visual_move(new_cursor, handle);
+            }
+            KeyCode::Char('g') => {
+                // Go to top
+                self.visual_move(0, handle);
+            }
+            KeyCode::Char('G') => {
+                // Go to bottom
+                self.visual_move(chunk_count.saturating_sub(1), handle);
+            }
+            KeyCode::Char('y') => {
+                // Yank selection to clipboard
+                if let Some(msg) = self.yank_visual_selection(handle) {
+                    return Some(TrafficAction::Toast(crate::widget::Toast::info(msg)));
                 }
             }
             _ => {}
@@ -1635,17 +1903,30 @@ impl TrafficView {
 
                 drop(buffer);
 
-                // Jump to the first match at or after the middle chunk
-                let scroll_pos = handle
-                    .buffer_mut()
-                    .goto_match_from(middle_chunk_idx)
-                    .map(|idx| {
-                        if let Some(offsets) = &display_offsets {
-                            offsets.get(idx).copied().unwrap_or(0)
-                        } else {
-                            idx
-                        }
-                    });
+                // Jump to the first match in the appropriate direction from the middle chunk
+                let scroll_pos = if self.search_forward {
+                    handle
+                        .buffer_mut()
+                        .goto_match_from(middle_chunk_idx)
+                        .map(|idx| {
+                            if let Some(offsets) = &display_offsets {
+                                offsets.get(idx).copied().unwrap_or(0)
+                            } else {
+                                idx
+                            }
+                        })
+                } else {
+                    handle
+                        .buffer_mut()
+                        .goto_match_before(middle_chunk_idx)
+                        .map(|idx| {
+                            if let Some(offsets) = &display_offsets {
+                                offsets.get(idx).copied().unwrap_or(0)
+                            } else {
+                                idx
+                            }
+                        })
+                };
 
                 if let Some(pos) = scroll_pos {
                     // Position match with 20% of visible height above it (like vim scrolloff)
