@@ -114,6 +114,10 @@ pub struct TrafficSettings {
     pub file_save_encoding_index: usize,
     /// File save directory.
     pub file_save_directory: String,
+    /// Whether to append a suffix when sending data.
+    pub send_suffix_enabled: bool,
+    /// The suffix to append (with escape sequences like \r\n).
+    pub send_suffix: String,
 }
 
 impl Default for TrafficSettings {
@@ -136,6 +140,8 @@ impl Default for TrafficSettings {
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
                 .into_owned(),
+            send_suffix_enabled: true,
+            send_suffix: r"\r\n".to_string(),
         }
     }
 }

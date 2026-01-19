@@ -32,6 +32,8 @@ pub use util::{
     format_bytes,
     format_duration,
     format_rate,
+    // Escape sequence parsing
+    parse_escape_sequences,
     // Text display utilities
     slice_by_display_width,
 };

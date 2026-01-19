@@ -24,7 +24,7 @@ use serial_core::{
             always_visible,
         },
         encoding::{ENCODING_DISPLAY_NAMES, ENCODING_VARIANTS},
-        slice_by_display_width,
+        parse_escape_sequences, slice_by_display_width,
     },
 };
 
@@ -110,6 +110,9 @@ pub struct TrafficConfig {
     pub file_save_format_index: usize,
     pub file_save_encoding_index: usize,
     pub file_save_directory: String,
+    // Send settings
+    pub send_suffix_enabled: bool,
+    pub send_suffix: String,
 }
 
 impl Default for TrafficConfig {
@@ -134,6 +137,9 @@ impl Default for TrafficConfig {
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
                 .into_owned(),
+            // Send defaults
+            send_suffix_enabled: true,
+            send_suffix: r"\r\n".to_string(),
         }
     }
 }
@@ -380,6 +386,43 @@ static TRAFFIC_CONFIG_SECTIONS: &[Section<TrafficConfig>] = &[
                 // Only enabled when file saving is NOT active
                 enabled: |c| !c.file_save_enabled,
                 parent_id: Some("file_save_enabled"),
+                validate: always_valid,
+            },
+        ],
+    },
+    Section {
+        header: Some("Send"),
+        fields: &[
+            FieldDef {
+                id: "send_suffix_enabled",
+                label: "Append Suffix",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.send_suffix_enabled),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.send_suffix_enabled = b;
+                    }
+                },
+                visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
+                validate: always_valid,
+            },
+            FieldDef {
+                id: "send_suffix",
+                label: "Suffix",
+                kind: FieldKind::TextInput {
+                    placeholder: r"e.g. \r\n",
+                },
+                get: |c| FieldValue::string(c.send_suffix.clone()),
+                set: |c, v| {
+                    if let FieldValue::String(s) = v {
+                        c.send_suffix = s.into_owned();
+                    }
+                },
+                visible: always_visible,
+                enabled: |c| c.send_suffix_enabled,
+                parent_id: Some("send_suffix_enabled"),
                 validate: always_valid,
             },
         ],
@@ -2124,9 +2167,16 @@ impl TrafficView {
                     self.send_history.reset_navigation();
 
                     self.send_focused = false;
-                    // Add newline for convenience
-                    let mut bytes = data.into_bytes();
-                    bytes.push(b'\n');
+
+                    // Parse escape sequences in user input
+                    let mut bytes = parse_escape_sequences(&data);
+
+                    // Append suffix if enabled
+                    if self.config.send_suffix_enabled && !self.config.send_suffix.is_empty() {
+                        let suffix_bytes = parse_escape_sequences(&self.config.send_suffix);
+                        bytes.extend(suffix_bytes);
+                    }
+
                     return Some(TrafficAction::Send(bytes));
                 }
             }
@@ -2238,6 +2288,8 @@ impl TrafficView {
         self.config.file_save_format_index = settings.file_save_format_index;
         self.config.file_save_encoding_index = settings.file_save_encoding_index;
         self.config.file_save_directory = settings.file_save_directory.clone();
+        self.config.send_suffix_enabled = settings.send_suffix_enabled;
+        self.config.send_suffix = settings.send_suffix.clone();
     }
 
     /// Extract settings for saving to disk.
@@ -2258,6 +2310,8 @@ impl TrafficView {
             file_save_format_index: self.config.file_save_format_index,
             file_save_encoding_index: self.config.file_save_encoding_index,
             file_save_directory: self.config.file_save_directory.clone(),
+            send_suffix_enabled: self.config.send_suffix_enabled,
+            send_suffix: self.config.send_suffix.clone(),
         }
     }
 }
