@@ -12,7 +12,7 @@ use serial_core::{
     SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle, StopBits, list_ports,
 };
 
-use crate::view::{pre_connect, traffic};
+use crate::view::{graph, pre_connect};
 use crate::widget_options::ScrollModeOption;
 
 // =============================================================================
@@ -24,6 +24,37 @@ const TICK_INTERVAL_MS: u64 = 50;
 
 /// Tolerance for scroll position comparison
 const SCROLL_BOTTOM_TOLERANCE: f32 = 1.0;
+
+// =============================================================================
+// View Tab
+// =============================================================================
+
+/// Active view tab in connected state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewTab {
+    #[default]
+    Traffic,
+    Graph,
+    // FileSender will be added later
+}
+
+impl ViewTab {
+    pub const ALL: &[ViewTab] = &[ViewTab::Traffic, ViewTab::Graph];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ViewTab::Traffic => "Traffic",
+            ViewTab::Graph => "Graph",
+        }
+    }
+
+    pub fn shortcut(&self) -> &'static str {
+        match self {
+            ViewTab::Traffic => "1",
+            ViewTab::Graph => "2",
+        }
+    }
+}
 
 // =============================================================================
 // Application state
@@ -158,6 +189,10 @@ pub struct ConnectedState {
     pub collapsed_sections: HashSet<String>,
     /// Cached visible chunks to avoid per-scroll cloning (uses RefCell for interior mutability in view).
     pub visible_cache: RefCell<Option<VisibleChunkCache>>,
+    /// Active view tab.
+    pub active_tab: ViewTab,
+    /// Graph view state.
+    pub graph_view: graph::GraphView,
 }
 
 // =============================================================================
@@ -216,6 +251,10 @@ pub enum ConnectedMsg {
     ToggleSectionCollapse(String),
     ScrollChanged(scrollable::Viewport),
     SelectScrollMode(ScrollModeOption),
+    /// Switch to a different view tab
+    SwitchTab(ViewTab),
+    /// Graph view messages
+    Graph(graph::GraphMsg),
 }
 
 // Convenience constructor for views
@@ -307,7 +346,7 @@ impl App {
     pub fn view(&self) -> Element<'_, Message> {
         match &self.state {
             SessionState::PreConnect(state) => pre_connect::view(state),
-            SessionState::Connected(state) => traffic::view(state),
+            SessionState::Connected(state) => crate::view::connected_view(state),
         }
     }
 
@@ -443,6 +482,8 @@ impl App {
                         viewport_height: None,
                         collapsed_sections: HashSet::from(["Statistics".to_string()]),
                         visible_cache: RefCell::new(None),
+                        active_tab: ViewTab::default(),
+                        graph_view: graph::GraphView::default(),
                     });
                 }
                 Task::none()
@@ -610,6 +651,26 @@ impl App {
                         },
                         ScrollModeOption::Locked => ScrollState::LockedToBottom,
                     };
+                }
+                Task::none()
+            }
+            SwitchTab(tab) => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    state.active_tab = tab;
+                    // Enable graph engine when switching to graph tab (lazy init)
+                    if tab == ViewTab::Graph && !state.handle.buffer().graph_enabled() {
+                        if let Some(parser) = state.graph_view.config.build_parser() {
+                            state.handle.buffer_mut().enable_graph_with_parser(parser);
+                        } else {
+                            state.handle.buffer_mut().enable_graph();
+                        }
+                    }
+                }
+                Task::none()
+            }
+            Graph(graph_msg) => {
+                if let SessionState::Connected(state) = &mut self.state {
+                    state.graph_view.update(graph_msg, &state.handle);
                 }
                 Task::none()
             }

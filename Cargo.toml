@@ -27,7 +27,7 @@ crossterm = "0.29"
 unicode-width = "0.2"
 
 # GUI
-iced = { version = "0.14", features = ["tokio"] }
+iced = { version = "0.14", features = ["tokio", "canvas"] }
 
 # Enum utilities
 strum = { version = "0.26", features = ["derive"] }
