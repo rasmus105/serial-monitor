@@ -65,6 +65,8 @@ becomes extremely hard.
 
 With the filtering implemented in this serial monitor, you simple press 'f', write some pattern like "[GPS]", and you will immediately only see lines containing the pattern "[GPS]" (note you can change search and filter patterns to be regex instead of simple string matching)
 
+> See [rs-serial-monitor](github.com/rasmus105/rs-serial-monitor) for GUI serial monitor that does mostly the same, though incomplete.
+
 ## Similar Applications
 
 - [Arduino Serial Monitor](https://docs.arduino.cc/software/ide-v2/tutorials/ide-v2-serial-monitor/)
