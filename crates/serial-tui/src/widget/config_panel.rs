@@ -524,7 +524,8 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 let max_value_width = available.saturating_sub(tree_prefix_width + min_gap);
                 let preferred_value_width = value_str.width().min(available / 2);
                 let value_width = preferred_value_width.min(max_value_width);
-                let label_width = available.saturating_sub(tree_prefix_width + value_width + min_gap);
+                let label_width =
+                    available.saturating_sub(tree_prefix_width + value_width + min_gap);
 
                 let label_display = truncate_with_ellipsis(label, label_width);
                 let value_display = truncate_with_ellipsis(&value_str, value_width);
