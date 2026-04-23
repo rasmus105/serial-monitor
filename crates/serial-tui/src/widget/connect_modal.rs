@@ -75,7 +75,7 @@ impl Default for ConnectModalConfig {
             // File saving defaults
             file_save_enabled: false,
             file_save_format_index: 1,   // Encoded
-            file_save_encoding_index: 1, // ASCII
+            file_save_encoding_index: 0, // UTF-8
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
                 .into_owned(),

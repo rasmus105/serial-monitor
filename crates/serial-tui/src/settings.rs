@@ -72,7 +72,7 @@ impl Default for PreConnectSettings {
             line_ending_index: 1,  // LF (second in LINE_ENDINGS array)
             file_save_enabled: false,
             file_save_format_index: 1,   // Encoded (second in format array)
-            file_save_encoding_index: 1, // ASCII (second in encoding array)
+            file_save_encoding_index: 0, // UTF-8 (first in encoding array)
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
                 .into_owned(),
@@ -136,7 +136,7 @@ impl Default for TrafficSettings {
             wrap_text: true,
             file_save_enabled: false,
             file_save_format_index: 1,   // Encoded
-            file_save_encoding_index: 1, // ASCII
+            file_save_encoding_index: 0, // UTF-8
             file_save_directory: serial_core::buffer::default_cache_directory()
                 .to_string_lossy()
                 .into_owned(),
@@ -306,7 +306,7 @@ impl Default for GlobalSettings {
             auto_save_enabled: true,
             auto_save_max_sessions: 10,
             auto_save_format_index: 1,   // Encoded
-            auto_save_encoding_index: 1, // ASCII
+            auto_save_encoding_index: 0, // UTF-8
             auto_save_timestamps: true,
             auto_save_direction: false,
             auto_save_rx: true,
@@ -353,7 +353,7 @@ impl GlobalSettings {
             1 => Encoding::Ascii,
             2 => Encoding::Hex(Default::default()),
             3 => Encoding::Binary(Default::default()),
-            _ => Encoding::Ascii,
+            _ => Encoding::Utf8,
         };
 
         // Build save format based on format index

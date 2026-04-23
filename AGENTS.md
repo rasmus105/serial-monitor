@@ -6,7 +6,6 @@ This document outlines the architecture, design decisions, and implementation gu
 
 A serial monitor application, that should contain these crates before v1.0.0:
 - **TUI frontend** (using ratatui) with vim-like keybindings
-- **GUI frontend** (using iced) with more friendly UI
 - **Core library** that is frontend-agnostic
 
 ### Key Design Principle
@@ -25,7 +24,6 @@ serial-monitor/
 ├── crates/
 │   ├── serial-core/          # Frontend-agnostic library
 │   └── serial-tui/           # TUI frontend
-│   └── serial-gui/           # GUI frontend (not yet created)
 ├── Cargo.toml                # Workspace root
 └── AGENTS.md
 ```
@@ -42,13 +40,13 @@ The core library exposes a clean API that any frontend can consume. Each fronten
 │  - Sends events via channels            │
 │  - Has NO UI dependencies               │
 └─────────────────────────────────────────┘
-              ▲           ▲
-              │           │
-    ┌─────────┴───┐   ┌───┴─────────┐
-    │  TUI App    │   │  GUI App    │
-    │  Owns its   │   │  Owns its   │
-    │  event loop │   │  event loop │
-    └─────────────┘   └─────────────┘
+              ▲      
+              │      
+    ┌─────────┴───┐  
+    │  TUI App    │  
+    │  Owns its   │  
+    │  event loop │  
+    └─────────────┘  
 ```
 
 Each frontend:

@@ -1602,7 +1602,7 @@ fn build_user_save_config(
             1 => Encoding::Ascii,
             2 => Encoding::Hex(Default::default()),
             3 => Encoding::Binary(Default::default()),
-            _ => Encoding::Ascii,
+            _ => Encoding::Utf8,
         };
         let ext = match encoding {
             Encoding::Utf8 | Encoding::Ascii => "txt",

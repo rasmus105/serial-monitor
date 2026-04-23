@@ -50,10 +50,10 @@ pub enum SaveFormat {
 }
 
 impl Default for SaveFormat {
-    /// Default: ASCII encoding with timestamps, no direction markers
+    /// Default: UTF-8 encoding with timestamps, no direction markers
     fn default() -> Self {
         Self::Encoded {
-            encoding: Encoding::Ascii,
+            encoding: Encoding::Utf8,
             include_timestamps: true,
             include_direction: false,
         }
