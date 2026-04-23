@@ -9,6 +9,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 use serial_core::ui::config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section};
+use serial_core::ui::slice_by_display_width;
+use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
 
@@ -514,20 +516,22 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 // Apply value style override if present (for special toggles like send_active)
                 let value_style = value_style_override.unwrap_or(value_style);
 
-                // Calculate layout: tree_prefix + label on left, value on right
-                let label = &field.label;
+                // Calculate layout: tree_prefix + label on left, value on right.
+                // Both sides use display-width-aware truncation so long UTF-8 paths stay visible.
+                let label = field.label;
                 let available = inner.width as usize;
-                let value_width = value_str.len().min(available / 2);
-                let label_width = available.saturating_sub(value_width + 1 + tree_prefix_width);
+                let min_gap = usize::from(available > tree_prefix_width);
+                let max_value_width = available.saturating_sub(tree_prefix_width + min_gap);
+                let preferred_value_width = value_str.width().min(available / 2);
+                let value_width = preferred_value_width.min(max_value_width);
+                let label_width = available.saturating_sub(tree_prefix_width + value_width + min_gap);
 
-                let label_display: String = if label.len() > label_width {
-                    format!("{}...", &label[..label_width.saturating_sub(3)])
-                } else {
-                    (*label).to_string()
-                };
+                let label_display = truncate_with_ellipsis(label, label_width);
+                let value_display = truncate_with_ellipsis(&value_str, value_width);
 
-                let padding = available
-                    .saturating_sub(tree_prefix_width + label_display.len() + value_str.len());
+                let padding = available.saturating_sub(
+                    tree_prefix_width + label_display.width() + value_display.width(),
+                );
 
                 // Build line with tree prefix
                 let tree_prefix_style = Theme::muted();
@@ -535,7 +539,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     Span::styled(tree_prefix.clone(), tree_prefix_style),
                     Span::styled(label_display, label_style),
                     Span::raw(" ".repeat(padding)),
-                    Span::styled(value_str, value_style),
+                    Span::styled(value_display, value_style),
                 ]);
 
                 // Only highlight if selected AND enabled
@@ -568,6 +572,23 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
             render_dropdown_overlay(buf, inner, field_y, options, selected_idx, disconnected);
         }
     }
+}
+
+fn truncate_with_ellipsis(value: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    if value.width() <= max_width {
+        return value.to_string();
+    }
+
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let (start, end) = slice_by_display_width(value, 0, max_width - 3);
+    format!("{}...", &value[start..end])
 }
 
 /// Render a dropdown overlay below the selected field.
