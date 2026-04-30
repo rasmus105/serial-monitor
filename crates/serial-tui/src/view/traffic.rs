@@ -561,26 +561,20 @@ impl TrafficView {
             }
         }
 
-        // Copy to clipboard
-        match arboard::Clipboard::new() {
-            Ok(mut clipboard) => match clipboard.set_text(&content) {
-                Ok(()) => {
-                    let chunk_count = end - start + 1;
-                    self.exit_visual_mode();
-                    Some(format!(
-                        "{} chunk{} yanked",
-                        chunk_count,
-                        if chunk_count == 1 { "" } else { "s" }
-                    ))
-                }
-                Err(e) => {
-                    self.exit_visual_mode();
-                    Some(format!("Clipboard error: {}", e))
-                }
-            },
+        let chunk_count = end - start + 1;
+
+        match crate::clipboard::copy_to_clipboard(&content) {
+            Ok(()) => {
+                self.exit_visual_mode();
+                Some(format!(
+                    "{} chunk{} yanked",
+                    chunk_count,
+                    if chunk_count == 1 { "" } else { "s" }
+                ))
+            }
             Err(e) => {
                 self.exit_visual_mode();
-                Some(format!("Clipboard error: {}", e))
+                Some(e.to_string())
             }
         }
     }

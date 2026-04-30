@@ -1,4 +1,5 @@
 pub mod app;
+pub mod clipboard;
 pub mod event;
 pub mod keybind;
 pub mod settings;

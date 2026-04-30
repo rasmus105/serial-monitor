@@ -53,6 +53,7 @@ chrono = "0.4"
 
 # Clipboard
 arboard = { version = "3", features = ["wayland-data-control"] }
+base64 = "0.22"
 
 # Keep awake (prevent system sleep)
 keepawake = "0.6"
