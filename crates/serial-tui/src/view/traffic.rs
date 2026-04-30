@@ -562,14 +562,23 @@ impl TrafficView {
         }
 
         let chunk_count = end - start + 1;
+        let ssh = crate::clipboard::is_ssh();
 
-        match crate::clipboard::copy_to_clipboard(&content) {
+        let result = if ssh {
+            crate::clipboard::copy_osc52(&content)
+        } else {
+            crate::clipboard::copy_arboard(&content)
+        };
+
+        let ssh_note = if ssh { " (SSH)" } else { "" };
+
+        match result {
             Ok(()) => {
                 self.exit_visual_mode();
                 Some(format!(
-                    "{} chunk{} yanked",
+                    "{} chunk{} yanked{ssh_note}",
                     chunk_count,
-                    if chunk_count == 1 { "" } else { "s" }
+                    if chunk_count == 1 { "" } else { "s" },
                 ))
             }
             Err(e) => {

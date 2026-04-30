@@ -1,37 +1,22 @@
-use std::io::{self, Write};
+use std::io;
 
 use base64::Engine;
 
-fn is_ssh() -> bool {
+pub(crate) fn is_ssh() -> bool {
     std::env::var("SSH_TTY").is_ok()
         || std::env::var("SSH_CONNECTION").is_ok()
         || std::env::var("SSH_CLIENT").is_ok()
 }
 
-fn is_tmux() -> bool {
-    std::env::var("TMUX").is_ok()
-}
-
-fn write_osc52(text: &str) -> io::Result<()> {
+pub fn copy_osc52(text: &str) -> Result<(), String> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    let inner = format!("\x1b]52;c;{}\x07", encoded);
+    let sequence = format!("\x1b]52;c;{}\x07", encoded);
 
-    let sequence = if is_tmux() {
-        format!("\x1bPtmux;{inner}\x1b\\")
-    } else {
-        inner
-    };
-
-    let mut stdout = io::stdout().lock();
-    stdout.write_all(sequence.as_bytes())?;
-    stdout.flush()
+    crossterm::execute!(io::stdout(), crossterm::style::Print(&sequence))
+        .map_err(|e| format!("OSC 52 clipboard error: {e}"))
 }
 
-pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    if is_ssh() {
-        return write_osc52(text).map_err(|e| format!("OSC 52 clipboard error: {e}"));
-    }
-
+pub fn copy_arboard(text: &str) -> Result<(), String> {
     arboard::Clipboard::new()
         .and_then(|mut c| c.set_text(text))
         .map_err(|e| format!("Clipboard error: {e}"))
