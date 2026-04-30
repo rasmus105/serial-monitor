@@ -6,9 +6,10 @@ as parsing data (as UTF-8) into graph points and visualizing them.
 
 ## Download
 
+**Only supports MacOS and Linux. For Windows the app must be compiled manually.**
 ```bash
-brew ...
-
+brew tap rasmus105/serial-monitor https://github.com/rasmus105/serial-monitor 
+brew install serial-monitor
 ```
 
 ## Previews
@@ -17,20 +18,31 @@ TODO: Add screenshots here
 
 ## Features
 
-- Multiple encodings: UTF-8, Ascii, Hex, Binary (data is stored once as raw bytes, and converted on-demand to desired encoding)
+- Multiple encodings: UTF-8, Ascii, Hex, Binary (data is stored once as raw
+  bytes, and converted on-demand to desired encoding)
 - Searching: Search for any literal string or regex pattern.
-- Filtering: Input a literal string or regex pattern for which lines to show in raw traffic view.
-- File saving: Save the received (and/or transmitted) data to a file in your desired encoding (UTF-8 by default)
-- Bounded buffer: Data will is stored in a ringbuffer-like manner to avoid hogging up memory on long captures (configurable; can be disabled)
-- Graph: Parse the received data (using UTF-8 encoding) as points to plot on a graph.
-- File sending: You can select files of data to send, either in chunks or continuously (this can for example be used to simulate GPS chip output)
-- Multiple sessions: Open as many serial port connections at once as you would like (not really sure about the use case for this, could also just open another instance of the application)
+- Filtering: Input a literal string or regex pattern for which lines to show in
+  raw traffic view.
+- File saving: Save the received (and/or transmitted) data to a file in your
+  desired encoding (UTF-8 by default)
+- Bounded buffer: Data will is stored in a ringbuffer-like manner to avoid
+  hogging up memory on long captures (configurable; can be disabled)
+- Graph: Parse the received data (using UTF-8 encoding) as points to plot on a
+  graph.
+- File sending: You can select files of data to send, either in chunks or
+  continuously (this can, for example, be used to simulate GPS chip output)
+- Multiple sessions: Open as many serial port connections at once as you would
+  like (not really sure about the use case for this, could also just open
+  another instance of the application)
 - Automatic file saving: By default (can be turned off) the received data for
   the last 10 sessions is automatically stored on-disk (at
-  `$HOME/.cache/serial-monitor/` on Linux, `???` on Windows, or `$HOME/.cache/serial-monitor` on
-  MacOS) to avoid data loss, in case of crashes (should not crash, but can't guarantee I don't make mistakes) or unintentionally closing the application.
-- GUI and TUI front end: All core features and functionality is available in a GUI and TUI application (GUI strives to be user friendly, TUI focuses more on being intuitive for vim-users)
-- Decent Performance: I've generally tried keeping a solid performance, but I've made some deliberate decisions that sacrifice memory usage for features (for example, data received is stored once as a "single source of truth", and once in the selected encoding, to allow for switching without data loss). 
+  `$HOME/.cache/serial-monitor/` on Linux and MacOS and `???` on Windows) to
+  avoid data loss, in case of crashes (should not crash, but can't guarantee I
+  don't make mistakes) or unintentionally closing the application.
+- Decent Performance: I've generally tried keeping a solid performance, but
+  I've made some deliberate decisions that sacrifice memory usage for features
+  (for example, data received is stored once as a "single source of truth", and
+  once in the selected encoding, to allow for switching without data loss). 
 
 ### Building from Source
 
