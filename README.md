@@ -9,7 +9,7 @@ as parsing data (as UTF-8) into graph points and visualizing them.
 **Only supports MacOS and Linux. For Windows the app must be compiled manually.**
 ```bash
 brew tap rasmus105/serial-monitor https://github.com/rasmus105/serial-monitor 
-brew install serial-monitor
+brew install --HEAD serial-monitor
 ```
 
 ## Previews
@@ -48,7 +48,6 @@ TODO: Add screenshots here
 
 Install [Rust](https://doc.rust-lang.org/book/ch01-01-installation.html) and then build the application like so:
 ```bash
-# Build TUI
 cargo build --release --package serial-tui 
 ```
 
@@ -86,7 +85,6 @@ With the filtering implemented in this serial monitor, you simple press 'f', wri
 - [Docklight](https://docklight.de)
 - [HTerm](https://www.der-hammer.info/pages/terminal.html)
 - [PuTTY](https://www.putty.org)
-- [rs-serial-monitor](https://github.com/rasmus105/rs-serial-monitor) (my first attempt at writing a serial monitor)
 - [serial-monitor-rust](https://github.com/hacknus/serial-monitor-rust)
 - [Serial Studio](https://github.com/Serial-Studio/Serial-Studio)
 - [SerialTest](https://github.com/wh201906/SerialTest)
