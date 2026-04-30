@@ -4,8 +4,7 @@ set -euo pipefail
 
 VERSION=${1:?missing version}
 ARM_SHA=${2:?missing arm sha}
-INTEL_SHA=${3:?missing intel sha}
-REPOSITORY=${4:?missing repository}
+REPOSITORY=${3:?missing repository}
 
 cat > Formula/serial-monitor.rb <<EOF
 class SerialMonitor < Formula
@@ -18,9 +17,6 @@ class SerialMonitor < Formula
     if Hardware::CPU.arm?
       url "https://github.com/${REPOSITORY}/releases/download/${VERSION}/serial-monitor-${VERSION}-macos-aarch64.tar.gz"
       sha256 "${ARM_SHA}"
-    else
-      url "https://github.com/${REPOSITORY}/releases/download/${VERSION}/serial-monitor-${VERSION}-macos-x86_64.tar.gz"
-      sha256 "${INTEL_SHA}"
     end
   end
 

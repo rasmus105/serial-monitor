@@ -25,9 +25,6 @@ jobs:
           - runner: macos-14
             target: aarch64-apple-darwin
             archive_suffix: macos-aarch64
-          - runner: macos-13
-            target: x86_64-apple-darwin
-            archive_suffix: macos-x86_64
 
     steps:
       - name: Checkout
@@ -104,7 +101,6 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           ARM_SHA=$(tr -d '\n' < "dist/${APP_NAME}-${VERSION}-macos-aarch64.tar.gz.sha256")
-          INTEL_SHA=$(tr -d '\n' < "dist/${APP_NAME}-${VERSION}-macos-x86_64.tar.gz.sha256")
           bash .github/scripts/update-homebrew-formula.sh "$VERSION" "$ARM_SHA" "$INTEL_SHA" "$REPOSITORY"
 
       - name: Commit formula update
