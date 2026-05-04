@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+session="${SERIAL_MONITOR_TMUX_SESSION:-serial-monitor-test}"
+width="${SERIAL_MONITOR_TMUX_WIDTH:-120}"
+height="${SERIAL_MONITOR_TMUX_HEIGHT:-40}"
+tmp_root="${TMPDIR:-/tmp}/serial-monitor-tmux-${session}"
+real_home="${HOME}"
+home_dir="${SERIAL_MONITOR_TMUX_HOME:-${tmp_root}/home}"
+command_to_run="${*:-cargo run -p serial-tui}"
+
+mkdir -p "${home_dir}"
+
+if tmux has-session -t "${session}" 2>/dev/null; then
+  tmux kill-session -t "${session}"
+fi
+
+tmux new-session -d -s "${session}" -x "${width}" -y "${height}" \
+  "cd '${PWD}' && HOME='${home_dir}' RUSTUP_HOME='${RUSTUP_HOME:-${real_home}/.rustup}' CARGO_HOME='${CARGO_HOME:-${real_home}/.cargo}' PATH='${PATH}' TERM=xterm-256color ${command_to_run}"
+
+printf '%s\n' "${session}"

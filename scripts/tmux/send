@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+session="${SERIAL_MONITOR_TMUX_SESSION:-serial-monitor-test}"
+
+if [ "$#" -eq 0 ]; then
+  printf 'usage: scripts/tmux/send <tmux send-keys args...>\n' >&2
+  exit 2
+fi
+
+tmux send-keys -t "${session}" "$@"

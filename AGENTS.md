@@ -1,270 +1,175 @@
-# AGENTS.md - Serial Monitor Architecture Guide
+# AGENTS.md - Serial Monitor Guide
 
-This document outlines the architecture, design decisions, and implementation guidelines for this serial monitor project. It serves as the primary reference for AI agents and developers working on this codebase.
+Agent-facing architecture and verification notes for this repository.
 
-## Project Overview
+## Project Shape
 
-A serial monitor application, that should contain these crates before v1.0.0:
-- **TUI frontend** (using ratatui) with vim-like keybindings
-- **Core library** that is frontend-agnostic
+This is a serial monitor workspace with a strict core/frontend split:
 
-### Key Design Principle
+- `crates/serial-core`: frontend-agnostic library for serial I/O, buffering, parsing, persistence helpers, settings primitives, and reusable data operations.
+- `crates/serial-tui`: ratatui/crossterm frontend with vim-like keybindings.
+- `crates/serial-test`: fake serial device utility for manual and tmux-driven testing.
 
-**The previous attempt failed due to coupling.** A high priority is maintaining strict separation between the core library and UI frontends. The core must have ZERO knowledge of any UI framework.
-However, it should still offer utilities to make development of frontends easier (such as search, file-saving, etc.)
+The core must have zero UI framework dependencies. `serial-tui` may depend on `serial-core`; `serial-core` must not depend on ratatui, crossterm, egui, iced, or any frontend crate.
 
----
+## Architecture Rules
 
-## Architecture
+- Each serial connection is a session. Multi-port support means multiple sessions.
+- Core owns raw serial bytes as the source of truth. Encodings such as UTF-8, ASCII, hex, and binary are display/export representations.
+- Data chunks include timestamp, direction (`Tx` or `Rx`), and raw bytes.
+- UI state stays in frontends: scroll position, selected tab, focus, modal state, search cursor, view mode, etc.
+- Serial I/O must not block rendering. Use async tasks and channels/events for serial work.
+- Core emits events/loggable errors; frontends decide how to display them.
 
-### High-Level Structure
+When adding a feature, decide ownership first:
 
-```
-serial-monitor/
-├── crates/
-│   ├── serial-core/          # Frontend-agnostic library
-│   └── serial-tui/           # TUI frontend
-├── Cargo.toml                # Workspace root
-└── AGENTS.md
-```
+- Core: serial I/O, chunking, buffering, search/filter primitives, graph parsing, file saving, persistence utilities.
+- TUI: keybindings, layout, colors, widget state, focus, modal behavior, user interaction.
 
-### Core + Adapter Pattern
+## Data Behavior
 
-The core library exposes a clean API that any frontend can consume. Each frontend owns its event loop and UI state.
+- Buffering appends new chunks and drops oldest data when configured limits are reached.
+- Auto-save should persist data before it is dropped from memory.
+- Search operates on the displayed representation, not raw bytes. In hex mode, searching `E` in `DE AD BE EF` should find displayed `E` characters.
+- UTF-8 decoding should replace invalid bytes rather than crashing.
+- Graph parsing is lazy: parse buffered data when graph view is first enabled, then parse new data as it arrives.
 
-```
-┌─────────────────────────────────────────┐
-│              serial-core                │
-│  - Exposes clean, non-blocking API      │
-│  - Handles async I/O internally         │
-│  - Sends events via channels            │
-│  - Has NO UI dependencies               │
-└─────────────────────────────────────────┘
-              ▲      
-              │      
-    ┌─────────┴───┐  
-    │  TUI App    │  
-    │  Owns its   │  
-    │  event loop │  
-    └─────────────┘  
+## TUI Keybinding Baseline
+
+```text
+Navigation: j/k, h/l, g/G, Ctrl-d/Ctrl-u
+Search:     /, n/N
+Views:      1 traffic, 2 graph, 3 file sender/settings context as implemented
+Commands:   :connect, :disconnect, :save, :help, :sessions, :settings, :quit
+Panels:     Ctrl+h/Ctrl+l
 ```
 
-Each frontend:
-- Owns its event loop
-- Manages its own UI state (scroll position, selections, etc.)
-- Calls core API methods
-- Receives events from core via channels
+Prefer preserving existing TUI visual language and interaction patterns unless the task explicitly asks for redesign.
 
----
+## Testing Strategy
 
-## Data Model
+- Use Rust unit tests for deterministic core behavior: parsers, buffer truncation, chunking, search, settings mapping, file saving.
+- Use focused ratatui render tests only when exact widget/layout output matters.
+- Use the tmux harness for full TUI behavior: keybindings, focus, modals, colors, terminal resizing, and real terminal rendering.
+- Use `serial-test` when a test needs fake serial data or a real PTY.
 
-### Session-Based Design
+Avoid tests that only prove Rust basics or compilation, such as setting a boolean and asserting `!value`. Test behavior, edge cases, and integration points.
 
-Each session represents one serial port connection. Multi-port support = multiple sessions.
+## tmux Harness
 
-### Raw Bytes as Source of Truth
+Helper scripts live in `scripts/tmux/` and are intentionally composable rather than scenario-specific.
 
-**CRITICAL:** Store raw bytes in core, convert and cache on-demand. The user selects an encoding (UTF-8, ASCII, Hex, Binary) and the display is converted accordingly.
+Default session: `serial-monitor-test`.
 
-### Data Chunk Structure
+Useful environment overrides:
 
-Each chunk of data includes metadata:
+- `SERIAL_MONITOR_TMUX_SESSION`
+- `SERIAL_MONITOR_TMUX_WIDTH`
+- `SERIAL_MONITOR_TMUX_HEIGHT`
+- `SERIAL_MONITOR_TMUX_HOME`
 
-```rust
-struct DataChunk {
-    timestamp: Instant,       // When received/sent
-    direction: Direction,     // TX or RX
-    data: Vec<u8>,           // Raw bytes
-}
+Basic flow:
 
-enum Direction {
-    Tx,  // Sent by user
-    Rx,  // Received from device
-}
+```bash
+scripts/tmux/start
+scripts/tmux/capture-text
+scripts/tmux/send q
+scripts/tmux/stop
 ```
 
-This enables:
-- Visual differentiation of sent vs received data
-- Time-based graph X-axis
-- Accurate log exports with timestamps
+Custom command:
 
-### Buffer Management
-
-- **Strategy:** Append new data, truncate oldest when buffer limit reached
-- **Behavior:** When buffer is full, drop oldest chunks to make room
-- **User-configurable:** Buffer size limit (in bytes or chunk count)
-- **Interaction with auto-save:** Data is persisted before being dropped, so no data loss occurs
-
----
-
-## Async Architecture
-
-### Channel-Based Communication
-
-Serial I/O runs on a dedicated async runtime, communicating via channels:
-
-```
-┌──────────────────┐         ┌──────────────────┐
-│   Serial I/O     │         │    Core API      │
-│   (async task)   │         │   (sync calls)   │
-│                  │         │                  │
-│  ┌────────────┐  │ channel │  ┌────────────┐  │
-│  │ Read loop  │──┼────────►│  │  Session   │  │
-│  └────────────┘  │  data   │  └────────────┘  │
-│                  │         │                  │
-│  ┌────────────┐  │ channel │                  │
-│  │ Write task │◄─┼─────────│  send(bytes)    │
-│  └────────────┘  │ command │                  │
-└──────────────────┘         └──────────────────┘
+```bash
+scripts/tmux/start cargo run -p serial-tui
 ```
 
-**Rules:**
-- UI thread NEVER blocks on serial operations
-- Serial I/O NEVER waits on rendering
+Drive keys with tmux key names:
 
----
-
-## Feature Implementation Guidelines
-
-### 1. Traffic View (Main View)
-
-Displays sent/received data with sent data visually differentiated.
-
-**Search/Filter:**
-- Search operates on the DISPLAYED representation (encoded UTF-8 strings, not raw bytes)
-    For example: In hex mode, the data will displayed like, e.g.: "DE AD BE EF". Searching "E" should therefore have 3 matches.
-- Filter (UTF-8/ASCII): show only lines matching pattern (regex support)
-
-### 2. Graph View
-
-**Lazy initialization:** Graph data parsing only starts when user first enables graph view.
-
-**On-demand then on-the-fly:**
-1. User enables graph view
-2. Core parses all existing buffered data (may take a moment)
-3. From then on, new data is parsed as it arrives
-
-Features:
-- Multiple data series on same chart
-- Real-time updating
-- Historical data navigation
-- Generic parser that extracts numbers (e.g., "temperature: 41.3" -> 41.3)
-- Custom user scripted parsing (future)
-
-### 3. File Sending
-
-Send entire files with configurable:
-- Chunk size (bytes per transmission)
-- Delay between chunks
-- Continuous mode (loop file forever)
-
-### 4. Logging/Error Handling
-
-**Core sends log events to UI.** The UI decides how to display them.
-
-**Error handling philosophy:**
-- Port disconnection: Send error event, set port state to disconnected
-- Invalid UTF-8: Replace with replacement character, optionally log
-- Parse failures in graph mode: Skip the chunk, optionally log at debug level
-
-### 5. Data Persistence
-
-**Auto-save to temp location:**
-- Linux: `/tmp/serial-monitor/` or `~/.local/share/serial-monitor/`
-- Write periodically (every N seconds or N bytes)
-- On clean exit, optionally move to permanent location
-
-**Explicit save:**
-- User triggers save to chosen path
-- Support multiple formats: raw binary, hex dump, decoded text
-
-**Buffer size:** User-configurable to control memory usage during long recordings.
-
----
-
-## TUI-Specific Guidelines
-
-### Vim Keybindings (Basic)
-
-```
-Navigation:
-  j/k       - Scroll down/up
-  h/l       - Scroll left/right (if content wider than terminal)
-  g/G       - Go to top/bottom
-  Ctrl-d/u  - Page down/up
-
-Search:
-  /         - Start search
-  n/N       - Next/previous match
-
-Views:
-  1         - Traffic view
-  2         - Graph view
-  3         - Settings
+```bash
+scripts/tmux/send ':' 'help' Enter
+scripts/tmux/send C-l j j Space
+scripts/tmux/send q
 ```
 
----
+Capture output:
 
-## Development Guidelines
+- `scripts/tmux/capture-text`: plain visible text, best for broad behavior checks.
+- `scripts/tmux/capture-ansi`: preserves styling, best for colors/modifiers.
 
-### Dependency Rules
+For color checks, verify semantic context and style together. For example, inspect ANSI escapes around `Available Ports`, `Configuration`, or `[Ctrl+g]`; do not assert only on a standalone color code.
 
+Always stop tmux sessions after verification:
+
+```bash
+scripts/tmux/stop
 ```
-serial-core:
-  - NO ratatui, crossterm, egui, or any UI crate
-  
-serial-tui:
-  - Depends on serial-core
+
+## serial-test Fake Device
+
+`serial-test` creates a PTY pair with `socat`; the TUI connects to the printed or ready-file PTY.
+
+Modes:
+
+- `hex`: random bytes.
+- `ascii`: readable lines.
+- `sensor`: `temp`, `humidity`, and `pressure` lines.
+- `echo`: echoes bytes sent by the TUI.
+- `utf8`: wide Unicode/emoji/combining-character stress data.
+- `flood`: high-speed line flood.
+
+Harness-friendly flags:
+
+- `--ready-file <path>` writes the TUI-connectable PTY path.
+- `--seed <n>` makes generated data deterministic.
+- `--interval-ms <n>` controls write cadence where supported.
+- `--lines <n>` exits after a finite number of chunks/lines where supported.
+
+Typical TUI + fake serial workflow:
+
+```bash
+cargo run -p serial-test -- ascii --ready-file /tmp/serial-monitor-pty --seed 1 --interval-ms 50
+PTY=$(cat /tmp/serial-monitor-pty)
+scripts/tmux/start
+scripts/tmux/send ':' "connect ${PTY}" Enter C-g
+scripts/tmux/capture-text
+scripts/tmux/stop
 ```
 
-### Adding New Features
+Use `echo` mode to verify TX paths: connect the TUI, send bytes, and confirm echoed RX appears.
 
-1. **Ask: Does this belong in core or UI?**
-   - Data processing, serial I/O, persistence → core
-   - Keybindings, visual representation, user interaction → UI
+## Development Preferences
 
-2. **If adding to core:**
-   - Expose via clean API
-   - Use channels for async events
-   - Emit appropriate log events for errors/warnings
+- Keep changes small and local.
+- Prefer public fields for crate-internal state over trivial getters/setters.
+- Add methods only when they enforce invariants or do real work.
+- Avoid unnecessary `new` constructors when struct literals are clearer.
+- Use crates like `thiserror`, `strum`, and builders where they remove boilerplate.
+- Split files that become difficult to navigate, especially large UI modules.
+- Comments should explain intent, invariants, or non-obvious side effects; avoid narrating the code.
+- Do not add compatibility shims unless there is persisted data, released behavior, external consumers, or an explicit requirement.
 
-3. **If adding to UI:**
-   - Keep UI state in the UI crate
-   - Call core API for data operations
-   - Never store raw serial data in UI state (reference core's buffer)
+## Common Anti-Patterns
 
----
+1. **UI state in core:** Core should not know about scroll positions, selections, focus, modals, selected tabs, or view modes.
 
-## Anti-Patterns to Avoid
+2. **Core types with UI dependencies:** Do not add ratatui/crossterm/egui/iced imports to `serial-core`, and do not implement widgets for core types.
 
-1. **UI state in core:** Core should not know about scroll positions, selections, or view modes.
+3. **Blocking the UI on I/O:** Serial operations must not run on the UI/render loop. Use async tasks, channels, and events.
 
-2. **Core types with UI dependencies:** No `impl Widget for CoreStruct`.
+4. **Duplicating raw serial data in frontends:** Frontends should render from core buffers rather than maintaining their own source-of-truth byte storage.
 
-3. **Blocking the UI on I/O:** Always use channels for serial communication.
+5. **Monolithic files:** If a file becomes hard to navigate, especially large UI modules, split it by view/widget/state responsibility.
 
-4. **Monolithic files:** If a file exceeds ~1000 lines, consider splitting or even extracting into
-   a decoupled library.
+6. **Unnecessary `new` constructors:** Prefer struct literals when construction has no logic. Add `new` only when it enforces defaults, invariants, or meaningful setup.
 
-5. **Avoid `new` implementations:** Often `new` is not necessary. Should ONLY
-   be added when providing some sort of logic, NOT when `Struct { ... }` can be
-   used instead.
+7. **Trivial getters/setters:** Avoid methods like `fn show_tx(&self) -> bool { self.show_tx }`. Prefer public crate-internal fields unless a method protects invariants or performs real work.
 
-6. **Dumb functions that can be auto-generated:** Usage of crates such as
-   `strum`, `thiserror`, etc. is incentivised when it can simplify the codebase
-   and remove the need for boilerplate code.
+8. **Manual boilerplate when crates help:** Use crates like `thiserror`, `strum`, builders, and derives when they remove repetitive, low-value code.
 
-7. **Trivial getters/setters:** Avoid writing functions like `fn show_tx(&self) -> bool { self.show_tx }`.
-   These add maintenance burden without providing value. Instead, make fields public (especially for
-   crate-internal types) and access them directly. Only add methods when they provide actual logic
-   beyond simple field access OR trivial getters that ARE appropriate by providing immutable access, forcing
-   correct library usage.
+9. **Tests that prove Rust basics:** Avoid tests that only verify assignment, boolean negation, or compilation. Test behavior, edge cases, and integration points.
 
-8. **Tests that verify basic logic or compilation:** Don't write tests that just verify Rust compiles
-   correctly or that basic boolean/arithmetic logic works. Tests like `assert!(!filter.is_active())`
-   after setting fields to their "inactive" values just test that `||` and `!` work as expected.
-   Tests should verify meaningful behavior, edge cases, or complex interactions - not obvious logic.
+10. **Narrating comments:** Comments should explain intent, invariants, constraints, or non-obvious side effects. Do not add comments that merely restate the code.
 
-9. **Narrating comments:** Avoid comments that restate code; comments must add intent/why, invariants,
-   constraints, or non-obvious side effects.
+11. **Compatibility shims without a reason:** Do not add backward-compatibility code unless there is persisted data, released behavior, external consumers, or an explicit requirement.
+
+12. **Rigid TUI harness scripts:** Keep tmux helpers composable. Avoid scenario-specific scripts when a few `start`, `send`, and `capture` steps are enough.

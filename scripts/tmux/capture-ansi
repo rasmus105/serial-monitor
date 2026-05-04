@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+session="${SERIAL_MONITOR_TMUX_SESSION:-serial-monitor-test}"
+
+tmux capture-pane -t "${session}" -p -e -J

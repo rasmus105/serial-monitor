@@ -5,11 +5,11 @@
 //! Uses `socat` to create a PTY pair, then writes test data to one end
 //! while you connect to the other end with the TUI.
 
-use std::env;
 use std::process::Stdio;
 use std::time::Duration;
+use std::{env, path::PathBuf};
 
-use rand::Rng;
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
@@ -29,12 +29,20 @@ enum Mode {
     Flood,
 }
 
+struct Args {
+    mode: Mode,
+    ready_file: Option<PathBuf>,
+    seed: Option<u64>,
+    interval_ms: Option<u64>,
+    lines: Option<u64>,
+}
+
 fn print_usage() {
     eprintln!(
         r#"Serial Test Utility - Create fake serial ports for testing
 
 USAGE:
-    serial-test [MODE]
+    serial-test [MODE] [OPTIONS]
 
 MODES:
     hex      Random hex bytes (default)
@@ -44,12 +52,19 @@ MODES:
     utf8     Random UTF-8 strings with emojis and special characters
     flood    High-speed ASCII flood for stress testing
 
+OPTIONS:
+    --ready-file <PATH>  Write the TUI-connectable PTY path to PATH
+    --seed <N>           Use deterministic random data
+    --interval-ms <N>    Override delay between writes where supported
+    --lines <N>          Stop after N generated chunks/lines where supported
+
 EXAMPLES:
     serial-test           # Start with random hex data
     serial-test sensor    # Start with sensor simulation
     serial-test echo      # Echo mode for testing TX
     serial-test utf8      # UTF-8 mode with emojis and special chars
     serial-test flood     # Stress test with high-speed data
+    serial-test ascii --ready-file /tmp/serial-pty --seed 1 --interval-ms 50
 
 The program will print the PTY path to connect to.
 Press Ctrl+C to stop.
@@ -57,42 +72,110 @@ Press Ctrl+C to stop.
     );
 }
 
-fn parse_args() -> Option<Mode> {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() > 2 {
-        print_usage();
-        return None;
+fn parse_mode(value: &str) -> Option<Mode> {
+    match value {
+        "hex" => Some(Mode::Hex),
+        "ascii" => Some(Mode::Ascii),
+        "sensor" => Some(Mode::Sensor),
+        "echo" => Some(Mode::Echo),
+        "utf8" => Some(Mode::Utf8),
+        "flood" => Some(Mode::Flood),
+        _ => None,
     }
+}
 
-    if args.len() == 2 {
-        match args[1].as_str() {
-            "hex" => Some(Mode::Hex),
-            "ascii" => Some(Mode::Ascii),
-            "sensor" => Some(Mode::Sensor),
-            "echo" => Some(Mode::Echo),
-            "utf8" => Some(Mode::Utf8),
-            "flood" => Some(Mode::Flood),
+fn parse_value<T: std::str::FromStr>(flag: &str, value: Option<String>) -> Option<T> {
+    let value = match value {
+        Some(value) => value,
+        None => {
+            eprintln!("Missing value for {}", flag);
+            print_usage();
+            return None;
+        }
+    };
+
+    match value.parse() {
+        Ok(value) => Some(value),
+        Err(_) => {
+            eprintln!("Invalid value for {}: {}", flag, value);
+            print_usage();
+            None
+        }
+    }
+}
+
+fn parse_args() -> Option<Args> {
+    let mut mode = Mode::Hex;
+    let mut ready_file = None;
+    let mut seed = None;
+    let mut interval_ms = None;
+    let mut lines = None;
+    let mut mode_set = false;
+
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
             "-h" | "--help" => {
                 print_usage();
-                None
+                return None;
             }
-            other => {
-                eprintln!("Unknown mode: {}", other);
+            "--ready-file" => {
+                ready_file = Some(PathBuf::from(match args.next() {
+                    Some(value) => value,
+                    None => {
+                        eprintln!("Missing value for --ready-file");
+                        print_usage();
+                        return None;
+                    }
+                }));
+            }
+            "--seed" => seed = Some(parse_value("--seed", args.next())?),
+            "--interval-ms" => interval_ms = Some(parse_value("--interval-ms", args.next())?),
+            "--lines" => lines = Some(parse_value("--lines", args.next())?),
+            value if value.starts_with("--") => {
+                eprintln!("Unknown option: {}", value);
                 print_usage();
-                None
+                return None;
+            }
+            value => {
+                if mode_set {
+                    eprintln!("Unexpected argument: {}", value);
+                    print_usage();
+                    return None;
+                }
+                match parse_mode(value) {
+                    Some(parsed) => {
+                        mode = parsed;
+                        mode_set = true;
+                    }
+                    None => {
+                        eprintln!("Unknown mode: {}", value);
+                        print_usage();
+                        return None;
+                    }
+                }
             }
         }
-    } else {
-        Some(Mode::Hex) // Default
     }
+
+    Some(Args {
+        mode,
+        ready_file,
+        seed,
+        interval_ms,
+        lines,
+    })
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mode = match parse_args() {
-        Some(m) => m,
+    let args = match parse_args() {
+        Some(args) => args,
         None => return Ok(()),
+    };
+    let mut rng = match args.seed {
+        Some(seed) => StdRng::seed_from_u64(seed),
+        None => StdRng::from_os_rng(),
     };
 
     // Start socat to create PTY pair
@@ -143,8 +226,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Serial Test Utility");
     println!("====================================");
     println!();
-    println!("  Mode: {:?}", mode);
+    println!("  Mode: {:?}", args.mode);
     println!("  Connect to: {}", their_pty);
+    if let Some(path) = &args.ready_file {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(path, their_pty).await?;
+        println!("  Ready file: {}", path.display());
+    }
     println!();
     println!("  Press Ctrl+C to stop");
     println!("====================================");
@@ -160,13 +250,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (reader, writer) = tokio::io::split(file);
 
     // Run the appropriate mode
-    match mode {
+    match args.mode {
         Mode::Echo => run_echo(reader, writer).await?,
-        Mode::Hex => run_hex(writer).await?,
-        Mode::Ascii => run_ascii(writer).await?,
-        Mode::Sensor => run_sensor(writer).await?,
-        Mode::Utf8 => run_utf8(writer).await?,
-        Mode::Flood => run_flood(writer).await?,
+        Mode::Hex => run_hex(writer, &mut rng, args.interval_ms, args.lines).await?,
+        Mode::Ascii => run_ascii(writer, &mut rng, args.interval_ms, args.lines).await?,
+        Mode::Sensor => run_sensor(writer, &mut rng, args.interval_ms, args.lines).await?,
+        Mode::Utf8 => run_utf8(writer, &mut rng, args.interval_ms, args.lines).await?,
+        Mode::Flood => run_flood(writer, &mut rng, args.lines).await?,
     }
 
     // Clean up
@@ -201,11 +291,18 @@ async fn run_echo(
 
 async fn run_hex(
     mut writer: tokio::io::WriteHalf<tokio::fs::File>,
+    rng: &mut StdRng,
+    interval_ms: Option<u64>,
+    lines: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("[hex] Sending random bytes...");
 
-    let mut rng = rand::rng();
+    let mut sent = 0;
     loop {
+        if lines.is_some_and(|limit| sent >= limit) {
+            return Ok(());
+        }
+
         // Generate 8-32 random bytes
         let len: usize = rng.random_range(8..=32);
         let data: Vec<u8> = (0..len).map(|_| rng.random()).collect();
@@ -214,19 +311,23 @@ async fn run_hex(
         println!("[hex] TX: {}", hex.trim());
 
         writer.write_all(&data).await?;
+        sent += 1;
 
         // Wait 500ms-2s between chunks
-        let delay = rng.random_range(200..=1000);
+        let delay = interval_ms.unwrap_or_else(|| rng.random_range(200..=1000));
         tokio::time::sleep(Duration::from_millis(delay)).await;
     }
 }
 
 async fn run_ascii(
     mut writer: tokio::io::WriteHalf<tokio::fs::File>,
+    rng: &mut StdRng,
+    interval_ms: Option<u64>,
+    lines: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("[ascii] Sending text lines...");
 
-    let lines = [
+    let text_lines = [
         "Hello, World!",
         "Serial Monitor Test",
         "The quick brown fox jumps over the lazy dog",
@@ -239,36 +340,47 @@ async fn run_ascii(
         "End of transmission",
     ];
 
-    let mut rng = rand::rng();
     let mut idx = 0;
+    let mut sent = 0;
 
     loop {
-        let line = format!("{}\r\n", lines[idx]);
-        println!("[ascii] TX: {}", lines[idx]);
+        if lines.is_some_and(|limit| sent >= limit) {
+            return Ok(());
+        }
+
+        let line = format!("{}\r\n", text_lines[idx]);
+        println!("[ascii] TX: {}", text_lines[idx]);
 
         writer.write_all(line.as_bytes()).await?;
+        sent += 1;
 
-        idx = (idx + 1) % lines.len();
+        idx = (idx + 1) % text_lines.len();
 
         // Wait 500ms-1.5s between lines
-        let delay = rng.random_range(10..=200);
+        let delay = interval_ms.unwrap_or_else(|| rng.random_range(10..=200));
         tokio::time::sleep(Duration::from_millis(delay)).await;
     }
 }
 
 async fn run_sensor(
     mut writer: tokio::io::WriteHalf<tokio::fs::File>,
+    rng: &mut StdRng,
+    interval_ms: Option<u64>,
+    lines: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("[sensor] Simulating sensor data...");
-
-    let mut rng = rand::rng();
 
     // Starting values
     let mut temp: f32 = 22.0;
     let mut humidity: f32 = 45.0;
     let mut pressure: f32 = 1013.25;
+    let mut sent = 0;
 
     loop {
+        if lines.is_some_and(|limit| sent >= limit) {
+            return Ok(());
+        }
+
         // Drift values slightly
         temp += rng.random_range(-0.5..=0.5);
         temp = temp.clamp(15.0, 35.0);
@@ -290,18 +402,20 @@ async fn run_sensor(
         );
 
         writer.write_all(line.as_bytes()).await?;
+        sent += 1;
 
         // Send every 1 second
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(interval_ms.unwrap_or(250))).await;
     }
 }
 
 async fn run_utf8(
     mut writer: tokio::io::WriteHalf<tokio::fs::File>,
+    rng: &mut StdRng,
+    interval_ms: Option<u64>,
+    lines: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("[utf8] Sending random UTF-8 strings...");
-
-    let mut rng = rand::rng();
 
     // Emojis
     let emojis = [
@@ -438,7 +552,12 @@ async fn run_utf8(
         "🅣🅗🅔 🅠🅤🅘🅒🅚 🅑🅡🅞🅦🅝 🅕🅞🅧",
     ];
 
+    let mut sent = 0;
     loop {
+        if lines.is_some_and(|limit| sent >= limit) {
+            return Ok(());
+        }
+
         // Randomly select a category and item
         let category = rng.random_range(0..8);
         let line = match category {
@@ -487,20 +606,22 @@ async fn run_utf8(
         println!("[utf8] TX: {}", line);
         let output = format!("{}\r\n", line);
         writer.write_all(output.as_bytes()).await?;
+        sent += 1;
 
         // Wait 200ms-800ms between lines
-        let delay = rng.random_range(200..=800);
+        let delay = interval_ms.unwrap_or_else(|| rng.random_range(200..=800));
         tokio::time::sleep(Duration::from_millis(delay)).await;
     }
 }
 
 async fn run_flood(
     mut writer: tokio::io::WriteHalf<tokio::fs::File>,
+    rng: &mut StdRng,
+    lines: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("[flood] Starting high-speed ASCII flood...");
     println!("[flood] WARNING: This will generate a LOT of data!");
 
-    let mut rng = rand::rng();
     let mut line_count: u64 = 0;
     let mut byte_count: u64 = 0;
     let start = std::time::Instant::now();
@@ -573,6 +694,10 @@ async fn run_flood(
 
         // Generate a batch of lines
         for _ in 0..100 {
+            if lines.is_some_and(|limit| line_count >= limit) {
+                break;
+            }
+
             line_count += 1;
 
             // Generate a line with random words (5-15 words per line)
@@ -587,6 +712,10 @@ async fn run_flood(
                 }
             }
             buffer.push_str("\r\n");
+        }
+
+        if buffer.is_empty() {
+            return Ok(());
         }
 
         byte_count += buffer.len() as u64;

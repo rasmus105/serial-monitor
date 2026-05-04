@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+session="${SERIAL_MONITOR_TMUX_SESSION:-serial-monitor-test}"
+
+if tmux has-session -t "${session}" 2>/dev/null; then
+  tmux kill-session -t "${session}"
+fi
