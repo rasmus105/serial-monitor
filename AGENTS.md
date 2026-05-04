@@ -38,11 +38,16 @@ When adding a feature, decide ownership first:
 
 ```text
 Navigation: j/k, h/l, g/G, Ctrl-d/Ctrl-u
-Search:     /, n/N
-Views:      1 traffic, 2 graph, 3 file sender/settings context as implemented
+Search:     /, n/N, ? (backwards)
+Views:      1 traffic, 2 graph, 3 file sender
+Traffic:    s (send), f (filter), v (visual), y (yank), c (toggle config panel)
+Connected:  d (disconnect), Ctrl+b (lock bottom)
+Modals:     Ctrl+g (confirm), Esc (cancel)
 Commands:   :connect, :disconnect, :save, :help, :sessions, :settings, :quit
 Panels:     Ctrl+h/Ctrl+l
 ```
+
+**Modal flow:** `:connect <port>` Enter opens a settings modal. Press `Ctrl+g` to confirm connection, `Esc` to cancel.
 
 Prefer preserving existing TUI visual language and interaction patterns unless the task explicitly asks for redesign.
 
@@ -83,12 +88,19 @@ Custom command:
 scripts/tmux/start cargo run -p serial-tui
 ```
 
-Drive keys with tmux key names:
+Drive keys with tmux key names. `C-` prefix means Ctrl, so `C-g` is Ctrl+g, `C-l` is Ctrl+l. Quoting rules follow `tmux send-keys`: wrap arguments containing spaces in quotes, use literal key names like `Enter`, `Space`, `Escape`.
 
 ```bash
 scripts/tmux/send ':' 'help' Enter
 scripts/tmux/send C-l j j Space
 scripts/tmux/send q
+```
+
+Cleanup after tests — orphaned `socat` processes can block reconnection on the same PTY path:
+
+```bash
+scripts/tmux/stop
+pkill -x socat  # kill leftover socat processes from serial-test
 ```
 
 Capture output:
@@ -136,6 +148,21 @@ scripts/tmux/stop
 ```
 
 Use `echo` mode to verify TX paths: connect the TUI, send bytes, and confirm echoed RX appears.
+
+```bash
+cargo run -p serial-test -- echo --ready-file /tmp/serial-monitor-pty --seed 1
+PTY=$(cat /tmp/serial-monitor-pty)
+scripts/tmux/start
+scripts/tmux/send ':' "connect ${PTY}" Enter C-g
+sleep 2
+scripts/tmux/send s 'Hello from TUI' Enter
+sleep 1
+scripts/tmux/capture-text
+scripts/tmux/stop
+pkill -x socat
+```
+
+Note: In echo mode the RX data matches TX exactly. The traffic pane shows `filter: 0/N` when data is filtered by the current delimiter/chunking setting. If connection stats show RX/TX bytes but the traffic pane says "No data yet", check `Show TX`/`Show RX` toggles and delimiter settings. Scrolling with `g`/`G` or pressing `Ctrl+b` (lock to bottom) may also reveal hidden content.
 
 ## Development Preferences
 

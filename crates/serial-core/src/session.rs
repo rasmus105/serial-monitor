@@ -237,6 +237,29 @@ impl SessionHandle {
         Ok(())
     }
 
+    /// Reconnect this session to its port, preserving buffered data and statistics.
+    pub async fn reconnect(
+        &mut self,
+        serial_config: SerialConfig,
+        session_config: SessionConfig,
+    ) -> Result<()> {
+        let port = Session::open_port(&self.port_name, &serial_config)?;
+        let (event_rx, command_tx, auto_save) = Session::spawn_io_task(
+            &self.port_name,
+            Arc::clone(&self.buffer),
+            Arc::clone(&self.statistics),
+            session_config,
+            port,
+        )
+        .await;
+
+        self.event_rx = event_rx;
+        self.command_tx = command_tx;
+        self.auto_save = auto_save;
+
+        Ok(())
+    }
+
     /// Get the port name
     pub fn port_name(&self) -> &str {
         &self.port_name
@@ -307,6 +330,33 @@ impl Session {
         serial_config: SerialConfig,
         session_config: SessionConfig,
     ) -> Result<SessionHandle> {
+        let port = Self::open_port(port_name, &serial_config)?;
+        let buffer = Self::create_buffer(&session_config);
+        let statistics = Arc::new(Statistics::new());
+
+        let (event_rx, command_tx, auto_save) = Self::spawn_io_task(
+            port_name,
+            Arc::clone(&buffer),
+            Arc::clone(&statistics),
+            session_config,
+            port,
+        )
+        .await;
+
+        Ok(SessionHandle {
+            buffer,
+            event_rx,
+            command_tx,
+            port_name: port_name.to_string(),
+            auto_save,
+            statistics,
+        })
+    }
+
+    fn open_port(
+        port_name: &str,
+        serial_config: &SerialConfig,
+    ) -> Result<tokio_serial::SerialStream> {
         let baud_rate = match categorize_port(port_name) {
             PortCategory::Regular => serial_config.baud_rate,
             PortCategory::Pty => {
@@ -333,29 +383,47 @@ impl Session {
         // Flush buffers to discard any stale data from before we connected.
         port.clear(ClearBuffer::All)?;
 
+        Ok(port)
+    }
+
+    fn create_buffer(session_config: &SessionConfig) -> Arc<RwLock<DataBuffer>> {
         // Extract delimiter bytes from chunking strategy for display stripping
         let delimiter = session_config
             .rx_chunking
             .delimiter_bytes()
             .map(|b| b.to_vec());
 
-        let buffer = if let Some(delim) = delimiter {
-            DataBuffer::builder()
-                .max_size(session_config.buffer_size)
-                .delimiter(delim)
-                .build()
+        if let Some(delim) = delimiter {
+            Arc::new(RwLock::new(
+                DataBuffer::builder()
+                    .max_size(session_config.buffer_size)
+                    .delimiter(delim)
+                    .build(),
+            ))
         } else {
-            DataBuffer::builder()
-                .max_size(session_config.buffer_size)
-                .build()
-        };
-        let buffer = Arc::new(RwLock::new(buffer));
+            Arc::new(RwLock::new(
+                DataBuffer::builder()
+                    .max_size(session_config.buffer_size)
+                    .build(),
+            ))
+        }
+    }
 
+    async fn spawn_io_task(
+        port_name: &str,
+        buffer: Arc<RwLock<DataBuffer>>,
+        statistics: Arc<Statistics>,
+        session_config: SessionConfig,
+        port: tokio_serial::SerialStream,
+    ) -> (
+        mpsc::Receiver<SessionEvent>,
+        mpsc::Sender<SessionCommand>,
+        Option<FileSaverHandle>,
+    ) {
         let (event_tx, event_rx) = mpsc::channel(256);
         let (command_tx, command_rx) = mpsc::channel(64);
 
         let buffer_clone = Arc::clone(&buffer);
-        let port_name_owned = port_name.to_string();
 
         let rx_chunker = Chunker::rx(session_config.rx_chunking);
         let tx_chunker = Chunker::tx(session_config.tx_chunking);
@@ -380,8 +448,6 @@ impl Session {
         };
 
         let auto_save_tx = auto_save.as_ref().map(|h| h.clone_sender());
-
-        let statistics = Arc::new(Statistics::new());
         let statistics_clone = Arc::clone(&statistics);
 
         tokio::spawn(async move {
@@ -398,14 +464,7 @@ impl Session {
             .await;
         });
 
-        Ok(SessionHandle {
-            buffer,
-            event_rx,
-            command_tx,
-            port_name: port_name_owned,
-            auto_save,
-            statistics,
-        })
+        (event_rx, command_tx, auto_save)
     }
 }
 
