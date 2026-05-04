@@ -263,6 +263,33 @@ impl SessionHandle {
     }
 }
 
+/// Category of a serial port, used to apply platform-specific configuration.
+enum PortCategory {
+    /// Real hardware serial port (USB-to-serial, built-in UART, etc.).
+    Regular,
+    /// Pseudo-terminal (PTY).
+    Pty,
+}
+
+fn categorize_port(path: &str) -> PortCategory {
+    // macOS: PTY slaves are /dev/ttys followed by digits (e.g. /dev/ttys014).
+    // Real serial ports use /dev/cu.* or /dev/tty.* with identifiers after the dot.
+    if path
+        .strip_prefix("/dev/ttys")
+        .is_some_and(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_digit()))
+    {
+        return PortCategory::Pty;
+    }
+    // Linux: PTY slaves are /dev/pts/ followed by digits (e.g. /dev/pts/5).
+    if path
+        .strip_prefix("/dev/pts/")
+        .is_some_and(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_digit()))
+    {
+        return PortCategory::Pty;
+    }
+    PortCategory::Regular
+}
+
 /// Session builder and connector
 pub struct Session;
 
@@ -280,7 +307,23 @@ impl Session {
         serial_config: SerialConfig,
         session_config: SessionConfig,
     ) -> Result<SessionHandle> {
-        let port = tokio_serial::new(port_name, serial_config.baud_rate)
+        let baud_rate = match categorize_port(port_name) {
+            PortCategory::Regular => serial_config.baud_rate,
+            PortCategory::Pty => {
+                // On macOS, the `IOSSIOSPEED` ioctl used to set arbitrary
+                // baud rates fails on PTYs with ENOTTY. The serialport crate
+                // documents that `baud_rate` should be set to 0 for PTYs.
+                #[cfg(any(target_os = "ios", target_os = "macos"))]
+                {
+                    0
+                }
+                #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+                {
+                    serial_config.baud_rate
+                }
+            }
+        };
+        let port = tokio_serial::new(port_name, baud_rate)
             .data_bits(serial_config.data_bits)
             .parity(serial_config.parity)
             .stop_bits(serial_config.stop_bits)
