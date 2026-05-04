@@ -617,6 +617,7 @@ impl TrafficView {
         handle: &SessionHandle,
         serial_config: &SerialConfig,
         focus: Focus,
+        connected: bool,
     ) {
         // Main area layout: traffic + optional search/filter/send/dir bar
         let show_input_bar = self.search_focused
@@ -636,7 +637,7 @@ impl TrafficView {
         };
 
         // Draw traffic
-        self.draw_traffic(main_chunks[0], buf, handle, focus);
+        self.draw_traffic(main_chunks[0], buf, handle, focus, connected);
 
         // Draw input bar if active
         if show_input_bar {
@@ -652,11 +653,18 @@ impl TrafficView {
 
         // Draw config panel
         if let Some(config_area) = config_area {
-            self.draw_config(config_area, buf, handle, serial_config, focus);
+            self.draw_config(config_area, buf, handle, serial_config, focus, connected);
         }
     }
 
-    fn draw_traffic(&mut self, area: Rect, buf: &mut Buffer, handle: &SessionHandle, focus: Focus) {
+    fn draw_traffic(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        handle: &SessionHandle,
+        focus: Focus,
+        connected: bool,
+    ) {
         // Update search matches before we get an immutable borrow
         // This ensures matches are current for highlighting
         let _ = handle.buffer_mut().matches();
@@ -664,13 +672,15 @@ impl TrafficView {
         let buffer = handle.buffer();
         let current_match = buffer.current_match().copied();
 
-        let block = Block::default().borders(Borders::ALL).border_style(
-            if focus == Focus::Main && !self.is_input_mode() {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(if !connected {
+                Theme::border_error()
+            } else if focus == Focus::Main && !self.is_input_mode() {
                 Theme::border_focused()
             } else {
                 Theme::border()
-            },
-        );
+            });
 
         let inner = block.inner(area);
 
@@ -1349,6 +1359,7 @@ impl TrafficView {
         handle: &SessionHandle,
         serial_config: &SerialConfig,
         focus: Focus,
+        connected: bool,
     ) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1359,7 +1370,11 @@ impl TrafficView {
         let conn_block = Block::default()
             .title(" Connection ")
             .borders(Borders::ALL)
-            .border_style(Theme::border());
+            .border_style(if !connected {
+                Theme::border_error()
+            } else {
+                Theme::border()
+            });
 
         ConnectionPanel::new(handle.port_name(), serial_config, handle.statistics())
             .block(conn_block)
@@ -1369,7 +1384,9 @@ impl TrafficView {
         let config_block = Block::default()
             .title(" Settings ")
             .borders(Borders::ALL)
-            .border_style(if focus == Focus::Config {
+            .border_style(if !connected {
+                Theme::border_error()
+            } else if focus == Focus::Config {
                 Theme::border_focused()
             } else {
                 Theme::border()

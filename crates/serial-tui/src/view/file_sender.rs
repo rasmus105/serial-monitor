@@ -528,6 +528,7 @@ impl FileSenderView {
         handle: &SessionHandle,
         serial_config: &SerialConfig,
         focus: Focus,
+        connected: bool,
     ) {
         // Main layout: preview + progress (+ optional input bar)
         let show_input_bar = self.file_path_focused;
@@ -583,7 +584,9 @@ impl FileSenderView {
         let preview_block = Block::default()
             .title(preview_title)
             .borders(Borders::ALL)
-            .border_style(if focus == Focus::Main && !self.file_path_focused {
+            .border_style(if !connected {
+                Theme::border_error()
+            } else if focus == Focus::Main && !self.file_path_focused {
                 Theme::border_focused()
             } else {
                 Theme::border()
@@ -608,8 +611,11 @@ impl FileSenderView {
         let stats_block = Block::default()
             .title(" Progress ")
             .borders(Borders::ALL)
-            .border_style(Theme::border());
-
+            .border_style(if !connected {
+                Theme::border_error()
+            } else {
+                Theme::border()
+            });
         let stats_inner = stats_block.inner(main_chunks[1]);
         stats_block.render(main_chunks[1], buf);
 
@@ -681,7 +687,7 @@ impl FileSenderView {
 
         // Config panel
         if let Some(config_area) = config_area {
-            self.draw_config(config_area, buf, handle, serial_config, focus);
+            self.draw_config(config_area, buf, handle, serial_config, focus, connected);
         }
     }
 
@@ -707,6 +713,7 @@ impl FileSenderView {
         handle: &SessionHandle,
         serial_config: &SerialConfig,
         focus: Focus,
+        connected: bool,
     ) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -717,7 +724,11 @@ impl FileSenderView {
         let conn_block = Block::default()
             .title(" Connection ")
             .borders(Borders::ALL)
-            .border_style(Theme::border());
+            .border_style(if !connected {
+                Theme::border_error()
+            } else {
+                Theme::border()
+            });
 
         ConnectionPanel::new(handle.port_name(), serial_config, handle.statistics())
             .block(conn_block)
@@ -727,7 +738,9 @@ impl FileSenderView {
         let config_block = Block::default()
             .title(" Settings ")
             .borders(Borders::ALL)
-            .border_style(if focus == Focus::Config {
+            .border_style(if !connected {
+                Theme::border_error()
+            } else if focus == Focus::Config {
                 Theme::border_focused()
             } else {
                 Theme::border()

@@ -19,8 +19,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 use serial_core::{
-    ChunkingStrategy, KeepAwake, SerialConfig, Session, SessionConfig, SessionEvent, SessionHandle,
-    list_ports,
+    ChunkingStrategy, KeepAwake, SerialConfig, Session, SessionCommand, SessionConfig,
+    SessionEvent, SessionHandle, list_ports,
 };
 
 use crate::{
@@ -154,10 +154,18 @@ pub enum SessionState {
 
 /// State when connected to a serial port.
 pub struct ConnectedState {
-    /// Active session handle.
+    /// Session handle that owns this session's buffer and I/O channel.
     pub handle: SessionHandle,
     /// Current tab.
     pub tab: ConnectedTab,
+    /// Whether the serial link is currently live.
+    pub connected: bool,
+    /// Whether to attempt auto-reconnect (false after manual disconnect).
+    pub auto_reconnect: bool,
+    /// Port path for reconnection.
+    pub port_path: String,
+    /// Session config for reconnection.
+    pub session_config: SessionConfig,
     /// Traffic view state.
     pub traffic: TrafficView,
     /// Graph view state.
@@ -333,6 +341,11 @@ impl SessionManager {
         &self.sessions
     }
 
+    /// Get a mutable reference to a session by index.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut SessionEntry> {
+        self.sessions.get_mut(index)
+    }
+
     /// Drain all sessions, returning an iterator that takes ownership.
     pub fn drain(&mut self) -> impl Iterator<Item = SessionEntry> + '_ {
         self.active_index = None;
@@ -446,6 +459,9 @@ impl App {
             // Handle session events for ALL sessions (including background ones)
             self.process_session_events();
 
+            // Auto-reconnect any disconnected sessions whose port has reappeared
+            self.try_reconnect().await;
+
             // Tick toasts - request clear if any expired (they use Clear which leaves artifacts)
             if self.toasts.tick() {
                 self.needs_clear = true;
@@ -519,10 +535,10 @@ impl App {
             self.draw_command_bar(cmd_area, buf);
 
             // Draw completion popup above the command bar (needs full area for proper positioning)
-            let is_disconnected = matches!(
-                self.sessions.active_state(),
-                Some(SessionState::PreConnect(_)) | None
-            );
+            let is_disconnected = match self.sessions.active_state() {
+                Some(SessionState::PreConnect(_)) | None => true,
+                Some(SessionState::Connected(state)) => !state.connected,
+            };
             let input_y = cmd_area.y;
             let input_x = cmd_area.x + 2; // After border + ":" prefix
             CompletionPopup::new(&self.completion, input_y, input_x)
@@ -560,11 +576,11 @@ impl App {
     }
 
     fn draw_command_bar(&self, area: Rect, buf: &mut Buffer) {
-        // Use disconnected theme when not connected
-        let is_disconnected = matches!(
-            self.sessions.active_state(),
-            Some(SessionState::PreConnect(_)) | None
-        );
+        // Use disconnected theme when not connected or when connection lost
+        let is_disconnected = match self.sessions.active_state() {
+            Some(SessionState::PreConnect(_)) | None => true,
+            Some(SessionState::Connected(state)) => !state.connected,
+        };
 
         let block = Block::default()
             .title(" Command ")
@@ -641,15 +657,18 @@ impl App {
         buf: &mut Buffer,
         focus: Focus,
     ) {
+        let connected = state.connected;
+        let handle = &state.handle;
         match state.tab {
             ConnectedTab::Traffic => {
                 state.traffic.draw(
                     main_area,
                     config_area,
                     buf,
-                    &state.handle,
+                    handle,
                     &state.serial_config,
                     focus,
+                    connected,
                 );
             }
             ConnectedTab::Graph => {
@@ -657,9 +676,10 @@ impl App {
                     main_area,
                     config_area,
                     buf,
-                    &state.handle,
+                    handle,
                     &state.serial_config,
                     focus,
+                    connected,
                 );
             }
             ConnectedTab::FileSender => {
@@ -667,9 +687,10 @@ impl App {
                     main_area,
                     config_area,
                     buf,
-                    &state.handle,
+                    handle,
                     &state.serial_config,
                     focus,
+                    connected,
                 );
             }
         }
@@ -826,11 +847,12 @@ impl App {
                 // Global keybindings
                 match key.code {
                     KeyCode::Char('q') if !self.is_input_mode() => {
-                        // When connected, show confirmation prompt instead of quitting
-                        if matches!(
+                        // When live-connected, show disconnect confirmation
+                        let is_live = matches!(
                             self.sessions.active_state(),
-                            Some(SessionState::Connected(_))
-                        ) {
+                            Some(SessionState::Connected(state)) if state.connected
+                        );
+                        if is_live {
                             self.confirm.show("Disconnect from port?");
                         } else {
                             self.should_quit = true;
@@ -847,6 +869,17 @@ impl App {
                         // Request clear to avoid rendering artifacts when layout changes
                         self.needs_clear = true;
                         return;
+                    }
+                    KeyCode::Char('r') if !self.is_input_mode() => {
+                        if let Some(active_idx) = self.sessions.active_index()
+                            && matches!(
+                                self.sessions.active_state(),
+                                Some(SessionState::Connected(state)) if !state.connected
+                            )
+                        {
+                            self.reconnect_session(active_idx).await;
+                            return;
+                        }
                     }
                     // ':' opens command mode (vim-style)
                     KeyCode::Char(':') if !self.is_input_mode() => {
@@ -933,7 +966,11 @@ impl App {
                                     KeyCode::Char('d')
                                         if !key.modifiers.contains(KeyModifiers::CONTROL) =>
                                     {
-                                        self.confirm.show("Disconnect from port?");
+                                        if state.connected {
+                                            self.confirm.show("Disconnect from port?");
+                                        } else {
+                                            self.toasts.info("Already disconnected");
+                                        }
                                         return;
                                     }
                                     _ => {}
@@ -941,17 +978,18 @@ impl App {
                             }
 
                             // Tab-specific handling
+                            let handle = &state.handle;
                             match state.tab {
                                 ConnectedTab::Traffic => {
                                     if let Some(action) =
-                                        state.traffic.handle_key(key, self.focus, &state.handle)
+                                        state.traffic.handle_key(key, self.focus, handle)
                                     {
                                         self.handle_traffic_action(action).await;
                                     }
                                 }
                                 ConnectedTab::Graph => {
                                     if let Some(action) =
-                                        state.graph.handle_key(key, self.focus, &state.handle)
+                                        state.graph.handle_key(key, self.focus, handle)
                                     {
                                         self.handle_graph_action(action);
                                     }
@@ -1080,21 +1118,20 @@ impl App {
                 }
             }
             SessionEvent::Disconnected { error } => {
+                if let Some(SessionState::Connected(state)) =
+                    self.sessions.get_mut(session_index).map(|e| &mut e.state)
+                {
+                    state.connected = false;
+                    if error.is_some() {
+                        state.auto_reconnect = true;
+                    }
+                }
                 if is_active {
                     if let Some(err) = error {
                         self.toasts.error(format!("Disconnected: {}", err));
                     } else {
                         self.toasts.info("Disconnected");
                     }
-                }
-                // Remove the disconnected session
-                self.sessions.remove(session_index);
-
-                // If no sessions left, create a fresh PreConnect session
-                if self.sessions.is_empty() {
-                    let mut view = PreConnectView::new();
-                    view.refresh_ports();
-                    self.sessions.add_preconnect(view);
                 }
                 self.needs_clear = true;
             }
@@ -1156,9 +1193,14 @@ impl App {
         match action {
             TrafficAction::Send(data) => {
                 if let Some(SessionState::Connected(state)) = self.sessions.active_state()
+                    && state.connected
                     && let Err(e) = state.handle.send(data).await
                 {
                     self.toasts.error(format!("Send failed: {}", e));
+                } else if let Some(SessionState::Connected(state)) = self.sessions.active_state()
+                    && !state.connected
+                {
+                    self.toasts.error("Cannot send while disconnected");
                 }
                 // Layout changed (send bar closed) - request clear to avoid artifacts
                 self.needs_clear = true;
@@ -1212,7 +1254,9 @@ impl App {
         match action {
             FileSenderAction::StartSending => {
                 if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
-                    if let Err(e) = state.file_sender.start_sending(&state.handle).await {
+                    if !state.connected {
+                        self.toasts.error("Cannot send file while disconnected");
+                    } else if let Err(e) = state.file_sender.start_sending(&state.handle).await {
                         self.toasts.error(format!("Failed to start sending: {}", e));
                     } else {
                         self.toasts.info("File sending started");
@@ -1246,7 +1290,7 @@ impl App {
         match Session::connect_with_config(
             &config.port,
             config.serial_config.clone(),
-            config.session_config,
+            config.session_config.clone(),
         )
         .await
         {
@@ -1316,6 +1360,10 @@ impl App {
                 let state = ConnectedState {
                     handle,
                     tab: ConnectedTab::Traffic,
+                    connected: true,
+                    auto_reconnect: true,
+                    port_path: config.port.clone(),
+                    session_config: config.session_config.clone(),
                     traffic,
                     graph,
                     file_sender,
@@ -1343,41 +1391,128 @@ impl App {
     }
 
     async fn disconnect(&mut self) {
-        // Get the current active index
         if let Some(active_idx) = self.sessions.active_index() {
-            // Remove the active session (this will disconnect it)
-            if let Some(entry) = self.sessions.remove(active_idx)
-                && let SessionState::Connected(state) = entry.state
+            if let Some(entry) = self.sessions.get_mut(active_idx)
+                && let SessionState::Connected(state) = &mut entry.state
+                && state.connected
             {
-                let _ = state.handle.disconnect().await;
+                let sender = state.handle.clone_command_sender();
+                let _ = sender.send(SessionCommand::Disconnect).await;
+                state.connected = false;
+                state.auto_reconnect = false;
                 self.toasts.info("Disconnected");
             }
         }
-
-        // If no sessions left, create a fresh PreConnect session
-        if self.sessions.is_empty() {
-            let mut view = PreConnectView::new();
-            view.refresh_ports();
-            self.sessions.add_preconnect(view);
-        }
-
         self.needs_clear = true;
     }
 
     /// Disconnect a specific session by index.
     async fn disconnect_session(&mut self, index: usize) {
-        if let Some(entry) = self.sessions.remove(index)
-            && let SessionState::Connected(state) = entry.state
+        if let Some(entry) = self.sessions.get_mut(index)
+            && let SessionState::Connected(state) = &mut entry.state
+            && state.connected
         {
-            let _ = state.handle.disconnect().await;
+            let sender = state.handle.clone_command_sender();
+            let _ = sender.send(SessionCommand::Disconnect).await;
+            state.connected = false;
+            state.auto_reconnect = false;
             self.toasts.info("Session disconnected");
         }
+    }
 
-        // If no sessions left, create a fresh PreConnect session
-        if self.sessions.is_empty() {
-            let mut view = PreConnectView::new();
-            view.refresh_ports();
-            self.sessions.add_preconnect(view);
+    /// Reconnect a specific session by index, preserving its buffer and UI state.
+    async fn reconnect_session(&mut self, index: usize) {
+        let port_path = if let Some(entry) = self.sessions.get_mut(index)
+            && let SessionState::Connected(state) = &mut entry.state
+            && !state.connected
+        {
+            state.port_path.clone()
+        } else {
+            return;
+        };
+
+        let result = if let Some(entry) = self.sessions.get_mut(index)
+            && let SessionState::Connected(state) = &mut entry.state
+        {
+            state
+                .handle
+                .reconnect(state.serial_config.clone(), state.session_config.clone())
+                .await
+        } else {
+            return;
+        };
+
+        if let Some(entry) = self.sessions.get_mut(index)
+            && let SessionState::Connected(state) = &mut entry.state
+        {
+            match result {
+                Ok(()) => {
+                    state.connected = true;
+                    state.auto_reconnect = true;
+                    self.toasts.success(format!("Reconnected to {}", port_path));
+                }
+                Err(e) => {
+                    self.toasts
+                        .error(format!("Reconnect to {} failed: {}", port_path, e));
+                }
+            }
+        }
+    }
+
+    /// Check for disconnected sessions whose port has reappeared and auto-reconnect.
+    async fn try_reconnect(&mut self) {
+        let mut to_reconnect: Vec<(usize, String)> = Vec::new();
+
+        for (index, entry) in self.sessions.iter_mut().enumerate() {
+            if let SessionState::Connected(state) = &entry.state
+                && !state.connected
+                && state.auto_reconnect
+            {
+                to_reconnect.push((index, state.port_path.clone()));
+            }
+        }
+
+        if to_reconnect.is_empty() {
+            return;
+        }
+
+        let ports = match list_ports() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        for (index, port_path) in to_reconnect {
+            let available = ports.iter().any(|p| p.name == port_path);
+            if !available {
+                continue;
+            }
+
+            let result = if let Some(entry) = self.sessions.get_mut(index)
+                && let SessionState::Connected(state) = &mut entry.state
+            {
+                state
+                    .handle
+                    .reconnect(state.serial_config.clone(), state.session_config.clone())
+                    .await
+            } else {
+                continue;
+            };
+
+            if let Some(entry) = self.sessions.get_mut(index)
+                && let SessionState::Connected(state) = &mut entry.state
+            {
+                match result {
+                    Ok(()) => {
+                        state.connected = true;
+                        state.auto_reconnect = true;
+                        self.toasts.success(format!("Reconnected to {}", port_path));
+                    }
+                    Err(e) => {
+                        self.toasts
+                            .error(format!("Reconnect to {} failed: {}", port_path, e));
+                    }
+                }
+            }
         }
     }
 

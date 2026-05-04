@@ -451,6 +451,7 @@ impl GraphView {
         handle: &SessionHandle,
         serial_config: &SerialConfig,
         focus: Focus,
+        connected: bool,
     ) {
         let buffer = handle.buffer();
         let mode = self.config.mode();
@@ -463,7 +464,9 @@ impl GraphView {
                 GraphMode::PacketRate => " Graph (RX/TX Rate) ",
             })
             .borders(Borders::ALL)
-            .border_style(if focus == Focus::Main {
+            .border_style(if !connected {
+                Theme::border_error()
+            } else if focus == Focus::Main {
                 Theme::border_focused()
             } else {
                 Theme::border()
@@ -483,7 +486,15 @@ impl GraphView {
 
         // Config panel - pass buffer reference to avoid RwLock deadlock
         if let Some(config_area) = config_area {
-            self.draw_config(config_area, buf, handle, &buffer, serial_config, focus);
+            self.draw_config(
+                config_area,
+                buf,
+                handle,
+                &buffer,
+                serial_config,
+                focus,
+                connected,
+            );
         }
     }
 
@@ -777,6 +788,7 @@ impl GraphView {
         buffer: &serial_core::DataBuffer,
         serial_config: &SerialConfig,
         focus: Focus,
+        connected: bool,
     ) {
         // Check if we need to show a hint for pending text changes
         let show_hint = self.has_pending_text_changes();
@@ -818,7 +830,11 @@ impl GraphView {
         let conn_block = Block::default()
             .title(" Connection ")
             .borders(Borders::ALL)
-            .border_style(Theme::border());
+            .border_style(if !connected {
+                Theme::border_error()
+            } else {
+                Theme::border()
+            });
 
         ConnectionPanel::new(handle.port_name(), serial_config, handle.statistics())
             .block(conn_block)
@@ -830,7 +846,9 @@ impl GraphView {
         let config_block = Block::default()
             .title(" Settings ")
             .borders(Borders::ALL)
-            .border_style(if settings_focused {
+            .border_style(if !connected {
+                Theme::border_error()
+            } else if settings_focused {
                 Theme::border_focused()
             } else {
                 Theme::border()
@@ -853,7 +871,7 @@ impl GraphView {
 
         // Series visibility section (both modes)
         if series_height > 0 {
-            self.draw_series_section(chunks[3], buf, buffer, focus);
+            self.draw_series_section(chunks[3], buf, buffer, focus, connected);
         }
     }
 
@@ -863,13 +881,16 @@ impl GraphView {
         buf: &mut Buffer,
         buffer: &serial_core::DataBuffer,
         focus: Focus,
+        connected: bool,
     ) {
         let is_focused = focus == Focus::Config && self.config_sub_focus == ConfigSubFocus::Series;
 
         let block = Block::default()
             .title(" Series ")
             .borders(Borders::ALL)
-            .border_style(if is_focused {
+            .border_style(if !connected {
+                Theme::border_error()
+            } else if is_focused {
                 Theme::border_focused()
             } else {
                 Theme::border()

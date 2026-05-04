@@ -32,6 +32,8 @@ impl Theme {
     pub const BORDER: Color = Color::DarkGray;
     pub const BORDER_FOCUSED: Color = Color::Cyan;
     pub const BORDER_DISCONNECTED: Color = Color::Yellow;
+    /// Border color when a connected session has lost its port (error state).
+    pub const BORDER_ERROR: Color = Color::Red;
     /// Selection background - using indexed color 236 (very dark gray) for subtle highlighting
     /// that doesn't wash out foreground colors. Falls back gracefully on 16-color terminals.
     pub const SELECTION: Color = Color::Indexed(236);
@@ -71,6 +73,16 @@ impl Theme {
 
     pub fn border_disconnected() -> Style {
         Style::default().fg(Self::BORDER_DISCONNECTED)
+    }
+
+    pub fn border_error() -> Style {
+        Style::default().fg(Self::BORDER_ERROR)
+    }
+
+    pub fn title_error() -> Style {
+        Style::default()
+            .fg(Self::BORDER_ERROR)
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn selected() -> Style {
