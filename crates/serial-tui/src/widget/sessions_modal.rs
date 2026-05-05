@@ -34,7 +34,7 @@ pub enum SessionsModalAction {
     Close,
     /// User pressed Enter on a session (return its index).
     SwitchTo(usize),
-    /// User confirmed disconnect (return session index).
+    /// User requested disconnect (return session index).
     ConfirmDisconnect(usize),
 }
 
@@ -94,7 +94,7 @@ impl SessionsModalState {
                 return SessionsModalAction::SwitchTo(self.selected);
             }
             KeyCode::Char('d') => {
-                self.confirming_disconnect = true;
+                return SessionsModalAction::ConfirmDisconnect(self.selected);
             }
             _ => {}
         }

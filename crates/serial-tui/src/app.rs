@@ -73,7 +73,12 @@ const COMMANDS: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "quit",
-        alias: "q",
+        alias: "",
+        arg: CommandArg::None,
+    },
+    CommandInfo {
+        name: "q",
+        alias: "",
         arg: CommandArg::None,
     },
     CommandInfo {
@@ -847,13 +852,11 @@ impl App {
                 // Global keybindings
                 match key.code {
                     KeyCode::Char('q') if !self.is_input_mode() => {
-                        // When live-connected, show disconnect confirmation
-                        let is_live = matches!(
+                        if matches!(
                             self.sessions.active_state(),
-                            Some(SessionState::Connected(state)) if state.connected
-                        );
-                        if is_live {
-                            self.confirm.show("Disconnect from port?");
+                            Some(SessionState::Connected(_))
+                        ) {
+                            self.quit_active_session().await;
                         } else {
                             self.should_quit = true;
                         }
@@ -967,7 +970,7 @@ impl App {
                                         if !key.modifiers.contains(KeyModifiers::CONTROL) =>
                                     {
                                         if state.connected {
-                                            self.confirm.show("Disconnect from port?");
+                                            self.disconnect().await;
                                         } else {
                                             self.toasts.info("Already disconnected");
                                         }
@@ -1057,8 +1060,18 @@ impl App {
             "disconnect" | "d" => {
                 self.disconnect().await;
             }
-            "quit" | "q" => {
+            "quit" => {
                 self.should_quit = true;
+            }
+            "q" => {
+                if matches!(
+                    self.sessions.active_state(),
+                    Some(SessionState::Connected(_))
+                ) {
+                    self.quit_active_session().await;
+                } else {
+                    self.should_quit = true;
+                }
             }
             "save" | "w" => {
                 if parts.len() < 2 {
@@ -1404,6 +1417,39 @@ impl App {
             }
         }
         self.needs_clear = true;
+    }
+
+    async fn quit_active_session(&mut self) {
+        let Some(active_idx) = self.sessions.active_index() else {
+            let view = self.new_preconnect_view();
+            self.sessions.add_preconnect(view);
+            self.needs_clear = true;
+            return;
+        };
+
+        let Some(entry) = self.sessions.remove(active_idx) else {
+            self.needs_clear = true;
+            return;
+        };
+
+        if let SessionState::Connected(state) = entry.state {
+            let _ = state.handle.disconnect().await;
+            self.toasts.info("Session closed");
+        }
+
+        if self.sessions.is_empty() {
+            let view = self.new_preconnect_view();
+            self.sessions.add_preconnect(view);
+        }
+
+        self.needs_clear = true;
+    }
+
+    fn new_preconnect_view(&self) -> PreConnectView {
+        let mut view = PreConnectView::new();
+        view.apply_settings(&self.settings.pre_connect);
+        view.refresh_ports();
+        view
     }
 
     /// Disconnect a specific session by index.

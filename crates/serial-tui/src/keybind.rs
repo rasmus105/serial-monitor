@@ -110,7 +110,7 @@ pub fn all_keybinds() -> Vec<Keybind> {
         // Global
         Keybind::new(
             key(KeyCode::Char('q')),
-            "Quit / Disconnect prompt",
+            "Close active session",
             KeyContext::Global,
         ),
         Keybind::new(
@@ -207,6 +207,7 @@ pub fn all_keybinds() -> Vec<Keybind> {
             KeyContext::Connected,
         ),
         Keybind::new(key(KeyCode::Char('d')), "Disconnect", KeyContext::Connected),
+        Keybind::new(key(KeyCode::Char('r')), "Reconnect", KeyContext::Connected),
         // Traffic view
         Keybind::new(key(KeyCode::Char('s')), "Send data", KeyContext::Traffic),
         Keybind::new(
