@@ -177,6 +177,16 @@ pub struct SessionHandle {
     auto_save: Option<FileSaverHandle>,
     /// Connection statistics
     statistics: Arc<Statistics>,
+    /// Handle to the I/O task, used for graceful shutdown and reconnect ordering
+    io_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for SessionHandle {
+    fn drop(&mut self) {
+        if let Some(task) = self.io_task.take() {
+            task.abort();
+        }
+    }
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -232,19 +242,35 @@ impl SessionHandle {
     }
 
     /// Disconnect from the serial port
-    pub async fn disconnect(self) -> Result<()> {
+    ///
+    /// Sends a disconnect command and waits for the I/O task to fully exit,
+    /// ensuring the port fd is released before any subsequent reconnect.
+    pub async fn disconnect(mut self) -> Result<()> {
         let _ = self.command_tx.send(SessionCommand::Disconnect).await;
+        if let Some(task) = self.io_task.take() {
+            let _ = task.await;
+        }
         Ok(())
     }
 
     /// Reconnect this session to its port, preserving buffered data and statistics.
+    ///
+    /// Ensures any previous I/O task is fully shut down and its fd is closed
+    /// before opening the port again.
     pub async fn reconnect(
         &mut self,
         serial_config: SerialConfig,
         session_config: SessionConfig,
     ) -> Result<()> {
+        // Shut down any existing I/O task before reopening the port.
+        // This prevents the old and new tasks from racing on the same fd.
+        if let Some(task) = self.io_task.take() {
+            let _ = self.command_tx.send(SessionCommand::Disconnect).await;
+            let _ = task.await;
+        }
+
         let port = Session::open_port(&self.port_name, &serial_config)?;
-        let (event_rx, command_tx, auto_save) = Session::spawn_io_task(
+        let (event_rx, command_tx, auto_save, io_task) = Session::spawn_io_task(
             &self.port_name,
             Arc::clone(&self.buffer),
             Arc::clone(&self.statistics),
@@ -256,6 +282,7 @@ impl SessionHandle {
         self.event_rx = event_rx;
         self.command_tx = command_tx;
         self.auto_save = auto_save;
+        self.io_task = Some(io_task);
 
         Ok(())
     }
@@ -334,7 +361,7 @@ impl Session {
         let buffer = Self::create_buffer(&session_config);
         let statistics = Arc::new(Statistics::new());
 
-        let (event_rx, command_tx, auto_save) = Self::spawn_io_task(
+        let (event_rx, command_tx, auto_save, io_task) = Self::spawn_io_task(
             port_name,
             Arc::clone(&buffer),
             Arc::clone(&statistics),
@@ -350,6 +377,7 @@ impl Session {
             port_name: port_name.to_string(),
             auto_save,
             statistics,
+            io_task: Some(io_task),
         })
     }
 
@@ -419,6 +447,7 @@ impl Session {
         mpsc::Receiver<SessionEvent>,
         mpsc::Sender<SessionCommand>,
         Option<FileSaverHandle>,
+        tokio::task::JoinHandle<()>,
     ) {
         let (event_tx, event_rx) = mpsc::channel(256);
         let (command_tx, command_rx) = mpsc::channel(64);
@@ -450,7 +479,7 @@ impl Session {
         let auto_save_tx = auto_save.as_ref().map(|h| h.clone_sender());
         let statistics_clone = Arc::clone(&statistics);
 
-        tokio::spawn(async move {
+        let io_task = tokio::spawn(async move {
             IoTask {
                 buffer: buffer_clone,
                 event_tx,
@@ -464,7 +493,7 @@ impl Session {
             .await;
         });
 
-        (event_rx, command_tx, auto_save)
+        (event_rx, command_tx, auto_save, io_task)
     }
 }
 
