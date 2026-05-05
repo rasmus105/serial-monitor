@@ -69,7 +69,8 @@ fn setup_signal_handlers(shutdown_flag: Arc<AtomicBool>) {
             }
         });
 
-        // SIGHUP (terminal closed)
+        // SIGHUP (terminal closed). Request shutdown, then let the app cleanup
+        // path run without depending on further terminal I/O succeeding.
         let flag = shutdown_flag;
         tokio::spawn(async move {
             if let Ok(mut sig) = signal(SignalKind::hangup()) {

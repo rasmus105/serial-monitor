@@ -1,6 +1,6 @@
 //! Terminal event handling.
 
-use std::time::Duration;
+use std::{io, time::Duration};
 
 use crossterm::event::{self, Event, KeyEvent, MouseEvent};
 
@@ -21,19 +21,19 @@ pub enum AppEvent {
 /// Returns `None` if no event is available within the timeout.
 /// Returns `Some(AppEvent::Tick)` only when timeout > 0 and no event arrived
 /// (to signal that periodic updates should occur).
-pub fn poll_event(timeout: Duration) -> Option<AppEvent> {
-    if event::poll(timeout).ok()? {
-        match event::read().ok()? {
-            Event::Key(key) => Some(AppEvent::Key(key)),
-            Event::Mouse(mouse) => Some(AppEvent::Mouse(mouse)),
-            Event::Resize(w, h) => Some(AppEvent::Resize(w, h)),
-            _ => None,
+pub fn poll_event(timeout: Duration) -> io::Result<Option<AppEvent>> {
+    if event::poll(timeout)? {
+        match event::read()? {
+            Event::Key(key) => Ok(Some(AppEvent::Key(key))),
+            Event::Mouse(mouse) => Ok(Some(AppEvent::Mouse(mouse))),
+            Event::Resize(w, h) => Ok(Some(AppEvent::Resize(w, h))),
+            _ => Ok(None),
         }
     } else if timeout.is_zero() {
         // No event and non-blocking poll - return None so drain loops can exit
-        None
+        Ok(None)
     } else {
         // No event but we waited - return Tick for periodic updates
-        Some(AppEvent::Tick)
+        Ok(Some(AppEvent::Tick))
     }
 }

@@ -426,6 +426,16 @@ impl App {
         terminal: &mut Terminal<B>,
         shutdown_flag: Option<Arc<AtomicBool>>,
     ) -> io::Result<()> {
+        let result = self.run_loop(terminal, shutdown_flag).await;
+        self.shutdown().await;
+        result
+    }
+
+    async fn run_loop<B: Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        shutdown_flag: Option<Arc<AtomicBool>>,
+    ) -> io::Result<()> {
         // Initial port scan for any PreConnect sessions
         if let Some(SessionState::PreConnect(view)) = self.sessions.active_state_mut() {
             view.refresh_ports();
@@ -437,6 +447,10 @@ impl App {
                 && flag.load(Ordering::SeqCst)
             {
                 self.should_quit = true;
+            }
+
+            if self.should_quit {
+                break;
             }
 
             // Force full terminal redraw if needed before drawing
@@ -452,12 +466,15 @@ impl App {
             // Drain all pending events before rendering next frame.
             // This prevents event queue backlog when events arrive faster than
             // we can render (e.g., fast mouse wheel scrolling).
-            while let Some(event) = poll_event(Duration::from_millis(0)) {
+            for _ in 0..256 {
+                let Some(event) = poll_event(Duration::from_millis(0))? else {
+                    break;
+                };
                 self.handle_event(event).await;
             }
 
             // Wait for next event or timeout (for session events and periodic updates)
-            if let Some(event) = poll_event(Duration::from_millis(50)) {
+            if let Some(event) = poll_event(Duration::from_millis(50))? {
                 self.handle_event(event).await;
             }
 
@@ -473,22 +490,23 @@ impl App {
             }
 
             if self.should_quit {
-                // Save settings before quitting
-                self.save_settings();
-
-                // Cleanup - disconnect all connected sessions
-                // We drain all sessions to take ownership
-                let sessions: Vec<SessionEntry> = self.sessions.drain().collect();
-                for entry in sessions {
-                    if let SessionState::Connected(state) = entry.state {
-                        let _ = state.handle.disconnect().await;
-                    }
-                }
                 break;
             }
         }
 
         Ok(())
+    }
+
+    async fn shutdown(&mut self) {
+        self.save_settings();
+
+        // Drain sessions to take ownership before awaiting disconnects.
+        let sessions: Vec<SessionEntry> = self.sessions.drain().collect();
+        for entry in sessions {
+            if let SessionState::Connected(state) = entry.state {
+                let _ = state.handle.disconnect().await;
+            }
+        }
     }
 
     fn draw(&mut self, area: Rect, buf: &mut Buffer) {
