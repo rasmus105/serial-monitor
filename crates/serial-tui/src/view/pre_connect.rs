@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     widgets::{Block, Borders, Paragraph, StatefulWidget, Widget},
 };
-use serial_core::list_ports;
+use serial_core::{PortInfo, list_ports};
 
 use crate::{
     app::{Focus, PreConnectAction},
@@ -56,7 +56,8 @@ impl PreConnectView {
         }
     }
 
-    /// Auto-refreshes ports every 500ms. Returns a toast if ports changed.
+    /// Auto-refreshes ports every 500ms.
+    /// Returns a toast if ports changed.
     pub fn tick_auto_refresh(&mut self) -> Option<Toast> {
         use std::time::Duration;
         const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
@@ -67,30 +68,36 @@ impl PreConnectView {
 
         self.last_port_refresh = Instant::now();
 
-        let old_ports: Vec<String> = self
+        let old_ports: Vec<PortInfo> = self.port_list.ports.clone();
+
+        let new_ports = match list_ports() {
+            Ok(ports) => ports,
+            Err(_) => vec![],
+        };
+
+        // Only update state when the list actually changed so search
+        // position and selection are not reset on every tick.
+        if new_ports == old_ports {
+            return None;
+        }
+
+        self.port_list.set_ports(new_ports);
+
+        let old_names: Vec<String> = old_ports.iter().map(|p| p.name.clone()).collect();
+        let new_names: Vec<String> = self
             .port_list
             .ports
             .iter()
             .map(|p| p.name.clone())
             .collect();
 
-        self.refresh_ports();
-
-        let new_ports: Vec<String> = self
-            .port_list
-            .ports
+        let added: Vec<_> = new_names
             .iter()
-            .map(|p| p.name.clone())
+            .filter(|p| !old_names.contains(p))
             .collect();
-
-        // Detect changes
-        let added: Vec<_> = new_ports
+        let removed: Vec<_> = old_names
             .iter()
-            .filter(|p| !old_ports.contains(p))
-            .collect();
-        let removed: Vec<_> = old_ports
-            .iter()
-            .filter(|p| !new_ports.contains(p))
+            .filter(|p| !new_names.contains(p))
             .collect();
 
         if !added.is_empty() {

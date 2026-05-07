@@ -5,7 +5,7 @@ use crate::error::Result;
 pub use tokio_serial::{DataBits, FlowControl, Parity, StopBits};
 
 /// Information about an available serial port
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortInfo {
     /// Port name (e.g., "/dev/ttyUSB0" or "COM3")
     pub name: String,
