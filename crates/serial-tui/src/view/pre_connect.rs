@@ -654,12 +654,7 @@ impl PreConnectView {
                 if let Some(port) = self.port_list.selected_name() {
                     return Some(PreConnectAction::Connect {
                         port: port.to_string(),
-                        serial_config: self.config.to_serial_config(),
-                        rx_chunking: self.config.rx_chunking(),
-                        file_save_enabled: self.config.file_save_enabled,
-                        file_save_format_index: self.config.file_save_format_index,
-                        file_save_encoding_index: self.config.file_save_encoding_index,
-                        file_save_directory: self.config.file_save_directory.clone(),
+                        config: self.config.clone(),
                     });
                 }
             }

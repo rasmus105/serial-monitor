@@ -15,7 +15,7 @@ pub mod util;
 pub use completion_popup::{CompletionKind, CompletionPopup, CompletionState, PopupDirection};
 pub use config_panel::{ConfigKeyResult, ConfigPanel, handle_config_key};
 pub use confirm_overlay::{ConfirmOverlay, ConfirmState};
-pub use connect_modal::{ConnectModal, ConnectModalAction, ConnectModalState};
+pub use connect_modal::{ConnectModal, ConnectModalAction, ConnectModalConfig, ConnectModalState};
 pub use connection_panel::ConnectionPanel;
 pub use help_overlay::HelpOverlay;
 pub use input_history::InputHistory;

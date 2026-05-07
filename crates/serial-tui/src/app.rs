@@ -25,17 +25,19 @@ use serial_core::{
 
 use crate::{
     event::{AppEvent, poll_event},
-    settings::TuiSettings,
+    settings::{PreConnectSettings, TuiSettings},
     theme::Theme,
     view::{
-        file_sender::FileSenderView, graph::GraphView, pre_connect::PreConnectView,
+        file_sender::FileSenderView,
+        graph::GraphView,
+        pre_connect::{PreConnectConfig, PreConnectView},
         traffic::TrafficView,
     },
     widget::{
         CompletionKind, CompletionPopup, CompletionState, ConfirmOverlay, ConfirmState,
-        ConnectModal, ConnectModalAction, ConnectModalState, HelpOverlay, SessionsModal,
-        SessionsModalAction, SessionsModalState, Toasts, help_overlay::HelpOverlayState,
-        text_input::TextInputState, toast::render_toasts,
+        ConnectModal, ConnectModalAction, ConnectModalConfig, ConnectModalState, HelpOverlay,
+        SessionsModal, SessionsModalAction, SessionsModalState, Toasts,
+        help_overlay::HelpOverlayState, text_input::TextInputState, toast::render_toasts,
     },
 };
 
@@ -391,7 +393,7 @@ impl App {
             connect_modal: ConnectModalState::default(),
             sessions_modal: SessionsModalState::default(),
             sessions,
-            show_config: true,
+            show_config: false,
             focus: Focus::Main,
             command_input: TextInputState::default().with_placeholder("Enter command..."),
             command_mode: false,
@@ -798,6 +800,14 @@ impl App {
                         }
                         ConnectModalAction::Connect => {
                             let port_path = self.connect_modal.port_path.clone();
+                            let pre_connect_settings =
+                                preconnect_settings_from_connect_modal(&self.connect_modal.config);
+                            if let Some(SessionState::PreConnect(view)) =
+                                self.sessions.active_state_mut()
+                            {
+                                view.apply_settings(&pre_connect_settings);
+                            }
+                            self.settings.pre_connect = pre_connect_settings;
                             let serial_config = self.connect_modal.config.to_serial_config();
                             let rx_chunking = self.connect_modal.config.rx_chunking();
                             let file_save_enabled = self.connect_modal.config.file_save_enabled;
@@ -1073,7 +1083,10 @@ impl App {
                 }
                 let port_path = parts[1].to_string();
                 // Show the connect modal instead of connecting directly
-                self.connect_modal.show(port_path);
+                self.connect_modal.show_with_config(
+                    port_path,
+                    connect_modal_config_from_settings(&self.settings.pre_connect),
+                );
             }
             "disconnect" | "d" => {
                 self.disconnect().await;
@@ -1179,40 +1192,11 @@ impl App {
 
     async fn handle_preconnect_action(&mut self, action: PreConnectAction) {
         match action {
-            PreConnectAction::Connect {
-                port,
-                serial_config,
-                rx_chunking,
-                file_save_enabled,
-                file_save_format_index,
-                file_save_encoding_index,
-                file_save_directory,
-            } => {
-                // Save pre-connect settings before transitioning to connected state
-                // This ensures settings are preserved even if we quit while connected
-                if let Some(SessionState::PreConnect(view)) = self.sessions.active_state() {
-                    self.settings.pre_connect = view.to_settings();
-                }
-
-                // Build session config from global settings
-                let settings = &self.help.settings;
-                let session_config = SessionConfig {
-                    rx_chunking,
-                    tx_chunking: ChunkingStrategy::Raw,
-                    buffer_size: settings.buffer_size(),
-                    auto_save: settings.to_auto_save_config(),
-                };
-                self.connect(ConnectConfig {
-                    port,
-                    serial_config,
-                    session_config,
-                    keep_awake: settings.keep_awake,
-                    file_save_enabled,
-                    file_save_format_index,
-                    file_save_encoding_index,
-                    file_save_directory,
-                })
-                .await;
+            PreConnectAction::Connect { port, config } => {
+                self.settings.pre_connect = preconnect_settings_from_config(&config);
+                self.connect_modal
+                    .show_with_config(port, connect_modal_config_from_preconnect(&config));
+                self.needs_clear = true;
             }
             PreConnectAction::Toast(toast) => {
                 self.toasts.push(toast);
@@ -1730,18 +1714,71 @@ impl Default for App {
     }
 }
 
+fn connect_modal_config_from_preconnect(config: &PreConnectConfig) -> ConnectModalConfig {
+    ConnectModalConfig {
+        baud_rate_index: config.baud_rate_index,
+        data_bits_index: config.data_bits_index,
+        parity_index: config.parity_index,
+        stop_bits_index: config.stop_bits_index,
+        flow_control_index: config.flow_control_index,
+        line_ending_index: config.line_ending_index,
+        file_save_enabled: config.file_save_enabled,
+        file_save_format_index: config.file_save_format_index,
+        file_save_encoding_index: config.file_save_encoding_index,
+        file_save_directory: config.file_save_directory.clone(),
+    }
+}
+
+fn connect_modal_config_from_settings(settings: &PreConnectSettings) -> ConnectModalConfig {
+    ConnectModalConfig {
+        baud_rate_index: settings.baud_rate_index,
+        data_bits_index: settings.data_bits_index,
+        parity_index: settings.parity_index,
+        stop_bits_index: settings.stop_bits_index,
+        flow_control_index: settings.flow_control_index,
+        line_ending_index: settings.line_ending_index,
+        file_save_enabled: settings.file_save_enabled,
+        file_save_format_index: settings.file_save_format_index,
+        file_save_encoding_index: settings.file_save_encoding_index,
+        file_save_directory: settings.file_save_directory.clone(),
+    }
+}
+
+fn preconnect_settings_from_config(config: &PreConnectConfig) -> PreConnectSettings {
+    PreConnectSettings {
+        baud_rate_index: config.baud_rate_index,
+        data_bits_index: config.data_bits_index,
+        parity_index: config.parity_index,
+        stop_bits_index: config.stop_bits_index,
+        flow_control_index: config.flow_control_index,
+        line_ending_index: config.line_ending_index,
+        file_save_enabled: config.file_save_enabled,
+        file_save_format_index: config.file_save_format_index,
+        file_save_encoding_index: config.file_save_encoding_index,
+        file_save_directory: config.file_save_directory.clone(),
+    }
+}
+
+fn preconnect_settings_from_connect_modal(config: &ConnectModalConfig) -> PreConnectSettings {
+    PreConnectSettings {
+        baud_rate_index: config.baud_rate_index,
+        data_bits_index: config.data_bits_index,
+        parity_index: config.parity_index,
+        stop_bits_index: config.stop_bits_index,
+        flow_control_index: config.flow_control_index,
+        line_ending_index: config.line_ending_index,
+        file_save_enabled: config.file_save_enabled,
+        file_save_format_index: config.file_save_format_index,
+        file_save_encoding_index: config.file_save_encoding_index,
+        file_save_directory: config.file_save_directory.clone(),
+    }
+}
+
 /// Actions from pre-connect view.
 pub enum PreConnectAction {
     Connect {
         port: String,
-        serial_config: SerialConfig,
-        /// RX chunking strategy (from pre-connect config).
-        rx_chunking: ChunkingStrategy,
-        /// File saving settings from pre-connect config.
-        file_save_enabled: bool,
-        file_save_format_index: usize,
-        file_save_encoding_index: usize,
-        file_save_directory: String,
+        config: PreConnectConfig,
     },
     Toast(crate::widget::Toast),
 }

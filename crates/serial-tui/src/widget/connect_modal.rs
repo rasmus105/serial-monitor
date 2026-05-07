@@ -336,9 +336,14 @@ impl Default for ConnectModalState {
 impl ConnectModalState {
     /// Show the modal with a port pre-filled.
     pub fn show(&mut self, port_path: String) {
+        self.show_with_config(port_path, ConnectModalConfig::default());
+    }
+
+    /// Show the modal with a port and config pre-filled.
+    pub fn show_with_config(&mut self, port_path: String, config: ConnectModalConfig) {
         self.visible = true;
         self.port_path = port_path;
-        self.config = ConnectModalConfig::default();
+        self.config = config;
         self.nav = ConfigNav::new();
     }
 
