@@ -415,6 +415,10 @@ impl HelpOverlayState {
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         const HALF_PAGE: usize = 15;
 
+        if self.tab == HelpTab::Settings && self.settings_nav.edit_mode.is_dropdown() {
+            return self.handle_settings_key(key);
+        }
+
         match key.code {
             KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => {
                 return self.hide();
@@ -567,6 +571,37 @@ impl HelpOverlayState {
             _ => {}
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serial_core::ui::config::ConfigNav;
+
+    use super::*;
+
+    #[test]
+    fn escape_closes_settings_dropdown_without_hiding_overlay() {
+        let mut state = HelpOverlayState {
+            visible: true,
+            tab: HelpTab::Settings,
+            scroll: 0,
+            settings: AppSettings::default(),
+            settings_nav: ConfigNav {
+                selected: 1,
+                ..ConfigNav::default()
+            },
+        };
+        state
+            .settings_nav
+            .open_dropdown(SETTINGS_SECTIONS, &state.settings);
+        assert!(state.settings_nav.edit_mode.is_dropdown());
+
+        let needs_clear = state.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(needs_clear);
+        assert!(state.visible);
+        assert!(!state.settings_nav.edit_mode.is_dropdown());
     }
 }
 
