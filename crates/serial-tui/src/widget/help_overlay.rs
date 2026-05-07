@@ -752,6 +752,7 @@ fn render_commands(area: Rect, buf: &mut Buffer, scroll: usize) {
         ),
         (":disconnect", ":d", "Disconnect the current session"),
         (":save <path>", ":w", "Save buffer contents to a file"),
+        (":clear", "", "Clear the current session buffer"),
         (":quit", "", "Quit the application"),
         (":q", "", "Close the active session"),
         (":help", ":h", "Open this help panel"),

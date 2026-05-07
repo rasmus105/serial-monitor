@@ -72,6 +72,11 @@ const COMMANDS: &[CommandInfo] = &[
         arg: CommandArg::Path,
     },
     CommandInfo {
+        name: "clear",
+        alias: "",
+        arg: CommandArg::None,
+    },
+    CommandInfo {
         name: "quit",
         alias: "",
         arg: CommandArg::None,
@@ -1125,6 +1130,9 @@ impl App {
                 let path = parts[1];
                 self.save_buffer(path).await;
             }
+            "clear" => {
+                self.clear_buffer();
+            }
             "help" | "h" => {
                 self.help.visible = true;
                 self.help.tab = crate::widget::help_overlay::HelpTab::Commands;
@@ -1139,6 +1147,23 @@ impl App {
             _ => {
                 self.toasts.error(format!("Unknown command: {}", parts[0]));
             }
+        }
+    }
+
+    fn clear_buffer(&mut self) {
+        if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
+            let cleared_chunks = {
+                let mut buffer = state.handle.buffer_mut();
+                let cleared_chunks = buffer.total_len();
+                buffer.clear();
+                cleared_chunks
+            };
+            state.traffic.reset_buffer_view();
+            self.needs_clear = true;
+            self.toasts
+                .success(format!("Cleared {} chunks", cleared_chunks));
+        } else {
+            self.toasts.error("Not connected - nothing to clear");
         }
     }
 

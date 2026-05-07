@@ -462,6 +462,14 @@ impl TrafficView {
         self.search_focused || self.filter_focused || self.send_focused || self.dir_path_focused
     }
 
+    pub fn reset_buffer_view(&mut self) {
+        self.scroll = 0;
+        self.at_bottom = true;
+        self.visual_mode = false;
+        self.visual_anchor = 0;
+        self.visual_cursor = 0;
+    }
+
     /// Enter visual mode at the current scroll position.
     fn enter_visual_mode(&mut self, handle: &SessionHandle) {
         let chunk_idx = self.scroll_to_chunk_index(handle);

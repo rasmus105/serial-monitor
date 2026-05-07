@@ -857,3 +857,41 @@ impl DataBuffer {
         self.file_saver.as_ref().map(|s| s.format())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::SystemTime;
+
+    use super::*;
+
+    #[test]
+    fn clear_removes_buffered_data_and_derived_state() {
+        let mut buffer = DataBuffer::default();
+        buffer.enable_graph();
+        buffer
+            .set_filter_pattern("temp", PatternMode::Normal)
+            .unwrap();
+        buffer
+            .set_search_pattern("temp", PatternMode::Normal)
+            .unwrap();
+
+        buffer.push(b"temp:32.2".to_vec(), Direction::Rx, SystemTime::now());
+        buffer.push(b"ignored".to_vec(), Direction::Tx, SystemTime::now());
+
+        assert_eq!(buffer.total_len(), 2);
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer.size(), 16);
+        assert_eq!(buffer.matches().len(), 1);
+        assert!(!buffer.graph().unwrap().series.is_empty());
+
+        buffer.clear();
+
+        assert_eq!(buffer.total_len(), 0);
+        assert_eq!(buffer.len(), 0);
+        assert_eq!(buffer.size(), 0);
+        assert_eq!(buffer.matches().len(), 0);
+        assert!(buffer.graph().unwrap().series.is_empty());
+        assert_eq!(buffer.filter_pattern(), Some("temp"));
+        assert_eq!(buffer.search_pattern(), Some("temp"));
+    }
+}
