@@ -21,7 +21,10 @@ use serial_core::{
     },
 };
 
-use crate::{theme::Theme, widget::ConfigPanel};
+use crate::{
+    theme::Theme,
+    widget::{ConfigPanel, PathEditor, PathEditorAction, PathEditorState},
+};
 
 /// Action returned from connect modal key handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,6 +323,8 @@ pub struct ConnectModalState {
     pub config: ConnectModalConfig,
     /// Config panel navigation.
     pub nav: ConfigNav,
+    /// Directory path editor overlay state.
+    pub dir_path_editor: PathEditorState,
 }
 
 impl Default for ConnectModalState {
@@ -329,6 +334,7 @@ impl Default for ConnectModalState {
             port_path: String::new(),
             config: ConnectModalConfig::default(),
             nav: ConfigNav::new(),
+            dir_path_editor: PathEditorState::default(),
         }
     }
 }
@@ -345,17 +351,31 @@ impl ConnectModalState {
         self.port_path = port_path;
         self.config = config;
         self.nav = ConfigNav::new();
+        self.dir_path_editor.close();
     }
 
     /// Hide the modal.
     pub fn hide(&mut self) {
         self.visible = false;
         self.port_path.clear();
+        self.dir_path_editor.close();
     }
 
     /// Handle key input, returning the action to take.
     pub fn handle_key(&mut self, key: KeyEvent) -> ConnectModalAction {
         if !self.visible {
+            return ConnectModalAction::None;
+        }
+
+        if self.dir_path_editor.visible {
+            match self.dir_path_editor.handle_key(key) {
+                PathEditorAction::Applied => {
+                    self.config.file_save_directory = self.dir_path_editor.content().to_string();
+                    self.dir_path_editor.close();
+                }
+                PathEditorAction::Cancelled => self.dir_path_editor.close(),
+                PathEditorAction::None => {}
+            }
             return ConnectModalAction::None;
         }
 
@@ -389,6 +409,8 @@ impl ConnectModalState {
                         let _ = self
                             .nav
                             .toggle_current(CONNECT_MODAL_SECTIONS, &mut self.config);
+                    } else if field.id == "file_save_directory" {
+                        self.dir_path_editor.open(&self.config.file_save_directory);
                     } else if field.kind.is_editable() {
                         self.nav
                             .start_text_edit(CONNECT_MODAL_SECTIONS, &self.config);
@@ -505,11 +527,11 @@ impl ConnectModalState {
 
 /// Connect modal widget.
 pub struct ConnectModal<'a> {
-    state: &'a ConnectModalState,
+    state: &'a mut ConnectModalState,
 }
 
 impl<'a> ConnectModal<'a> {
-    pub fn new(state: &'a ConnectModalState) -> Self {
+    pub fn new(state: &'a mut ConnectModalState) -> Self {
         Self { state }
     }
 }
@@ -582,5 +604,9 @@ impl Widget for ConnectModal<'_> {
                     buf,
                 );
         }
+
+        PathEditor::new(&mut self.state.dir_path_editor, "Save Directory")
+            .disconnected(true)
+            .render(area, buf);
     }
 }

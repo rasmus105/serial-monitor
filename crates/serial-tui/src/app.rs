@@ -28,9 +28,7 @@ use crate::{
     settings::{PreConnectSettings, TuiSettings},
     theme::Theme,
     view::{
-        file_sender::FileSenderView,
-        graph::GraphView,
-        pre_connect::{PreConnectConfig, PreConnectView},
+        file_sender::FileSenderView, graph::GraphView, pre_connect::PreConnectView,
         traffic::TrafficView,
     },
     widget::{
@@ -371,9 +369,8 @@ impl App {
         // Load persistent settings
         let settings = TuiSettings::load();
 
-        // Create pre-connect view with saved settings
-        let mut pre_connect = PreConnectView::new();
-        pre_connect.apply_settings(&settings.pre_connect);
+        // Create pre-connect view.
+        let pre_connect = PreConnectView::new();
 
         // Create help overlay with saved global settings
         let help = HelpOverlayState {
@@ -523,8 +520,14 @@ impl App {
             (area, None)
         };
 
-        // Main layout: main view + optional config panel
-        let chunks = if self.show_config {
+        // Main layout: main view + optional config panel. Pre-connect always stays full-width;
+        // connection settings are handled by the connect modal.
+        let config_visible = self.show_config
+            && matches!(
+                self.sessions.active_state(),
+                Some(SessionState::Connected(_))
+            );
+        let chunks = if config_visible {
             Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
@@ -537,7 +540,7 @@ impl App {
         };
 
         let main_area = chunks[0];
-        let config_area = if self.show_config {
+        let config_area = if config_visible {
             Some(chunks[1])
         } else {
             None
@@ -547,7 +550,7 @@ impl App {
         if let Some(entry) = self.sessions.active_mut() {
             match &mut entry.state {
                 SessionState::PreConnect(view) => {
-                    view.draw(main_area, config_area, buf, self.focus);
+                    view.draw(main_area, config_area, buf, Focus::Main);
                 }
                 SessionState::Connected(state) => {
                     Self::draw_connected(state, main_area, config_area, buf, self.focus);
@@ -586,7 +589,7 @@ impl App {
         ConfirmOverlay::new(&self.confirm).render(area, buf);
 
         // Draw connect modal overlay
-        ConnectModal::new(&self.connect_modal).render(area, buf);
+        ConnectModal::new(&mut self.connect_modal).render(area, buf);
 
         // Draw sessions modal overlay
         SessionsModal::new(
@@ -802,11 +805,6 @@ impl App {
                             let port_path = self.connect_modal.port_path.clone();
                             let pre_connect_settings =
                                 preconnect_settings_from_connect_modal(&self.connect_modal.config);
-                            if let Some(SessionState::PreConnect(view)) =
-                                self.sessions.active_state_mut()
-                            {
-                                view.apply_settings(&pre_connect_settings);
-                            }
                             self.settings.pre_connect = pre_connect_settings;
                             let serial_config = self.connect_modal.config.to_serial_config();
                             let rx_chunking = self.connect_modal.config.rx_chunking();
@@ -891,7 +889,13 @@ impl App {
                         return;
                     }
 
-                    KeyCode::Char('c') if !self.is_input_mode() => {
+                    KeyCode::Char('c')
+                        if !self.is_input_mode()
+                            && matches!(
+                                self.sessions.active_state(),
+                                Some(SessionState::Connected(_))
+                            ) =>
+                    {
                         self.show_config = !self.show_config;
                         // If hiding config panel and focus was on Config, move focus to Main
                         if !self.show_config && self.focus == Focus::Config {
@@ -930,10 +934,6 @@ impl App {
                             state.traffic.config_nav.close_dropdown();
                             state.graph.config_nav.close_dropdown();
                             state.file_sender.config_nav.close_dropdown();
-                        } else if let Some(SessionState::PreConnect(view)) =
-                            self.sessions.active_state_mut()
-                        {
-                            view.config_nav.close_dropdown();
                         }
                         self.focus = Focus::Main;
                         return;
@@ -943,7 +943,12 @@ impl App {
                         if key.modifiers.contains(KeyModifiers::CONTROL)
                             && !self.is_input_mode() =>
                     {
-                        if self.show_config {
+                        if self.show_config
+                            && matches!(
+                                self.sessions.active_state(),
+                                Some(SessionState::Connected(_))
+                            )
+                        {
                             self.focus = Focus::Config;
                         }
                         return;
@@ -955,7 +960,7 @@ impl App {
                 if let Some(entry) = self.sessions.active_mut() {
                     match &mut entry.state {
                         SessionState::PreConnect(view) => {
-                            if let Some(action) = view.handle_key(key, self.focus) {
+                            if let Some(action) = view.handle_key(key, Focus::Main) {
                                 self.handle_preconnect_action(action).await;
                             }
                         }
@@ -1192,10 +1197,11 @@ impl App {
 
     async fn handle_preconnect_action(&mut self, action: PreConnectAction) {
         match action {
-            PreConnectAction::Connect { port, config } => {
-                self.settings.pre_connect = preconnect_settings_from_config(&config);
-                self.connect_modal
-                    .show_with_config(port, connect_modal_config_from_preconnect(&config));
+            PreConnectAction::Connect { port } => {
+                self.connect_modal.show_with_config(
+                    port,
+                    connect_modal_config_from_settings(&self.settings.pre_connect),
+                );
                 self.needs_clear = true;
             }
             PreConnectAction::Toast(toast) => {
@@ -1449,7 +1455,6 @@ impl App {
 
     fn new_preconnect_view(&self) -> PreConnectView {
         let mut view = PreConnectView::new();
-        view.apply_settings(&self.settings.pre_connect);
         view.refresh_ports();
         view
     }
@@ -1686,9 +1691,7 @@ impl App {
         // Note: We only update settings for views that exist in the current mode.
         // Settings for other views are preserved from the last time they were active.
         match self.sessions.active_state() {
-            Some(SessionState::PreConnect(view)) => {
-                self.settings.pre_connect = view.to_settings();
-            }
+            Some(SessionState::PreConnect(_)) => {}
             Some(SessionState::Connected(state)) => {
                 self.settings.traffic = state.traffic.to_settings();
                 self.settings.graph = state.graph.to_settings();
@@ -1714,21 +1717,6 @@ impl Default for App {
     }
 }
 
-fn connect_modal_config_from_preconnect(config: &PreConnectConfig) -> ConnectModalConfig {
-    ConnectModalConfig {
-        baud_rate_index: config.baud_rate_index,
-        data_bits_index: config.data_bits_index,
-        parity_index: config.parity_index,
-        stop_bits_index: config.stop_bits_index,
-        flow_control_index: config.flow_control_index,
-        line_ending_index: config.line_ending_index,
-        file_save_enabled: config.file_save_enabled,
-        file_save_format_index: config.file_save_format_index,
-        file_save_encoding_index: config.file_save_encoding_index,
-        file_save_directory: config.file_save_directory.clone(),
-    }
-}
-
 fn connect_modal_config_from_settings(settings: &PreConnectSettings) -> ConnectModalConfig {
     ConnectModalConfig {
         baud_rate_index: settings.baud_rate_index,
@@ -1741,21 +1729,6 @@ fn connect_modal_config_from_settings(settings: &PreConnectSettings) -> ConnectM
         file_save_format_index: settings.file_save_format_index,
         file_save_encoding_index: settings.file_save_encoding_index,
         file_save_directory: settings.file_save_directory.clone(),
-    }
-}
-
-fn preconnect_settings_from_config(config: &PreConnectConfig) -> PreConnectSettings {
-    PreConnectSettings {
-        baud_rate_index: config.baud_rate_index,
-        data_bits_index: config.data_bits_index,
-        parity_index: config.parity_index,
-        stop_bits_index: config.stop_bits_index,
-        flow_control_index: config.flow_control_index,
-        line_ending_index: config.line_ending_index,
-        file_save_enabled: config.file_save_enabled,
-        file_save_format_index: config.file_save_format_index,
-        file_save_encoding_index: config.file_save_encoding_index,
-        file_save_directory: config.file_save_directory.clone(),
     }
 }
 
@@ -1776,10 +1749,7 @@ fn preconnect_settings_from_connect_modal(config: &ConnectModalConfig) -> PreCon
 
 /// Actions from pre-connect view.
 pub enum PreConnectAction {
-    Connect {
-        port: String,
-        config: PreConnectConfig,
-    },
+    Connect { port: String },
     Toast(crate::widget::Toast),
 }
 

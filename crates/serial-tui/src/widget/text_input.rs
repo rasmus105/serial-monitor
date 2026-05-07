@@ -406,7 +406,12 @@ pub fn find_path_completions(input: &str) -> Vec<String> {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        (parent.to_path_buf(), prefix)
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".").to_path_buf()
+        } else {
+            parent.to_path_buf()
+        };
+        (parent, prefix)
     } else {
         return Vec::new();
     };
@@ -446,6 +451,8 @@ pub fn find_path_completions(input: &str) -> Vec<String> {
                 } else {
                     full_path.display().to_string()
                 }
+            } else if parent == Path::new(".") && !input.starts_with("./") {
+                name.clone()
             } else {
                 full_path.display().to_string()
             };
@@ -489,4 +496,66 @@ pub fn longest_common_prefix(strings: &[String]) -> String {
     }
 
     first.chars().take(prefix_len).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        sync::{Mutex, MutexGuard},
+    };
+
+    use super::find_path_completions;
+
+    static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "serial-tui-text-input-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn enter_temp_dir(
+        name: &str,
+    ) -> (
+        MutexGuard<'static, ()>,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let guard = CURRENT_DIR_LOCK.lock().unwrap();
+        let original = std::env::current_dir().unwrap();
+        let dir = temp_dir(name);
+        std::env::set_current_dir(&dir).unwrap();
+        (guard, original, dir)
+    }
+
+    #[test]
+    fn completes_bare_relative_prefix_without_dot_slash() {
+        let (_guard, original, dir) = enter_temp_dir("bare-relative");
+        fs::create_dir("Documents").unwrap();
+        fs::write("Downloads", "file").unwrap();
+
+        let completions = find_path_completions("Do");
+
+        std::env::set_current_dir(original).unwrap();
+        let _ = fs::remove_dir_all(dir);
+        assert_eq!(completions, vec!["Documents/", "Downloads"]);
+    }
+
+    #[test]
+    fn preserves_explicit_dot_slash_prefix() {
+        let (_guard, original, dir) = enter_temp_dir("dot-relative");
+        fs::create_dir("Documents").unwrap();
+
+        let completions = find_path_completions("./Do");
+
+        std::env::set_current_dir(original).unwrap();
+        let _ = fs::remove_dir_all(dir);
+        assert_eq!(completions, vec!["./Documents/"]);
+    }
 }

@@ -9,6 +9,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Clear, Paragraph, Widget},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
 
@@ -182,14 +183,15 @@ impl Widget for CompletionPopup<'_> {
             .state
             .options
             .iter()
-            .map(|s| s.len())
+            .map(|s| s.width())
             .max()
             .unwrap_or(0);
 
         // Width: longest option + padding + scroll indicator space
         let hint_text = "[Tab]/[S-Tab]";
+        let max_popup_width = area.width.saturating_sub(1).max(1) as usize;
         let content_width = max_option_len.max(hint_text.len());
-        let popup_width = (content_width + 4) as u16; // 2 chars padding each side
+        let popup_width = (content_width + 4).min(max_popup_width) as u16;
 
         // Position popup based on direction
         let popup_x = self.input_x.min(area.width.saturating_sub(popup_width));

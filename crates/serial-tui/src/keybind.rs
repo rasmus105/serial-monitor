@@ -297,7 +297,6 @@ impl KeyHint {
 pub const PRECONNECT_HINTS: &[KeyHint] = &[
     KeyHint::new("Enter", "connect"),
     KeyHint::new("/", "search"),
-    KeyHint::new("c", "config"),
     KeyHint::new(":settings", "help"),
 ];
 
