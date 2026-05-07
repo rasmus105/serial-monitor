@@ -2236,8 +2236,9 @@ impl TrafficView {
                 // Apply directory path and exit input mode
                 self.config.file_save_directory = self.dir_path_input.content().to_string();
                 self.dir_path_focused = false;
-                // Layout changed - request clear to avoid artifacts
-                return Some(TrafficAction::RequestClear);
+                return Some(TrafficAction::FileSaveDirectoryChanged(
+                    self.config.file_save_directory.clone(),
+                ));
             }
             KeyCode::Esc => {
                 if self.dir_path_completion.visible {

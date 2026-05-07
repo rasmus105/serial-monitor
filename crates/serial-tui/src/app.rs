@@ -1286,6 +1286,15 @@ impl App {
             TrafficAction::RequestClear => {
                 self.needs_clear = true;
             }
+            TrafficAction::FileSaveDirectoryChanged(directory) => {
+                self.settings.traffic.file_save_directory = directory.clone();
+                self.settings.pre_connect.file_save_directory = directory;
+                if let Err(e) = self.settings.save() {
+                    self.toasts
+                        .error(format!("Failed to save file directory setting: {}", e));
+                }
+                self.needs_clear = true;
+            }
             TrafficAction::StartFileSaving => {
                 if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
                     let config = &state.traffic.config;
@@ -1813,6 +1822,8 @@ pub enum TrafficAction {
     Toast(crate::widget::Toast),
     /// Request a full terminal clear (for layout changes).
     RequestClear,
+    /// Persist the connected-session file save directory.
+    FileSaveDirectoryChanged(String),
     /// Start file saving with the current config.
     StartFileSaving,
     /// Stop file saving.
