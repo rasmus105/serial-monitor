@@ -34,7 +34,7 @@ use crate::{
     widget::{
         CompletionKind, CompletionPopup, CompletionState, ConfirmAction, ConfirmOverlay,
         ConfirmState, ConnectModal, ConnectModalAction, ConnectModalConfig, ConnectModalState,
-        HelpOverlay, SessionsModal, SessionsModalAction, SessionsModalState, Toasts,
+        HelpOverlay, InputHistory, SessionsModal, SessionsModalAction, SessionsModalState, Toasts,
         help_overlay::HelpOverlayState, text_input::TextInputState, toast::render_toasts,
     },
 };
@@ -125,6 +125,8 @@ pub struct App {
     pub focus: Focus,
     /// Command input state (vim-like ':' command mode).
     pub command_input: TextInputState,
+    /// Command input history for vim-like ':' command mode.
+    pub command_history: InputHistory,
     /// Whether command mode is active.
     pub command_mode: bool,
     /// Command completion state.
@@ -398,6 +400,7 @@ impl App {
             show_config: false,
             focus: Focus::Main,
             command_input: TextInputState::default().with_placeholder("Enter command..."),
+            command_history: InputHistory::default(),
             command_mode: false,
             completion: CompletionState::default(),
             needs_clear: false,
@@ -737,13 +740,30 @@ impl App {
                     match key.code {
                         KeyCode::Enter => {
                             let cmd = self.command_input.take();
+                            self.command_history.push(&cmd);
+                            self.command_history.reset_navigation();
                             self.command_mode = false;
                             self.completion.hide();
                             self.execute_command(&cmd).await;
                         }
                         KeyCode::Esc => {
+                            self.command_history.reset_navigation();
                             self.command_mode = false;
                             self.command_input.clear();
+                            self.completion.hide();
+                        }
+                        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if let Some(entry) =
+                                self.command_history.prev(self.command_input.content())
+                            {
+                                self.command_input.set_content(entry.to_string());
+                            }
+                            self.completion.hide();
+                        }
+                        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if let Some(entry) = self.command_history.next_entry() {
+                                self.command_input.set_content(entry.to_string());
+                            }
                             self.completion.hide();
                         }
                         KeyCode::Tab => {
@@ -761,6 +781,7 @@ impl App {
                             }
                         }
                         _ => {
+                            self.command_history.reset_navigation();
                             self.command_input.handle_key(key);
                             self.completion.hide();
                         }

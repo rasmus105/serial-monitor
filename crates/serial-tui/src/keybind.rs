@@ -266,6 +266,16 @@ pub fn all_keybinds() -> Vec<Keybind> {
         // Input mode
         Keybind::new(key(KeyCode::Enter), "Confirm input", KeyContext::Input),
         Keybind::new(key(KeyCode::Esc), "Cancel input", KeyContext::Input),
+        Keybind::new(
+            ctrl(KeyCode::Char('p')),
+            "Previous history entry",
+            KeyContext::Input,
+        ),
+        Keybind::new(
+            ctrl(KeyCode::Char('n')),
+            "Next history entry",
+            KeyContext::Input,
+        ),
     ]
 }
 

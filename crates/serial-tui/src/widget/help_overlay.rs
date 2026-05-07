@@ -737,6 +737,13 @@ fn render_commands(area: Rect, buf: &mut Buffer, scroll: usize) {
             Span::styled("Esc", Theme::keybind()),
             Span::raw(" to cancel."),
         ]),
+        Line::from(vec![
+            Span::raw("Use "),
+            Span::styled("Ctrl+p", Theme::keybind()),
+            Span::raw(" / "),
+            Span::styled("Ctrl+n", Theme::keybind()),
+            Span::raw(" to navigate command history."),
+        ]),
         Line::from(""),
         // Commands section
         Line::from(vec![Span::styled("Available Commands", Theme::title())]),
