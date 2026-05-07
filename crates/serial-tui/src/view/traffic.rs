@@ -571,8 +571,10 @@ impl TrafficView {
 
         if row < visible_start {
             self.scroll = row;
+            self.viewport_anchor = None;
         } else if row >= visible_end {
             self.scroll = row.saturating_sub(self.last_visible_height.saturating_sub(1));
+            self.viewport_anchor = None;
         }
     }
 
@@ -1628,6 +1630,7 @@ impl TrafficView {
                 if !self.config.lock_to_bottom {
                     self.scroll = self.scroll.saturating_add(1).min(max_scroll);
                     self.at_bottom = self.scroll >= max_scroll;
+                    self.viewport_anchor = None;
                 }
             }
             KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
@@ -1635,6 +1638,7 @@ impl TrafficView {
                 if !self.config.lock_to_bottom {
                     self.scroll = self.scroll.saturating_sub(1);
                     self.at_bottom = self.scroll >= max_scroll;
+                    self.viewport_anchor = None;
                 }
             }
             KeyCode::Char('d') if has_ctrl => {
@@ -1642,6 +1646,7 @@ impl TrafficView {
                 if !self.config.lock_to_bottom {
                     self.scroll = self.scroll.saturating_add(half_page).min(max_scroll);
                     self.at_bottom = self.scroll >= max_scroll;
+                    self.viewport_anchor = None;
                 }
             }
             KeyCode::Char('u') if has_ctrl => {
@@ -1649,6 +1654,7 @@ impl TrafficView {
                 if !self.config.lock_to_bottom {
                     self.scroll = self.scroll.saturating_sub(half_page);
                     self.at_bottom = self.scroll >= max_scroll;
+                    self.viewport_anchor = None;
                 }
             }
             KeyCode::Char('g') => {
@@ -1656,6 +1662,7 @@ impl TrafficView {
                 if !self.config.lock_to_bottom {
                     self.scroll = 0;
                     self.at_bottom = false;
+                    self.viewport_anchor = None;
                 }
             }
             KeyCode::Char('G') => {
@@ -1663,6 +1670,7 @@ impl TrafficView {
                 self.scroll = max_scroll;
                 self.config.auto_scroll = true;
                 self.at_bottom = true;
+                self.viewport_anchor = None;
             }
             KeyCode::Char('/') => {
                 self.search_focused = true;
@@ -1711,6 +1719,7 @@ impl TrafficView {
                         let offset = self.last_visible_height / 2;
                         self.scroll = pos.saturating_sub(offset);
                         self.at_bottom = self.scroll >= max_scroll;
+                        self.viewport_anchor = None;
                     }
                 }
             }
@@ -1746,6 +1755,7 @@ impl TrafficView {
                         let offset = self.last_visible_height / 2;
                         self.scroll = pos.saturating_sub(offset);
                         self.at_bottom = self.scroll >= max_scroll;
+                        self.viewport_anchor = None;
                     }
                 }
             }
@@ -2158,6 +2168,7 @@ impl TrafficView {
                     // Position match with 20% of visible height above it (like vim scrolloff)
                     let offset = self.last_visible_height / 5;
                     self.scroll = pos.saturating_sub(offset);
+                    self.viewport_anchor = None;
                 }
 
                 // Layout changed - request clear to avoid artifacts
