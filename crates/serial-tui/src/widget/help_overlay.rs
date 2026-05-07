@@ -1,5 +1,7 @@
 //! Help overlay widget.
 
+use std::borrow::Cow;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
@@ -63,12 +65,19 @@ impl HelpTab {
 const AUTO_SAVE_FORMAT_OPTIONS: &[&str] = &["Raw Binary", "Encoded Text"];
 const AUTO_SAVE_ENCODING_OPTIONS: &[&str] = &["UTF-8", "ASCII", "Hex", "Binary"];
 const PATTERN_MODE_OPTIONS: &[&str] = &["Normal", "Regex"];
-const BUFFER_SIZE_OPTIONS: &[&str] = &["1 MB", "5 MB", "10 MB", "50 MB", "100 MB", "Unlimited"];
+const SCROLLBACK_UNIT_OPTIONS: &[&str] = &["KB", "MB", "GB"];
 const MAX_SESSIONS_OPTIONS: &[&str] = &["5", "10", "20", "50", "100"];
 const FILE_SAVE_SCOPE_OPTIONS: &[&str] = &["Existing Only", "New Only", "Existing + Continue"];
 
 /// Max sessions values corresponding to MAX_SESSIONS_OPTIONS
 const MAX_SESSIONS_VALUES: &[usize] = &[5, 10, 20, 50, 100];
+
+fn validate_positive_usize(value: &FieldValue) -> Result<(), Cow<'static, str>> {
+    match value.as_usize() {
+        Some(value) if value > 0 => Ok(()),
+        _ => Err(Cow::Borrowed("Must be at least 1")),
+    }
+}
 
 static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
     Section {
@@ -331,24 +340,59 @@ static SETTINGS_SECTIONS: &[Section<AppSettings>] = &[
         ],
     },
     Section {
-        header: Some("Buffer"),
-        fields: &[FieldDef {
-            id: "buffer_size",
-            label: "Buffer Size",
-            kind: FieldKind::Select {
-                options: BUFFER_SIZE_OPTIONS,
+        header: Some("Scrollback"),
+        fields: &[
+            FieldDef {
+                id: "scrollback_limit_enabled",
+                label: "Scrollback Limit",
+                kind: FieldKind::Toggle,
+                get: |c| FieldValue::Bool(c.scrollback_limit_enabled),
+                set: |c, v| {
+                    if let FieldValue::Bool(b) = v {
+                        c.scrollback_limit_enabled = b;
+                    }
+                },
+                visible: always_visible,
+                enabled: always_enabled,
+                parent_id: None,
+                validate: always_valid,
             },
-            get: |c| FieldValue::OptionIndex(c.buffer_size_index),
-            set: |c, v| {
-                if let FieldValue::OptionIndex(i) = v {
-                    c.buffer_size_index = i;
-                }
+            FieldDef {
+                id: "scrollback_limit_value",
+                label: "Limit Size",
+                kind: FieldKind::NumericInput {
+                    min: Some(1),
+                    max: None,
+                },
+                get: |c| FieldValue::Usize(c.scrollback_limit_value),
+                set: |c, v| {
+                    if let FieldValue::Usize(value) = v {
+                        c.scrollback_limit_value = value.max(1);
+                    }
+                },
+                visible: always_visible,
+                enabled: |c| c.scrollback_limit_enabled,
+                parent_id: Some("scrollback_limit_enabled"),
+                validate: validate_positive_usize,
             },
-            visible: always_visible,
-            enabled: always_enabled,
-            parent_id: None,
-            validate: always_valid,
-        }],
+            FieldDef {
+                id: "scrollback_limit_unit",
+                label: "Limit Unit",
+                kind: FieldKind::Select {
+                    options: SCROLLBACK_UNIT_OPTIONS,
+                },
+                get: |c| FieldValue::OptionIndex(c.scrollback_limit_unit_index),
+                set: |c, v| {
+                    if let FieldValue::OptionIndex(i) = v {
+                        c.scrollback_limit_unit_index = i;
+                    }
+                },
+                visible: always_visible,
+                enabled: |c| c.scrollback_limit_enabled,
+                parent_id: Some("scrollback_limit_enabled"),
+                validate: always_valid,
+            },
+        ],
     },
     Section {
         header: Some("System"),

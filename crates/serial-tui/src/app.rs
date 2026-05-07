@@ -855,7 +855,7 @@ impl App {
                             let session_config = SessionConfig {
                                 rx_chunking,
                                 tx_chunking: ChunkingStrategy::Raw,
-                                buffer_size: settings.buffer_size(),
+                                buffer_size: settings.scrollback_limit_bytes(),
                                 auto_save: settings.to_auto_save_config(),
                             };
                             self.connect(ConnectConfig {

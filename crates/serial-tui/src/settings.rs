@@ -290,9 +290,16 @@ pub struct GlobalSettings {
     /// Default filter mode.
     pub filter_mode_index: usize,
 
-    // === Buffer settings ===
-    /// Buffer size index.
-    pub buffer_size_index: usize,
+    // === Scrollback settings ===
+    /// Whether retained traffic history has a memory limit.
+    pub scrollback_limit_enabled: bool,
+    /// Numeric scrollback limit value.
+    pub scrollback_limit_value: usize,
+    /// Scrollback limit unit index.
+    pub scrollback_limit_unit_index: usize,
+    /// Legacy preset index from settings files saved before scrollback became configurable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buffer_size_index: Option<usize>,
 
     // === System settings ===
     /// Keep system awake while connected.
@@ -323,8 +330,11 @@ impl Default for GlobalSettings {
             search_mode_index: 0, // Normal
             filter_mode_index: 0, // Normal
 
-            // Buffer defaults
-            buffer_size_index: 2, // 10 MB
+            // Scrollback defaults
+            scrollback_limit_enabled: true,
+            scrollback_limit_value: 10,
+            scrollback_limit_unit_index: 1, // MB
+            buffer_size_index: None,
 
             // System defaults
             keep_awake: true,
@@ -332,14 +342,11 @@ impl Default for GlobalSettings {
     }
 }
 
-/// Buffer sizes in bytes corresponding to buffer_size_index options.
-pub const BUFFER_SIZES: &[usize] = &[
-    1024 * 1024,       // 1 MB
-    5 * 1024 * 1024,   // 5 MB
-    10 * 1024 * 1024,  // 10 MB
-    50 * 1024 * 1024,  // 50 MB
-    100 * 1024 * 1024, // 100 MB
-    usize::MAX,        // Unlimited
+/// Scrollback size units in bytes.
+pub const SCROLLBACK_UNIT_BYTES: &[usize] = &[
+    1024,               // KB
+    1024 * 1024,        // MB
+    1024 * 1024 * 1024, // GB
 ];
 
 impl GlobalSettings {
@@ -378,12 +385,57 @@ impl GlobalSettings {
         }
     }
 
-    /// Get the buffer size in bytes (usize::MAX for unlimited).
-    pub fn buffer_size(&self) -> usize {
-        BUFFER_SIZES
-            .get(self.buffer_size_index)
+    /// Get the scrollback limit in bytes (usize::MAX for unlimited).
+    pub fn scrollback_limit_bytes(&self) -> usize {
+        if !self.scrollback_limit_enabled {
+            return usize::MAX;
+        }
+
+        let unit = SCROLLBACK_UNIT_BYTES
+            .get(self.scrollback_limit_unit_index)
             .copied()
-            .unwrap_or(usize::MAX)
+            .unwrap_or(1024 * 1024);
+
+        self.scrollback_limit_value.max(1).saturating_mul(unit)
+    }
+
+    /// Migrate old fixed buffer-size presets to the configurable scrollback limit.
+    fn migrate_legacy_buffer_size(&mut self) {
+        let Some(index) = self.buffer_size_index.take() else {
+            return;
+        };
+
+        match index {
+            0 => {
+                self.scrollback_limit_enabled = true;
+                self.scrollback_limit_value = 1;
+                self.scrollback_limit_unit_index = 1;
+            }
+            1 => {
+                self.scrollback_limit_enabled = true;
+                self.scrollback_limit_value = 5;
+                self.scrollback_limit_unit_index = 1;
+            }
+            2 => {
+                self.scrollback_limit_enabled = true;
+                self.scrollback_limit_value = 10;
+                self.scrollback_limit_unit_index = 1;
+            }
+            3 => {
+                self.scrollback_limit_enabled = true;
+                self.scrollback_limit_value = 50;
+                self.scrollback_limit_unit_index = 1;
+            }
+            4 => {
+                self.scrollback_limit_enabled = true;
+                self.scrollback_limit_value = 100;
+                self.scrollback_limit_unit_index = 1;
+            }
+            5 => {
+                self.scrollback_limit_enabled = false;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -393,8 +445,11 @@ impl TuiSettings {
     /// Returns default settings if the file doesn't exist or cannot be parsed.
     pub fn load() -> Self {
         let config_dir = settings::config_directory(APP_NAME);
-        match settings::load_or_default(&config_dir, SETTINGS_FILE) {
-            Ok(settings) => settings,
+        match settings::load_or_default::<Self>(&config_dir, SETTINGS_FILE) {
+            Ok(mut settings) => {
+                settings.global.migrate_legacy_buffer_size();
+                settings
+            }
             Err(e) => {
                 eprintln!("Warning: Failed to load settings: {}", e);
                 Self::default()
@@ -406,5 +461,68 @@ impl TuiSettings {
     pub fn save(&self) -> Result<(), settings::SettingsError> {
         let config_dir = settings::config_directory(APP_NAME);
         settings::save(&config_dir, SETTINGS_FILE, self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_scrollback_limit_is_ten_mb() {
+        assert_eq!(
+            GlobalSettings::default().scrollback_limit_bytes(),
+            10 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn disabled_scrollback_limit_is_unlimited() {
+        let settings = GlobalSettings {
+            scrollback_limit_enabled: false,
+            ..Default::default()
+        };
+
+        assert_eq!(settings.scrollback_limit_bytes(), usize::MAX);
+    }
+
+    #[test]
+    fn scrollback_limit_uses_selected_unit() {
+        let settings = GlobalSettings {
+            scrollback_limit_value: 2,
+            scrollback_limit_unit_index: 2,
+            ..Default::default()
+        };
+
+        assert_eq!(settings.scrollback_limit_bytes(), 2 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn legacy_buffer_size_preset_migrates_to_configurable_limit() {
+        let mut settings = GlobalSettings {
+            buffer_size_index: Some(3),
+            ..Default::default()
+        };
+
+        settings.migrate_legacy_buffer_size();
+
+        assert!(settings.scrollback_limit_enabled);
+        assert_eq!(settings.scrollback_limit_value, 50);
+        assert_eq!(settings.scrollback_limit_unit_index, 1);
+        assert_eq!(settings.buffer_size_index, None);
+    }
+
+    #[test]
+    fn legacy_unlimited_preset_migrates_to_disabled_limit() {
+        let mut settings = GlobalSettings {
+            buffer_size_index: Some(5),
+            ..Default::default()
+        };
+
+        settings.migrate_legacy_buffer_size();
+
+        assert!(!settings.scrollback_limit_enabled);
+        assert_eq!(settings.scrollback_limit_bytes(), usize::MAX);
+        assert_eq!(settings.buffer_size_index, None);
     }
 }
