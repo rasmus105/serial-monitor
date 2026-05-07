@@ -329,6 +329,7 @@ mod tests {
 
     fn raw_chunk(data: &str) -> RawChunk {
         RawChunk {
+            sequence: 0,
             data: data.as_bytes().to_vec(),
             direction: Direction::Rx,
             timestamp: SystemTime::now(),

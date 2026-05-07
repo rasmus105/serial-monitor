@@ -164,6 +164,10 @@ pub struct DataBuffer {
     #[builder(skip)]
     current_size: usize,
 
+    /// Next stable chunk identity. Unlike visible/raw indices, this never shifts on truncation.
+    #[builder(skip)]
+    next_sequence: u64,
+
     /// Graph engine (lazy initialized)
     #[builder(skip)]
     graph: Option<GraphEngine>,
@@ -194,10 +198,12 @@ impl DataBuffer {
         let encoded_str = self.encode_chunk(&data);
 
         let raw = RawChunk {
+            sequence: self.next_sequence,
             data,
             direction,
             timestamp,
         };
+        self.next_sequence = self.next_sequence.wrapping_add(1);
 
         // Save to file if active (before adding to buffer to access raw data)
         if let Some(ref saver) = self.file_saver {
@@ -285,6 +291,7 @@ impl DataBuffer {
         self.encoded.clear();
         self.filtered_indices.clear();
         self.current_size = 0;
+        self.next_sequence = 0;
         self.search.invalidate();
         if let Some(ref mut graph) = self.graph {
             graph.clear();
@@ -307,6 +314,7 @@ impl DataBuffer {
         };
 
         indices.map(move |i| ChunkView {
+            sequence: self.raw_chunks[i].sequence,
             encoded: &self.encoded[i],
             direction: self.raw_chunks[i].direction,
             timestamp: self.raw_chunks[i].timestamp,
@@ -339,6 +347,7 @@ impl DataBuffer {
         };
 
         Some(ChunkView {
+            sequence: self.raw_chunks[chunk_index].sequence,
             encoded: &self.encoded[chunk_index],
             direction: self.raw_chunks[chunk_index].direction,
             timestamp: self.raw_chunks[chunk_index].timestamp,
@@ -893,5 +902,24 @@ mod tests {
         assert!(buffer.graph().unwrap().series.is_empty());
         assert_eq!(buffer.filter_pattern(), Some("temp"));
         assert_eq!(buffer.search_pattern(), Some("temp"));
+    }
+
+    #[test]
+    fn chunk_sequence_stays_monotonic_when_truncated() {
+        let mut buffer = DataBuffer::builder().max_size(3).build();
+        let timestamp = SystemTime::now();
+
+        for byte in b'a'..=b'e' {
+            buffer.push(vec![byte], Direction::Rx, timestamp);
+        }
+
+        let sequences: Vec<_> = buffer.chunks().map(|chunk| chunk.sequence).collect();
+        let contents: Vec<_> = buffer
+            .chunks()
+            .map(|chunk| chunk.encoded.to_string())
+            .collect();
+
+        assert_eq!(sequences, vec![2, 3, 4]);
+        assert_eq!(contents, vec!["c", "d", "e"]);
     }
 }

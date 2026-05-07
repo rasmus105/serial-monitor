@@ -350,6 +350,7 @@ impl AutoSaveSender {
     /// without manually constructing a `RawChunk`.
     pub fn write_new(&self, data: Vec<u8>, direction: Direction, timestamp: SystemTime) {
         self.write(&RawChunk {
+            sequence: 0,
             data,
             direction,
             timestamp,
@@ -675,6 +676,7 @@ mod tests {
     #[test]
     fn write_chunk_raw() {
         let chunk = RawChunk {
+            sequence: 0,
             data: vec![0x48, 0x65, 0x6c, 0x6c, 0x6f], // "Hello"
             direction: Direction::Rx,
             timestamp: SystemTime::now(),
@@ -688,6 +690,7 @@ mod tests {
     #[test]
     fn write_chunk_encoded_no_metadata() {
         let chunk = RawChunk {
+            sequence: 0,
             data: b"Hello".to_vec(),
             direction: Direction::Rx,
             timestamp: SystemTime::now(),
@@ -707,6 +710,7 @@ mod tests {
     #[test]
     fn write_chunk_encoded_with_direction() {
         let chunk = RawChunk {
+            sequence: 0,
             data: b"test".to_vec(),
             direction: Direction::Tx,
             timestamp: SystemTime::now(),

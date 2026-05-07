@@ -27,6 +27,8 @@ pub enum Direction {
 /// This type is `pub(crate)` - frontends never see it directly.
 #[derive(Debug, Clone)]
 pub(crate) struct RawChunk {
+    /// Stable monotonic identity for viewport anchoring.
+    pub sequence: u64,
     /// Raw bytes as received/sent
     pub data: Vec<u8>,
     /// Direction (TX/RX)
@@ -46,6 +48,8 @@ pub(crate) struct RawChunk {
 /// ensuring the view remains valid while iterating.
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkView<'a> {
+    /// Stable monotonic identity for this chunk.
+    pub sequence: u64,
     /// Encoded string representation
     pub encoded: &'a str,
     /// Direction (TX/RX)

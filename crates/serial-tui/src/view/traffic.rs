@@ -80,12 +80,22 @@ pub struct TrafficView {
     last_content_width: usize,
     /// Whether the view is currently scrolled to the bottom.
     at_bottom: bool,
+    /// Top visible chunk from the previous render, used to compensate front trimming.
+    viewport_anchor: Option<ViewportAnchor>,
+    /// First visible chunk sequence from the previous render.
+    last_first_sequence: Option<u64>,
     /// Visual mode state: whether visual selection is active.
     pub visual_mode: bool,
     /// Visual mode anchor: the chunk index where selection started.
     pub visual_anchor: usize,
     /// Visual mode cursor: the current chunk index in selection.
     pub visual_cursor: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ViewportAnchor {
+    sequence: u64,
+    line_within_chunk: usize,
 }
 
 /// Traffic view configuration.
@@ -452,6 +462,8 @@ impl TrafficView {
             last_visible_height: 20, // Conservative default
             last_content_width: 80,  // Conservative default
             at_bottom: true,         // Start at bottom
+            viewport_anchor: None,
+            last_first_sequence: None,
             visual_mode: false,
             visual_anchor: 0,
             visual_cursor: 0,
@@ -465,6 +477,8 @@ impl TrafficView {
     pub fn reset_buffer_view(&mut self) {
         self.scroll = 0;
         self.at_bottom = true;
+        self.viewport_anchor = None;
+        self.last_first_sequence = None;
         self.visual_mode = false;
         self.visual_anchor = 0;
         self.visual_cursor = 0;
@@ -787,6 +801,75 @@ impl TrafficView {
         }
     }
 
+    fn should_preserve_viewport(
+        &self,
+        first_sequence: Option<u64>,
+        should_auto_scroll: bool,
+    ) -> bool {
+        if should_auto_scroll {
+            return false;
+        }
+
+        match (
+            self.last_first_sequence,
+            first_sequence,
+            self.viewport_anchor,
+        ) {
+            (Some(previous), Some(current), Some(_)) => current > previous,
+            _ => false,
+        }
+    }
+
+    fn scroll_for_anchor_truncated(
+        &self,
+        buffer: &serial_core::buffer::DataBuffer,
+    ) -> Option<usize> {
+        let anchor = self.viewport_anchor?;
+        buffer
+            .chunks()
+            .enumerate()
+            .find_map(|(idx, chunk)| (chunk.sequence >= anchor.sequence).then_some(idx))
+    }
+
+    fn update_anchor_truncated(&mut self, buffer: &serial_core::buffer::DataBuffer, scroll: usize) {
+        self.viewport_anchor = buffer.get(scroll).map(|chunk| ViewportAnchor {
+            sequence: chunk.sequence,
+            line_within_chunk: 0,
+        });
+        self.last_first_sequence = buffer.chunks().next().map(|chunk| chunk.sequence);
+    }
+
+    fn scroll_for_anchor_wrapped(
+        &self,
+        chunks: &[serial_core::buffer::ChunkView<'_>],
+        display_lines: &[(usize, usize)],
+    ) -> Option<usize> {
+        let anchor = self.viewport_anchor?;
+        display_lines
+            .iter()
+            .position(|&(chunk_idx, line_within_chunk)| {
+                let sequence = chunks[chunk_idx].sequence;
+                sequence > anchor.sequence
+                    || (sequence == anchor.sequence
+                        && line_within_chunk >= anchor.line_within_chunk)
+            })
+    }
+
+    fn update_anchor_wrapped(
+        &mut self,
+        chunks: &[serial_core::buffer::ChunkView<'_>],
+        display_lines: &[(usize, usize)],
+        scroll: usize,
+    ) {
+        self.viewport_anchor = display_lines
+            .get(scroll)
+            .map(|&(chunk_idx, line_within_chunk)| ViewportAnchor {
+                sequence: chunks[chunk_idx].sequence,
+                line_within_chunk,
+            });
+        self.last_first_sequence = chunks.first().map(|chunk| chunk.sequence);
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_traffic_truncated(
         &mut self,
@@ -819,12 +902,18 @@ impl TrafficView {
         let max_scroll = max_scroll_content + bottom_padding;
         let should_auto_scroll =
             self.config.lock_to_bottom || (self.config.auto_scroll && self.at_bottom);
+        let first_sequence = buffer.chunks().next().map(|chunk| chunk.sequence);
         let scroll = if should_auto_scroll && total > 0 {
             max_scroll
+        } else if self.should_preserve_viewport(first_sequence, should_auto_scroll) {
+            self.scroll_for_anchor_truncated(buffer)
+                .unwrap_or(self.scroll)
+                .min(max_scroll)
         } else {
             self.scroll.min(max_scroll)
         };
         self.scroll = scroll;
+        self.update_anchor_truncated(buffer, scroll.min(max_scroll_content));
         // Update at_bottom based on final scroll position (using padded max)
         self.at_bottom = total == 0 || scroll >= max_scroll;
 
@@ -989,12 +1078,18 @@ impl TrafficView {
         let max_scroll = max_scroll_content + bottom_padding;
         let should_auto_scroll =
             self.config.lock_to_bottom || (self.config.auto_scroll && self.at_bottom);
+        let first_sequence = chunks.first().map(|chunk| chunk.sequence);
         let scroll = if should_auto_scroll && total_display_lines > 0 {
             max_scroll
+        } else if self.should_preserve_viewport(first_sequence, should_auto_scroll) {
+            self.scroll_for_anchor_wrapped(&chunks, &display_lines)
+                .unwrap_or(self.scroll)
+                .min(max_scroll)
         } else {
             self.scroll.min(max_scroll)
         };
         self.scroll = scroll;
+        self.update_anchor_wrapped(&chunks, &display_lines, scroll.min(max_scroll_content));
         // Update at_bottom based on final scroll position (using padded max)
         self.at_bottom = total_display_lines == 0 || scroll >= max_scroll;
 
@@ -1753,9 +1848,13 @@ impl TrafficView {
                 // If filter was toggled, adjust scroll to keep the same line centered
                 if toggling_filter
                     && (self.config.show_tx != show_tx_was || self.config.show_rx != show_rx_was)
-                    && let Some(raw_idx) = middle_raw_index
                 {
-                    self.scroll_to_center_raw_index(raw_idx, handle);
+                    if let Some(raw_idx) = middle_raw_index {
+                        self.scroll_to_center_raw_index(raw_idx, handle);
+                    } else {
+                        self.viewport_anchor = None;
+                        self.last_first_sequence = None;
+                    }
                 }
 
                 // Check if file_save_enabled was toggled
@@ -1815,6 +1914,9 @@ impl TrafficView {
 
     /// Scroll to center a raw chunk index in the view.
     fn scroll_to_center_raw_index(&mut self, raw_index: usize, handle: &SessionHandle) {
+        self.viewport_anchor = None;
+        self.last_first_sequence = None;
+
         let buffer = handle.buffer();
 
         // Find where this raw index ends up in the new filtered view
@@ -2342,5 +2444,50 @@ impl TrafficView {
             send_suffix_enabled: self.config.send_suffix_enabled,
             send_suffix: self.config.send_suffix.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::SystemTime;
+
+    use serial_core::buffer::{DataBuffer, Direction};
+
+    use super::*;
+
+    #[test]
+    fn truncated_anchor_uses_nearest_surviving_chunk_after_front_trim() {
+        let mut buffer = DataBuffer::builder().max_size(3).build();
+        let timestamp = SystemTime::now();
+        for byte in b'a'..=b'e' {
+            buffer.push(vec![byte], Direction::Rx, timestamp);
+        }
+
+        let mut view = TrafficView::new();
+        view.viewport_anchor = Some(ViewportAnchor {
+            sequence: 1,
+            line_within_chunk: 0,
+        });
+
+        assert_eq!(view.scroll_for_anchor_truncated(&buffer), Some(0));
+    }
+
+    #[test]
+    fn wrapped_anchor_preserves_line_within_retained_chunk() {
+        let mut buffer = DataBuffer::default();
+        buffer.push(b"abcd".to_vec(), Direction::Rx, SystemTime::now());
+        let chunks: Vec<_> = buffer.chunks().collect();
+        let display_lines = vec![(0, 0), (0, 1), (0, 2), (0, 3)];
+
+        let mut view = TrafficView::new();
+        view.viewport_anchor = Some(ViewportAnchor {
+            sequence: chunks[0].sequence,
+            line_within_chunk: 2,
+        });
+
+        assert_eq!(
+            view.scroll_for_anchor_wrapped(&chunks, &display_lines),
+            Some(2)
+        );
     }
 }
