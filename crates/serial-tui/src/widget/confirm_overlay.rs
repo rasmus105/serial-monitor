@@ -18,18 +18,28 @@ pub struct ConfirmState {
     pub visible: bool,
     /// The prompt message to display.
     pub message: String,
+    /// Action to run when the user confirms.
+    pub action: Option<ConfirmAction>,
+}
+
+/// Action pending in a confirmation dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmAction {
+    CloseActiveSession,
 }
 
 impl ConfirmState {
     /// Show the confirmation dialog with the given message.
-    pub fn show(&mut self, message: impl Into<String>) {
+    pub fn show(&mut self, message: impl Into<String>, action: ConfirmAction) {
         self.visible = true;
         self.message = message.into();
+        self.action = Some(action);
     }
 
     /// Hide the dialog.
     pub fn hide(&mut self) {
         self.visible = false;
+        self.action = None;
     }
 }
 

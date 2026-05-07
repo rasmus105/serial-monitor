@@ -32,9 +32,9 @@ use crate::{
         traffic::TrafficView,
     },
     widget::{
-        CompletionKind, CompletionPopup, CompletionState, ConfirmOverlay, ConfirmState,
-        ConnectModal, ConnectModalAction, ConnectModalConfig, ConnectModalState, HelpOverlay,
-        SessionsModal, SessionsModalAction, SessionsModalState, Toasts,
+        CompletionKind, CompletionPopup, CompletionState, ConfirmAction, ConfirmOverlay,
+        ConfirmState, ConnectModal, ConnectModalAction, ConnectModalConfig, ConnectModalState,
+        HelpOverlay, SessionsModal, SessionsModalAction, SessionsModalState, Toasts,
         help_overlay::HelpOverlayState, text_input::TextInputState, toast::render_toasts,
     },
 };
@@ -777,9 +777,15 @@ impl App {
                 if self.confirm.visible {
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            let action = self.confirm.action;
                             self.confirm.hide();
                             self.needs_clear = true;
-                            self.disconnect().await;
+                            match action {
+                                Some(ConfirmAction::CloseActiveSession) => {
+                                    self.quit_active_session().await;
+                                }
+                                None => {}
+                            }
                         }
                         KeyCode::Char('n')
                         | KeyCode::Char('N')
@@ -882,7 +888,9 @@ impl App {
                             self.sessions.active_state(),
                             Some(SessionState::Connected(_))
                         ) {
-                            self.quit_active_session().await;
+                            self.confirm
+                                .show("Close active session?", ConfirmAction::CloseActiveSession);
+                            self.needs_clear = true;
                         } else {
                             self.should_quit = true;
                         }
