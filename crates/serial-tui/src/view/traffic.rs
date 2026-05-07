@@ -84,18 +84,28 @@ pub struct TrafficView {
     viewport_anchor: Option<ViewportAnchor>,
     /// First visible chunk sequence from the previous render.
     last_first_sequence: Option<u64>,
-    /// Visual mode state: whether visual selection is active.
-    pub visual_mode: bool,
-    /// Visual mode anchor: the chunk index where selection started.
-    pub visual_anchor: usize,
-    /// Visual mode cursor: the current chunk index in selection.
-    pub visual_cursor: usize,
+    /// Explicit cursor/selection state for yanking visible traffic rows.
+    cursor_mode: TrafficCursorMode,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ViewportAnchor {
     sequence: u64,
     line_within_chunk: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrafficCursorMode {
+    Normal,
+    Cursor { row: usize },
+    Visual { anchor: usize, cursor: usize },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DisplayRow {
+    chunk_idx: usize,
+    byte_start: usize,
+    byte_end: usize,
 }
 
 /// Traffic view configuration.
@@ -464,9 +474,7 @@ impl TrafficView {
             at_bottom: true,         // Start at bottom
             viewport_anchor: None,
             last_first_sequence: None,
-            visual_mode: false,
-            visual_anchor: 0,
-            visual_cursor: 0,
+            cursor_mode: TrafficCursorMode::Normal,
         }
     }
 
@@ -479,132 +487,167 @@ impl TrafficView {
         self.at_bottom = true;
         self.viewport_anchor = None;
         self.last_first_sequence = None;
-        self.visual_mode = false;
-        self.visual_anchor = 0;
-        self.visual_cursor = 0;
+        self.cursor_mode = TrafficCursorMode::Normal;
     }
 
-    /// Enter visual mode at the current scroll position.
-    fn enter_visual_mode(&mut self, handle: &SessionHandle) {
-        let chunk_idx = self.scroll_to_chunk_index(handle);
-        self.visual_mode = true;
-        self.visual_anchor = chunk_idx;
-        self.visual_cursor = chunk_idx;
+    fn display_rows(&self, buffer: &serial_core::buffer::DataBuffer) -> Vec<DisplayRow> {
+        let content_width = self.last_content_width.max(1);
+        let mut rows = Vec::new();
+
+        for (chunk_idx, chunk) in buffer.chunks().enumerate() {
+            if !self.config.wrap_text {
+                rows.push(DisplayRow {
+                    chunk_idx,
+                    byte_start: 0,
+                    byte_end: chunk.encoded.len(),
+                });
+                continue;
+            }
+
+            let num_lines = chunk.encoded.width().div_ceil(content_width).max(1);
+            for line_within_chunk in 0..num_lines {
+                let display_start = line_within_chunk * content_width;
+                let display_end = display_start + content_width;
+                let (byte_start, byte_end) =
+                    slice_by_display_width(chunk.encoded, display_start, display_end);
+                rows.push(DisplayRow {
+                    chunk_idx,
+                    byte_start,
+                    byte_end,
+                });
+            }
+        }
+
+        rows
     }
 
-    /// Exit visual mode.
-    fn exit_visual_mode(&mut self) {
-        self.visual_mode = false;
+    fn cursor_row(&self) -> Option<usize> {
+        match self.cursor_mode {
+            TrafficCursorMode::Normal => None,
+            TrafficCursorMode::Cursor { row } => Some(row),
+            TrafficCursorMode::Visual { cursor, .. } => Some(cursor),
+        }
     }
 
-    /// Move visual cursor and update scroll position.
-    fn visual_move(&mut self, new_cursor: usize, handle: &SessionHandle) {
-        let chunk_count = handle.buffer().len();
-        self.visual_cursor = new_cursor.min(chunk_count.saturating_sub(1));
+    fn visual_row_range(&self) -> Option<(usize, usize)> {
+        match self.cursor_mode {
+            TrafficCursorMode::Visual { anchor, cursor } => {
+                Some((anchor.min(cursor), anchor.max(cursor)))
+            }
+            _ => None,
+        }
+    }
 
-        // Update scroll to keep cursor visible
-        let display_line = self.chunk_to_scroll_position(self.visual_cursor, handle);
+    fn enter_cursor_mode(&mut self, handle: &SessionHandle) {
+        let buffer = handle.buffer();
+        let rows = self.display_rows(&buffer);
+        if rows.is_empty() {
+            return;
+        }
+
+        let current_match_row = buffer.current_match().and_then(|m| {
+            rows.iter()
+                .position(|row| row.chunk_idx == m.visible_index && row.byte_end > m.byte_start)
+        });
+        let viewport_row = self.scroll + self.last_visible_height / 2;
+        let row = current_match_row
+            .unwrap_or(viewport_row)
+            .min(rows.len().saturating_sub(1));
+
+        self.config.auto_scroll = false;
+        self.config.lock_to_bottom = false;
+        self.at_bottom = false;
+        self.cursor_mode = TrafficCursorMode::Cursor { row };
+        self.keep_cursor_visible(row);
+    }
+
+    fn exit_cursor_mode(&mut self) {
+        self.cursor_mode = TrafficCursorMode::Normal;
+    }
+
+    fn keep_cursor_visible(&mut self, row: usize) {
         let visible_start = self.scroll;
         let visible_end = self.scroll + self.last_visible_height;
 
-        if display_line < visible_start {
-            self.scroll = display_line;
-        } else if display_line >= visible_end {
-            self.scroll = display_line.saturating_sub(self.last_visible_height - 1);
+        if row < visible_start {
+            self.scroll = row;
+        } else if row >= visible_end {
+            self.scroll = row.saturating_sub(self.last_visible_height.saturating_sub(1));
         }
     }
 
-    /// Get the selected chunk range (start, end) inclusive.
-    fn visual_selection_range(&self) -> (usize, usize) {
-        let start = self.visual_anchor.min(self.visual_cursor);
-        let end = self.visual_anchor.max(self.visual_cursor);
-        (start, end)
-    }
-
-    /// Convert scroll position to chunk index at the center of visible area.
-    fn scroll_to_chunk_index(&self, handle: &SessionHandle) -> usize {
-        // Target the center of the visible area, not the top
-        let center_line = self.scroll + self.last_visible_height / 2;
-
-        if !self.config.wrap_text {
-            return center_line;
+    fn move_cursor(&mut self, new_row: usize, handle: &SessionHandle) {
+        let rows = self.display_rows(&handle.buffer());
+        if rows.is_empty() {
+            self.exit_cursor_mode();
+            return;
         }
 
-        // In wrap mode, need to find which chunk contains this display line
+        let row = new_row.min(rows.len().saturating_sub(1));
+        self.cursor_mode = match self.cursor_mode {
+            TrafficCursorMode::Normal => TrafficCursorMode::Cursor { row },
+            TrafficCursorMode::Cursor { .. } => TrafficCursorMode::Cursor { row },
+            TrafficCursorMode::Visual { anchor, .. } => TrafficCursorMode::Visual {
+                anchor,
+                cursor: row,
+            },
+        };
+        self.keep_cursor_visible(row);
+        self.at_bottom = false;
+    }
+
+    fn yank_cursor_selection(&mut self, handle: &SessionHandle) -> Option<String> {
         let buffer = handle.buffer();
-        let content_width = self.last_content_width.max(1);
-        let mut display_line = 0;
-
-        for (idx, chunk) in buffer.chunks().enumerate() {
-            let chunk_lines = chunk.encoded.width().div_ceil(content_width).max(1);
-            if display_line + chunk_lines > center_line {
-                return idx;
+        let rows = self.display_rows(&buffer);
+        if rows.is_empty() {
+            self.exit_cursor_mode();
+            return None;
+        }
+        let (start, end) = match self.cursor_mode {
+            TrafficCursorMode::Normal => return None,
+            TrafficCursorMode::Cursor { row } => (row, row),
+            TrafficCursorMode::Visual { anchor, cursor } => {
+                (anchor.min(cursor), anchor.max(cursor))
             }
-            display_line += chunk_lines;
-        }
+        };
+        let start = start.min(rows.len().saturating_sub(1));
+        let end = end.min(rows.len().saturating_sub(1));
 
-        buffer.len().saturating_sub(1)
-    }
-
-    /// Convert chunk index to scroll position (display line in wrap mode).
-    fn chunk_to_scroll_position(&self, chunk_idx: usize, handle: &SessionHandle) -> usize {
-        if !self.config.wrap_text {
-            return chunk_idx;
-        }
-
-        // In wrap mode, sum display lines of all chunks before this one
-        let buffer = handle.buffer();
-        let content_width = self.last_content_width.max(1);
-        let mut display_line = 0;
-
-        for (idx, chunk) in buffer.chunks().enumerate() {
-            if idx >= chunk_idx {
-                break;
-            }
-            display_line += chunk.encoded.width().div_ceil(content_width).max(1);
-        }
-
-        display_line
-    }
-
-    /// Yank selected chunks to clipboard and return success message.
-    fn yank_visual_selection(&mut self, handle: &SessionHandle) -> Option<String> {
-        let (start, end) = self.visual_selection_range();
-        let buffer = handle.buffer();
-
-        // Collect content from selected chunks (just the data, no timestamps/direction)
+        let chunks: Vec<_> = buffer.chunks().collect();
         let mut content = String::new();
-        for (idx, chunk) in buffer.chunks().enumerate() {
-            if idx >= start && idx <= end {
-                if !content.is_empty() {
-                    content.push('\n');
-                }
-                content.push_str(chunk.encoded);
+        for row in rows.iter().skip(start).take(end - start + 1) {
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            let Some(chunk) = chunks.get(row.chunk_idx) else {
+                continue;
+            };
+            let byte_end = row.byte_end.min(chunk.encoded.len());
+            if row.byte_start < byte_end {
+                content.push_str(&chunk.encoded[row.byte_start..byte_end]);
             }
         }
 
-        let chunk_count = end - start + 1;
+        let row_count = end - start + 1;
         let ssh = crate::clipboard::is_ssh();
-
         let result = if ssh {
             crate::clipboard::copy_osc52(&content)
         } else {
             crate::clipboard::copy_arboard(&content)
         };
-
         let ssh_note = if ssh { " (SSH)" } else { "" };
 
         match result {
             Ok(()) => {
-                self.exit_visual_mode();
+                self.exit_cursor_mode();
                 Some(format!(
-                    "{} chunk{} yanked{ssh_note}",
-                    chunk_count,
-                    if chunk_count == 1 { "" } else { "s" },
+                    "{} row{} yanked{ssh_note}",
+                    row_count,
+                    if row_count == 1 { "" } else { "s" },
                 ))
             }
             Err(e) => {
-                self.exit_visual_mode();
+                self.exit_cursor_mode();
                 Some(e.to_string())
             }
         }
@@ -942,11 +985,16 @@ impl TrafficView {
         };
         // Cap displayed scroll position at content max (don't show padding in title)
         let display_scroll = scroll.min(max_scroll_content);
-        let visual_indicator = if self.visual_mode {
-            let (start, end) = self.visual_selection_range();
-            format!(" [VISUAL {}-{}]", start + 1, end + 1)
-        } else {
-            String::new()
+        let mode_indicator = match self.cursor_mode {
+            TrafficCursorMode::Normal => String::new(),
+            TrafficCursorMode::Cursor { row } => format!(" [CURSOR {}]", row + 1),
+            TrafficCursorMode::Visual { anchor, cursor } => {
+                format!(
+                    " [VISUAL {}-{}]",
+                    anchor.min(cursor) + 1,
+                    anchor.max(cursor) + 1
+                )
+            }
         };
         let block = block.title(format!(
             " Traffic [{}/{}]{}{}{}{}{} ",
@@ -956,18 +1004,14 @@ impl TrafficView {
             search_info,
             lock_indicator,
             save_indicator,
-            visual_indicator,
+            mode_indicator,
         ));
         block.render(area, buf);
 
         // Render chunks
         let mut y = inner.y;
-        // Get visual selection range if in visual mode
-        let visual_range = if self.visual_mode {
-            Some(self.visual_selection_range())
-        } else {
-            None
-        };
+        let visual_range = self.visual_row_range();
+        let cursor_row = self.cursor_row();
 
         for (visible_idx, chunk) in buffer
             .chunks()
@@ -979,13 +1023,11 @@ impl TrafficView {
                 break;
             }
 
-            // Apply visual selection/cursor background if this chunk is selected
-            if let Some((start, end)) = visual_range
-                && visible_idx >= start
-                && visible_idx <= end
+            if cursor_row == Some(visible_idx)
+                || visual_range
+                    .is_some_and(|(start, end)| visible_idx >= start && visible_idx <= end)
             {
-                // Use brighter color for cursor line, darker for rest of selection
-                let bg_color = if visible_idx == self.visual_cursor {
+                let bg_color = if cursor_row == Some(visible_idx) {
                     Theme::VISUAL_CURSOR
                 } else {
                     Theme::VISUAL_SELECTION
@@ -1119,11 +1161,16 @@ impl TrafficView {
         } else {
             String::new()
         };
-        let visual_indicator = if self.visual_mode {
-            let (start, end) = self.visual_selection_range();
-            format!(" [VISUAL {}-{}]", start + 1, end + 1)
-        } else {
-            String::new()
+        let mode_indicator = match self.cursor_mode {
+            TrafficCursorMode::Normal => String::new(),
+            TrafficCursorMode::Cursor { row } => format!(" [CURSOR {}]", row + 1),
+            TrafficCursorMode::Visual { anchor, cursor } => {
+                format!(
+                    " [VISUAL {}-{}]",
+                    anchor.min(cursor) + 1,
+                    anchor.max(cursor) + 1
+                )
+            }
         };
         let block = block.title(format!(
             " Traffic [{}/{}]{}{}{}{}{} ",
@@ -1133,33 +1180,31 @@ impl TrafficView {
             search_info,
             lock_indicator,
             save_indicator,
-            visual_indicator,
+            mode_indicator,
         ));
         block.render(area, buf);
 
         // Render display lines starting from scroll position
         let mut y = inner.y;
-        // Get visual selection range if in visual mode
-        let visual_range = if self.visual_mode {
-            Some(self.visual_selection_range())
-        } else {
-            None
-        };
+        let visual_range = self.visual_row_range();
+        let cursor_row = self.cursor_row();
 
-        for &(chunk_idx, line_within_chunk) in
-            display_lines.iter().skip(scroll).take(visible_height)
+        for (row_offset, &(chunk_idx, line_within_chunk)) in display_lines
+            .iter()
+            .skip(scroll)
+            .take(visible_height)
+            .enumerate()
         {
             if y >= inner.y + inner.height {
                 break;
             }
 
-            // Apply visual selection/cursor background if this chunk is selected
-            if let Some((start, end)) = visual_range
-                && chunk_idx >= start
-                && chunk_idx <= end
+            let display_row = scroll + row_offset;
+            if cursor_row == Some(display_row)
+                || visual_range
+                    .is_some_and(|(start, end)| display_row >= start && display_row <= end)
             {
-                // Use brighter color for cursor line, darker for rest of selection
-                let bg_color = if chunk_idx == self.visual_cursor {
+                let bg_color = if cursor_row == Some(display_row) {
                     Theme::VISUAL_CURSOR
                 } else {
                     Theme::VISUAL_SELECTION
@@ -1528,9 +1573,8 @@ impl TrafficView {
     }
 
     fn handle_main_key(&mut self, key: KeyEvent, handle: &SessionHandle) -> Option<TrafficAction> {
-        // Handle visual mode keys first
-        if self.visual_mode {
-            return self.handle_visual_mode_key(key, handle);
+        if self.cursor_mode != TrafficCursorMode::Normal {
+            return self.handle_cursor_mode_key(key, handle);
         }
 
         // Half-page scroll amount based on actual visible height
@@ -1706,62 +1750,71 @@ impl TrafficView {
                 }
             }
             KeyCode::Char('v') => {
-                // Enter visual mode
                 drop(buffer);
-                self.enter_visual_mode(handle);
+                self.enter_cursor_mode(handle);
             }
             _ => {}
         }
         None
     }
 
-    fn handle_visual_mode_key(
+    fn handle_cursor_mode_key(
         &mut self,
         key: KeyEvent,
         handle: &SessionHandle,
     ) -> Option<TrafficAction> {
         let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let chunk_count = handle.buffer().len();
+        let row_count = self.display_rows(&handle.buffer()).len();
         let half_page = self.last_visible_height / 2;
+        let current = self
+            .cursor_row()
+            .unwrap_or(0)
+            .min(row_count.saturating_sub(1));
 
         match key.code {
-            KeyCode::Esc | KeyCode::Char('v') => {
-                self.exit_visual_mode();
-            }
-            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
-                let new_cursor = self.visual_cursor.saturating_add(1);
-                self.visual_move(new_cursor, handle);
-            }
-            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
-                let new_cursor = self.visual_cursor.saturating_sub(1);
-                self.visual_move(new_cursor, handle);
-            }
-            KeyCode::Char('d') if has_ctrl => {
-                // Half-page down
-                let new_cursor = self
-                    .visual_cursor
-                    .saturating_add(half_page)
-                    .min(chunk_count.saturating_sub(1));
-                self.visual_move(new_cursor, handle);
-            }
-            KeyCode::Char('u') if has_ctrl => {
-                // Half-page up
-                let new_cursor = self.visual_cursor.saturating_sub(half_page);
-                self.visual_move(new_cursor, handle);
-            }
-            KeyCode::Char('g') => {
-                // Go to top
-                self.visual_move(0, handle);
-            }
-            KeyCode::Char('G') => {
-                // Go to bottom
-                self.visual_move(chunk_count.saturating_sub(1), handle);
-            }
+            KeyCode::Esc => match self.cursor_mode {
+                TrafficCursorMode::Visual { cursor, .. } => {
+                    self.cursor_mode = TrafficCursorMode::Cursor { row: cursor };
+                }
+                _ => self.exit_cursor_mode(),
+            },
+            KeyCode::Char('v') => match self.cursor_mode {
+                TrafficCursorMode::Cursor { row } => {
+                    self.cursor_mode = TrafficCursorMode::Visual {
+                        anchor: row,
+                        cursor: row,
+                    };
+                }
+                TrafficCursorMode::Visual { cursor, .. } => {
+                    self.cursor_mode = TrafficCursorMode::Cursor { row: cursor };
+                }
+                TrafficCursorMode::Normal => self.enter_cursor_mode(handle),
+            },
             KeyCode::Char('y') => {
-                // Yank selection to clipboard
-                if let Some(msg) = self.yank_visual_selection(handle) {
+                if let Some(msg) = self.yank_cursor_selection(handle) {
                     return Some(TrafficAction::Toast(crate::widget::Toast::info(msg)));
                 }
+            }
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
+                self.move_cursor(current.saturating_add(1), handle);
+            }
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
+                self.move_cursor(current.saturating_sub(1), handle);
+            }
+            KeyCode::Char('d') if has_ctrl => {
+                let new_cursor = current
+                    .saturating_add(half_page.max(1))
+                    .min(row_count.saturating_sub(1));
+                self.move_cursor(new_cursor, handle);
+            }
+            KeyCode::Char('u') if has_ctrl => {
+                self.move_cursor(current.saturating_sub(half_page.max(1)), handle);
+            }
+            KeyCode::Char('g') => {
+                self.move_cursor(0, handle);
+            }
+            KeyCode::Char('G') => {
+                self.move_cursor(row_count.saturating_sub(1), handle);
             }
             _ => {}
         }

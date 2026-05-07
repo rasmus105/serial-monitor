@@ -731,7 +731,7 @@ fn render_shortcuts(area: Rect, buf: &mut Buffer, scroll: usize) {
         (KeyContext::PreConnect, "Pre-Connection"),
         (KeyContext::Connected, "Connected"),
         (KeyContext::Traffic, "Traffic View"),
-        (KeyContext::Visual, "Visual Mode"),
+        (KeyContext::Visual, "Cursor/Visual Mode"),
         (KeyContext::Graph, "Graph View"),
         (KeyContext::FileSender, "File Sender"),
         (KeyContext::Input, "Input Mode"),

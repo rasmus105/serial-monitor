@@ -25,7 +25,7 @@ pub enum KeyContext {
     Connected,
     /// Active in traffic view
     Traffic,
-    /// Active in visual mode (traffic view)
+    /// Active in cursor/visual mode (traffic view)
     Visual,
     /// Active in graph view
     Graph,
@@ -229,16 +229,27 @@ pub fn all_keybinds() -> Vec<Keybind> {
         ),
         Keybind::new(
             key(KeyCode::Char('v')),
-            "Enter visual mode",
+            "Enter cursor mode",
             KeyContext::Traffic,
         ),
-        // Visual mode
+        // Cursor/visual mode
         Keybind::new(
-            key(KeyCode::Char('y')),
-            "Yank selection to clipboard",
+            key(KeyCode::Char('v')),
+            "Start/stop visual selection",
             KeyContext::Visual,
         ),
-        Keybind::new(key(KeyCode::Esc), "Exit visual mode", KeyContext::Visual),
+        Keybind::new(key(KeyCode::Char('j')), "Move down", KeyContext::Visual),
+        Keybind::new(key(KeyCode::Char('k')), "Move up", KeyContext::Visual),
+        Keybind::new(
+            key(KeyCode::Char('y')),
+            "Yank row/selection to clipboard",
+            KeyContext::Visual,
+        ),
+        Keybind::new(
+            key(KeyCode::Esc),
+            "Exit cursor/selection",
+            KeyContext::Visual,
+        ),
         // Graph view
         Keybind::new(
             key(KeyCode::Char('g')),
@@ -315,7 +326,7 @@ pub const TRAFFIC_HINTS: &[KeyHint] = &[
     KeyHint::new("s", "send"),
     KeyHint::new("/", "search"),
     KeyHint::new("f", "filter"),
-    KeyHint::new("v", "visual"),
+    KeyHint::new("v", "cursor"),
     KeyHint::new("Ctrl+b", "lock bottom"),
     KeyHint::new(":settings", "help"),
 ];
