@@ -1318,7 +1318,7 @@ impl TrafficView {
 
         // Add ellipsis if truncated
         if truncate && content_display_width > content_width {
-            spans.push(Span::raw("...".to_string()));
+            spans.push(Span::styled("...".to_string(), Theme::traffic_payload()));
         }
 
         Line::from(spans)
@@ -1383,7 +1383,7 @@ impl TrafficView {
             } else {
                 ""
             };
-            return vec![Span::raw(slice.to_string())];
+            return vec![Span::styled(slice.to_string(), Theme::traffic_payload())];
         }
 
         let mut spans = Vec::new();
@@ -1404,7 +1404,7 @@ impl TrafficView {
             // Add text before this match
             if pos < match_start && pos < content.len() {
                 let text = &content[pos..match_start.min(content.len())];
-                spans.push(Span::raw(text.to_string()));
+                spans.push(Span::styled(text.to_string(), Theme::traffic_payload()));
             }
 
             // Add the highlighted match
@@ -1426,7 +1426,7 @@ impl TrafficView {
         // Add remaining text after last match
         if pos < byte_end && pos < content.len() {
             let text = &content[pos..byte_end.min(content.len())];
-            spans.push(Span::raw(text.to_string()));
+            spans.push(Span::styled(text.to_string(), Theme::traffic_payload()));
         }
 
         if spans.is_empty() {
@@ -1435,7 +1435,7 @@ impl TrafficView {
             } else {
                 ""
             };
-            spans.push(Span::raw(slice.to_string()));
+            spans.push(Span::styled(slice.to_string(), Theme::traffic_payload()));
         }
 
         spans
@@ -2513,7 +2513,7 @@ impl TrafficView {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     use serial_core::buffer::{DataBuffer, Direction};
 
@@ -2553,5 +2553,26 @@ mod tests {
             view.scroll_for_anchor_wrapped(&chunks, &display_lines),
             Some(2)
         );
+    }
+
+    #[test]
+    fn timestamp_style_does_not_bleed_into_payload() {
+        let mut buffer = DataBuffer::default();
+        let session_start = SystemTime::UNIX_EPOCH;
+        let timestamp = session_start + Duration::from_millis(1234);
+        buffer.push(b"payload".to_vec(), Direction::Rx, timestamp);
+        let chunk = buffer.chunks().next().unwrap();
+
+        let mut view = TrafficView::new();
+        view.session_start = Some(session_start);
+
+        let line = view.format_chunk_line_highlighted(&chunk, 7, 80, 11, false, &[], None);
+
+        assert_eq!(line.spans[0].content.as_ref(), "RX ");
+        assert_eq!(line.spans[0].style, Theme::rx());
+        assert_eq!(line.spans[1].content.as_ref(), "+1.234s ");
+        assert_eq!(line.spans[1].style, Theme::muted());
+        assert_eq!(line.spans[2].content.as_ref(), "payload");
+        assert_eq!(line.spans[2].style, Theme::traffic_payload());
     }
 }

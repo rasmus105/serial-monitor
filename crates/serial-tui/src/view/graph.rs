@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
-    style::Style,
+    style::{Color, Style},
     symbols::Marker,
     text::{Line, Span},
     widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Widget},
@@ -569,12 +569,16 @@ impl GraphView {
         }
 
         // Build datasets referencing cached data
+        let legend_items: Vec<_> = visible_series
+            .iter()
+            .map(|(series_idx, (name, _))| (name.as_str(), colors[*series_idx % colors.len()]))
+            .collect();
+
         let datasets: Vec<Dataset> = visible_series
             .iter()
             .enumerate()
-            .map(|(cache_idx, (series_idx, (name, _)))| {
+            .map(|(cache_idx, (series_idx, _))| {
                 Dataset::default()
-                    .name(name.as_str())
                     .marker(Marker::Braille)
                     .graph_type(GraphType::Line)
                     .style(Style::default().fg(colors[*series_idx % colors.len()]))
@@ -634,9 +638,13 @@ impl GraphView {
                 Span::raw(format!("{:.1}", y_max)),
             ]);
 
-        let chart = Chart::new(datasets).x_axis(x_axis).y_axis(y_axis);
+        let chart = Chart::new(datasets)
+            .x_axis(x_axis)
+            .y_axis(y_axis)
+            .legend_position(None);
 
         chart.render(area, buf);
+        Self::draw_chart_legend(area, buf, &legend_items);
     }
 
     fn draw_packet_rate_chart(
@@ -701,10 +709,11 @@ impl GraphView {
         }
 
         let mut datasets = Vec::new();
+        let mut legend_items = Vec::new();
         if show_rx && !self.cached_graph_data[0].is_empty() {
+            legend_items.push(("RX", Theme::SUCCESS));
             datasets.push(
                 Dataset::default()
-                    .name("RX")
                     .marker(Marker::Braille)
                     .graph_type(GraphType::Line)
                     .style(Style::default().fg(Theme::SUCCESS))
@@ -712,9 +721,9 @@ impl GraphView {
             );
         }
         if show_tx && !self.cached_graph_data[1].is_empty() {
+            legend_items.push(("TX", Theme::PRIMARY));
             datasets.push(
                 Dataset::default()
-                    .name("TX")
                     .marker(Marker::Braille)
                     .graph_type(GraphType::Line)
                     .style(Style::default().fg(Theme::PRIMARY))
@@ -775,9 +784,81 @@ impl GraphView {
                 Span::raw(format!("{:.0}", y_max)),
             ]);
 
-        let chart = Chart::new(datasets).x_axis(x_axis).y_axis(y_axis);
+        let chart = Chart::new(datasets)
+            .x_axis(x_axis)
+            .y_axis(y_axis)
+            .legend_position(None);
 
         chart.render(area, buf);
+        Self::draw_chart_legend(area, buf, &legend_items);
+    }
+
+    fn draw_chart_legend(area: Rect, buf: &mut Buffer, items: &[(&str, Color)]) {
+        if items.is_empty() || area.width < 4 || area.height < 3 {
+            return;
+        }
+
+        let Some(max_name_width) = items.iter().map(|(name, _)| name.chars().count()).max() else {
+            return;
+        };
+        let legend_width = (max_name_width as u16).saturating_add(2);
+        let legend_height = (items.len() as u16).saturating_add(2);
+
+        if legend_width > area.width / 4 || legend_height > area.height / 4 {
+            return;
+        }
+
+        let legend_area = Rect::new(
+            area.right().saturating_sub(legend_width),
+            area.top(),
+            legend_width,
+            legend_height,
+        );
+        let legend_style = Style::default().bg(Theme::GRAPH_LEGEND_BG);
+
+        for y in legend_area.top()..legend_area.bottom() {
+            for x in legend_area.left()..legend_area.right() {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_symbol(" ").set_style(legend_style);
+                }
+            }
+        }
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .style(legend_style)
+            .border_style(Theme::border().bg(Theme::GRAPH_LEGEND_BG));
+        let inner = block.inner(legend_area);
+        block.render(legend_area, buf);
+
+        for (index, (name, color)) in items.iter().enumerate() {
+            if index as u16 >= inner.height {
+                break;
+            }
+            let line = Line::from(Span::styled(
+                Self::legend_label(name, inner.width),
+                Style::default().fg(*color).bg(Theme::GRAPH_LEGEND_BG),
+            ));
+            Paragraph::new(line).style(legend_style).render(
+                Rect::new(inner.x, inner.y + index as u16, inner.width, 1),
+                buf,
+            );
+        }
+    }
+
+    fn legend_label(name: &str, width: u16) -> String {
+        let width = width as usize;
+        if name.chars().count() <= width {
+            return name.to_string();
+        }
+
+        if width <= 3 {
+            return name.chars().take(width).collect();
+        }
+
+        let mut label: String = name.chars().take(width.saturating_sub(3)).collect();
+        label.push_str("...");
+        label
     }
 
     fn draw_config(
@@ -1356,6 +1437,38 @@ impl GraphView {
         {
             self.loading = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chart_legend_clears_covered_cells() {
+        let area = Rect::new(0, 0, 40, 20);
+        let mut buf = Buffer::empty(area);
+
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)]
+                    .set_symbol("x")
+                    .set_style(Style::default().fg(Theme::SUCCESS));
+            }
+        }
+
+        GraphView::draw_chart_legend(
+            area,
+            &mut buf,
+            &[("humidity", Theme::SUCCESS), ("temp", Theme::WARNING)],
+        );
+
+        let blank_cell = &buf[(37, 2)];
+        assert_eq!(blank_cell.symbol(), " ");
+        assert_eq!(blank_cell.style().bg, Some(Theme::GRAPH_LEGEND_BG));
+
+        let label_cell = &buf[(31, 1)];
+        assert_eq!(label_cell.style().bg, Some(Theme::GRAPH_LEGEND_BG));
     }
 }
 

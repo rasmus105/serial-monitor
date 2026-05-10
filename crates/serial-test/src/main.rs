@@ -393,7 +393,7 @@ async fn run_sensor(
 
     // Starting values
     let mut temp: f32 = 22.0;
-    let mut humidity: f32 = 45.0;
+    let mut humidity: f32 = 500.0;
     let mut pressure: f32 = 1013.25;
     let mut sent = 0;
 
@@ -406,8 +406,8 @@ async fn run_sensor(
         temp += rng.random_range(-0.5..=0.5);
         temp = temp.clamp(15.0, 35.0);
 
-        humidity += rng.random_range(-2.0..=2.0);
-        humidity = humidity.clamp(20.0, 80.0);
+        humidity += rng.random_range(-5.0..=5.0);
+        humidity = humidity.clamp(450.0, 550.0);
 
         pressure += rng.random_range(-1.0..=1.0);
         pressure = pressure.clamp(980.0, 1040.0);

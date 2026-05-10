@@ -8,7 +8,7 @@ pub struct Theme;
 impl Theme {
     // Base colors - using terminal defaults
     pub const BG: Color = Color::Reset;
-    pub const FG: Color = Color::Reset;
+    pub const FG: Color = Color::White;
 
     // Accent colors
     pub const PRIMARY: Color = Color::Cyan;
@@ -43,12 +43,12 @@ impl Theme {
     pub const VISUAL_CURSOR: Color = Color::Indexed(31);
     pub const MUTED: Color = Color::DarkGray;
     pub const HIGHLIGHT: Color = Color::White;
-    /// Gauge/progress bar unfilled background - slightly visible against terminal background
-    pub const GAUGE_BG: Color = Color::Indexed(238);
+    /// Graph legend background. Cells are still cleared explicitly so plotted data does not show through.
+    pub const GRAPH_LEGEND_BG: Color = Color::Reset;
 
     // Styles
     pub fn base() -> Style {
-        Style::default()
+        Style::default().fg(Self::FG)
     }
 
     pub fn title() -> Style {
@@ -102,6 +102,10 @@ impl Theme {
 
     pub fn muted() -> Style {
         Style::default().fg(Self::MUTED)
+    }
+
+    pub fn traffic_payload() -> Style {
+        Self::base()
     }
 
     pub fn tx() -> Style {

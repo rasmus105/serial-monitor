@@ -424,7 +424,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     (Theme::muted(), Theme::muted())
                 } else if is_selected {
                     (
-                        Style::default().add_modifier(Modifier::BOLD),
+                        Theme::base().add_modifier(Modifier::BOLD),
                         Theme::highlight(),
                     )
                 } else {

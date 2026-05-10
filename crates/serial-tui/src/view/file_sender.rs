@@ -10,8 +10,8 @@ use ratatui::{
     style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Gauge, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        StatefulWidget, Widget,
+        Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget,
+        Widget,
     },
 };
 use serial_core::{
@@ -615,6 +615,11 @@ impl FileSenderView {
                 Theme::border_error()
             } else {
                 Theme::border()
+            })
+            .title_style(if !connected {
+                Theme::border_error()
+            } else {
+                Theme::border()
             });
         let stats_inner = stats_block.inner(main_chunks[1]);
         stats_block.render(main_chunks[1], buf);
@@ -636,16 +641,12 @@ impl FileSenderView {
                 (0, 0, 0, 0, 0)
             };
 
-        // Row 1: Progress bar with percentage inside
-        let gauge_label = format!("{}%", percentage);
-        let gauge = Gauge::default()
-            .ratio(percentage as f64 / 100.0)
-            .label(gauge_label)
-            .gauge_style(Style::default().fg(Theme::PRIMARY).bg(Theme::GAUGE_BG));
-
         if stats_inner.height > 0 {
-            let gauge_area = Rect::new(stats_inner.x, stats_inner.y, stats_inner.width, 1);
-            gauge.render(gauge_area, buf);
+            self.draw_progress_bar(
+                Rect::new(stats_inner.x, stats_inner.y, stats_inner.width, 1),
+                percentage,
+                buf,
+            );
         }
 
         // Row 2: Stats line with separators: "Bytes: X / Y │ Chunks: X / Y │ Loops: X"
@@ -688,6 +689,45 @@ impl FileSenderView {
         // Config panel
         if let Some(config_area) = config_area {
             self.draw_config(config_area, buf, handle, serial_config, focus, connected);
+        }
+    }
+
+    fn draw_progress_bar(&self, area: Rect, percentage: u16, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let percentage = percentage.min(100);
+        let filled_width =
+            ((area.width as u32 * percentage as u32 + 50) / 100).min(area.width as u32) as u16;
+
+        for x in 0..area.width {
+            let cell = &mut buf[(area.x + x, area.y)];
+            if x < filled_width {
+                cell.set_symbol("█")
+                    .set_style(Style::default().fg(Theme::PRIMARY));
+            } else {
+                cell.set_symbol("░")
+                    .set_style(Style::default().fg(Theme::BORDER));
+            }
+        }
+
+        let label = format!("{}%", percentage);
+        let label_width = label.chars().count() as u16;
+        if label_width > area.width {
+            return;
+        }
+
+        let label_x = area.x + (area.width - label_width) / 2;
+        for (offset, ch) in label.chars().enumerate() {
+            let x = label_x + offset as u16;
+            let style = if x - area.x < filled_width {
+                Style::default().fg(Color::Black).bg(Theme::PRIMARY)
+            } else {
+                Style::default().fg(Color::Black).bg(Theme::BORDER)
+            };
+            let symbol = ch.to_string();
+            buf[(x, area.y)].set_symbol(&symbol).set_style(style);
         }
     }
 

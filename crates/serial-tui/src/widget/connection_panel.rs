@@ -72,27 +72,30 @@ impl Widget for ConnectionPanel<'_> {
         let config_lines = vec![
             Line::from(vec![
                 Span::styled("Port:   ", Theme::muted()),
-                Span::raw(self.port_name),
+                Span::styled(self.port_name, Theme::base()),
             ]),
             Line::from(vec![
                 Span::styled("Baud:   ", Theme::muted()),
-                Span::raw(self.serial_config.baud_rate.to_string()),
+                Span::styled(self.serial_config.baud_rate.to_string(), Theme::base()),
             ]),
             Line::from(vec![
                 Span::styled("Data:   ", Theme::muted()),
-                Span::raw(format!("{:?}", self.serial_config.data_bits)),
+                Span::styled(format!("{:?}", self.serial_config.data_bits), Theme::base()),
             ]),
             Line::from(vec![
                 Span::styled("Parity: ", Theme::muted()),
-                Span::raw(format!("{:?}", self.serial_config.parity)),
+                Span::styled(format!("{:?}", self.serial_config.parity), Theme::base()),
             ]),
             Line::from(vec![
                 Span::styled("Stop:   ", Theme::muted()),
-                Span::raw(format!("{:?}", self.serial_config.stop_bits)),
+                Span::styled(format!("{:?}", self.serial_config.stop_bits), Theme::base()),
             ]),
             Line::from(vec![
                 Span::styled("Flow:   ", Theme::muted()),
-                Span::raw(format!("{:?}", self.serial_config.flow_control)),
+                Span::styled(
+                    format!("{:?}", self.serial_config.flow_control),
+                    Theme::base(),
+                ),
             ]),
         ];
 
@@ -121,31 +124,40 @@ impl Widget for ConnectionPanel<'_> {
         let stats_lines = vec![
             Line::from(vec![
                 Span::styled("RX: ", Theme::muted()),
-                Span::raw(format_bytes(self.statistics.bytes_rx())),
+                Span::styled(format_bytes(self.statistics.bytes_rx()), Theme::base()),
             ]),
             Line::from(vec![
                 Span::styled("TX: ", Theme::muted()),
-                Span::raw(format_bytes(self.statistics.bytes_tx())),
+                Span::styled(format_bytes(self.statistics.bytes_tx()), Theme::base()),
             ]),
             Line::from(vec![
                 Span::styled("Time: ", Theme::muted()),
-                Span::raw(time_str),
+                Span::styled(time_str, Theme::base()),
             ]),
             Line::from(vec![
                 Span::styled("Avg RX: ", Theme::muted()),
-                Span::raw(format_rate(self.statistics.avg_bytes_rx_per_sec())),
+                Span::styled(
+                    format_rate(self.statistics.avg_bytes_rx_per_sec()),
+                    Theme::base(),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("Avg TX: ", Theme::muted()),
-                Span::raw(format_rate(self.statistics.avg_bytes_tx_per_sec())),
+                Span::styled(
+                    format_rate(self.statistics.avg_bytes_tx_per_sec()),
+                    Theme::base(),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("Packets (rx/tx): ", Theme::muted()),
-                Span::raw(format!(
-                    "{}/{}",
-                    self.statistics.packets_rx(),
-                    self.statistics.packets_tx()
-                )),
+                Span::styled(
+                    format!(
+                        "{}/{}",
+                        self.statistics.packets_rx(),
+                        self.statistics.packets_tx()
+                    ),
+                    Theme::base(),
+                ),
             ]),
         ];
 
