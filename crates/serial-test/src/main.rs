@@ -35,6 +35,8 @@ struct Args {
     seed: Option<u64>,
     interval_ms: Option<u64>,
     lines: Option<u64>,
+    startup_delay_ms: Option<u64>,
+    hold_after_lines: bool,
 }
 
 fn print_usage() {
@@ -57,6 +59,9 @@ OPTIONS:
     --seed <N>           Use deterministic random data
     --interval-ms <N>    Override delay between writes where supported
     --lines <N>          Stop after N generated chunks/lines where supported
+    --startup-delay-ms <N>
+                         Wait N ms after creating the PTY before sending data
+    --hold-after-lines   Keep the PTY open after --lines is reached
 
 EXAMPLES:
     serial-test           # Start with random hex data
@@ -110,6 +115,8 @@ fn parse_args() -> Option<Args> {
     let mut seed = None;
     let mut interval_ms = None;
     let mut lines = None;
+    let mut startup_delay_ms = None;
+    let mut hold_after_lines = false;
     let mut mode_set = false;
 
     let mut args = env::args().skip(1);
@@ -132,6 +139,10 @@ fn parse_args() -> Option<Args> {
             "--seed" => seed = Some(parse_value("--seed", args.next())?),
             "--interval-ms" => interval_ms = Some(parse_value("--interval-ms", args.next())?),
             "--lines" => lines = Some(parse_value("--lines", args.next())?),
+            "--startup-delay-ms" => {
+                startup_delay_ms = Some(parse_value("--startup-delay-ms", args.next())?)
+            }
+            "--hold-after-lines" => hold_after_lines = true,
             value if value.starts_with("--") => {
                 eprintln!("Unknown option: {}", value);
                 print_usage();
@@ -164,6 +175,8 @@ fn parse_args() -> Option<Args> {
         seed,
         interval_ms,
         lines,
+        startup_delay_ms,
+        hold_after_lines,
     })
 }
 
@@ -249,6 +262,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (reader, writer) = tokio::io::split(file);
 
+    if let Some(delay_ms) = args.startup_delay_ms {
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+    }
+
     // Run the appropriate mode
     match args.mode {
         Mode::Echo => run_echo(reader, writer).await?,
@@ -257,6 +274,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Mode::Sensor => run_sensor(writer, &mut rng, args.interval_ms, args.lines).await?,
         Mode::Utf8 => run_utf8(writer, &mut rng, args.interval_ms, args.lines).await?,
         Mode::Flood => run_flood(writer, &mut rng, args.lines).await?,
+    }
+
+    if args.hold_after_lines {
+        std::future::pending::<()>().await;
     }
 
     // Clean up
