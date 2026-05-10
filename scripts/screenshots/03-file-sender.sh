@@ -7,6 +7,14 @@ BASE="${SCRIPT_DIR}/common.sh"
 source "${BASE}"
 cleanup
 
+cleanup_sample_file() {
+    if [ -n "${SAMPLE_FILE:-}" ]; then
+        rm -f "${SAMPLE_FILE}"
+    fi
+}
+
+trap 'cleanup_sample_file; cleanup' EXIT
+
 # Create sample data file
 SAMPLE_FILE="${TMPDIR:-/tmp}/serial-monitor-sample-data.txt"
 cat > "${SAMPLE_FILE}" << 'SAMPLEEOF'
@@ -104,4 +112,4 @@ sleep 0.3
 sleep 3.2
 CAPTURE_DELAY=0
 capture_and_freeze file-sender.png
-rm -f "${SAMPLE_FILE}"
+cleanup_sample_file
