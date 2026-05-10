@@ -13,7 +13,9 @@ brew install --HEAD serial-monitor
 
 ## Previews
 
-TODO: Add screenshots here
+| Traffic & Config | Graph View | File Sender |
+| --- | --- | --- |
+| ![Traffic view with configuration panel](docs/screenshots/traffic-config.png) | ![Sensor data graph view](docs/screenshots/graph-sensor.png) | ![File sender view](docs/screenshots/file-sender.png) |
 
 ## Features
 - Receive and transmit serial data from a keyboard-driven TUI.
