@@ -1,6 +1,6 @@
 //! Text input widget with cursor support.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -23,17 +23,6 @@ pub struct TextInputState {
     scroll: usize,
     /// Placeholder text
     pub placeholder: String,
-    /// Path completion state (for tab completion).
-    completion: Option<PathCompletionState>,
-}
-
-/// State for cycling through path completions.
-#[derive(Debug, Clone)]
-struct PathCompletionState {
-    /// Available completions.
-    matches: Vec<String>,
-    /// Current index in matches.
-    index: usize,
 }
 
 impl TextInputState {
@@ -99,9 +88,6 @@ impl TextInputState {
                 }
                 _ => false,
             };
-            if handled {
-                self.clear_completion();
-            }
             return handled;
         }
 
@@ -118,9 +104,6 @@ impl TextInputState {
                 }
                 _ => false,
             };
-            if handled {
-                self.clear_completion();
-            }
             return handled;
         }
 
@@ -155,9 +138,6 @@ impl TextInputState {
             }
             _ => false,
         };
-        if handled {
-            self.clear_completion();
-        }
         handled
     }
 
@@ -165,20 +145,17 @@ impl TextInputState {
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.scroll = 0;
-        self.completion = None;
     }
 
     /// Set the content and move cursor to end.
     pub fn set_content(&mut self, content: impl Into<String>) {
         self.buffer.set_content(content);
         self.scroll = 0;
-        self.completion = None;
     }
 
     /// Take the content and clear the input.
     pub fn take(&mut self) -> String {
         self.scroll = 0;
-        self.completion = None;
         self.buffer.take()
     }
 
@@ -195,61 +172,6 @@ impl TextInputState {
         } else if cursor_pos >= self.scroll + width {
             self.scroll = cursor_pos.saturating_sub(width) + 1;
         }
-    }
-
-    /// Clear any active completion state.
-    /// Should be called when the user types or moves cursor.
-    fn clear_completion(&mut self) {
-        self.completion = None;
-    }
-
-    /// Attempt path completion. Returns true if completion was performed.
-    ///
-    /// Behavior:
-    /// - First Tab: Complete to longest common prefix, or cycle if already completed
-    /// - Subsequent Tabs: Cycle through available matches
-    /// - Any other input clears completion state
-    pub fn complete_path(&mut self) -> bool {
-        // If we have active completion state, cycle to next match
-        if let Some(ref mut state) = self.completion {
-            if !state.matches.is_empty() {
-                state.index = (state.index + 1) % state.matches.len();
-                self.buffer.set_content(state.matches[state.index].clone());
-                return true;
-            }
-            return false;
-        }
-
-        // Start new completion
-        let matches = find_path_completions(self.buffer.content());
-        if matches.is_empty() {
-            return false;
-        }
-
-        if matches.len() == 1 {
-            // Single match - complete it directly
-            let completed = &matches[0];
-            self.buffer.set_content(completed.clone());
-            // Store state so subsequent tabs can cycle (if it's a directory)
-            self.completion = Some(PathCompletionState { matches, index: 0 });
-            return true;
-        }
-
-        // Multiple matches - complete to common prefix first
-        let common = longest_common_prefix(&matches);
-        if common.len() > self.buffer.len() {
-            // We can extend the input
-            self.buffer.set_content(common);
-            self.completion = Some(PathCompletionState { matches, index: 0 });
-        } else {
-            // Already at common prefix, start cycling
-            self.completion = Some(PathCompletionState { matches, index: 0 });
-            // Apply first match
-            if let Some(ref state) = self.completion {
-                self.buffer.set_content(state.matches[0].clone());
-            }
-        }
-        true
     }
 }
 
@@ -377,25 +299,7 @@ pub fn find_path_completions(input: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    let path = Path::new(input);
-
-    // Expand ~ to home directory
-    let expanded = if input.starts_with('~') {
-        if let Some(home) = dirs::home_dir() {
-            if input == "~" {
-                home
-            } else if let Some(rest) = input.strip_prefix("~/") {
-                home.join(rest)
-            } else {
-                // ~username style - not supported, treat literally
-                path.to_path_buf()
-            }
-        } else {
-            path.to_path_buf()
-        }
-    } else {
-        path.to_path_buf()
-    };
+    let expanded = expand_user_path(input);
 
     // Determine parent directory and prefix to match
     let (parent, prefix) = if expanded.is_dir() && input.ends_with('/') {
@@ -470,42 +374,35 @@ pub fn find_path_completions(input: &str) -> Vec<String> {
     matches
 }
 
-/// Find the longest common prefix among a set of strings.
-pub fn longest_common_prefix(strings: &[String]) -> String {
-    if strings.is_empty() {
-        return String::new();
-    }
-    if strings.len() == 1 {
-        return strings[0].clone();
-    }
-
-    let first = &strings[0];
-    let mut prefix_len = first.len();
-
-    for s in &strings[1..] {
-        prefix_len = first
-            .chars()
-            .zip(s.chars())
-            .take(prefix_len)
-            .take_while(|(a, b)| a == b)
-            .count();
-
-        if prefix_len == 0 {
-            break;
-        }
+/// Expand user-entered paths the same way completion does.
+///
+/// Only `~` and `~/...` are expanded. `~user/...` is left literal because
+/// cross-platform username-home lookup is not available in std.
+pub fn expand_user_path(input: &str) -> PathBuf {
+    if let Some(home) = dirs::home_dir()
+        && input == "~"
+    {
+        return home;
     }
 
-    first.chars().take(prefix_len).collect()
+    if let Some(rest) = input.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+
+    Path::new(input).to_path_buf()
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
         fs,
+        path::Path,
         sync::{Mutex, MutexGuard},
     };
 
-    use super::find_path_completions;
+    use super::{expand_user_path, find_path_completions};
 
     static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
 
@@ -557,5 +454,22 @@ mod tests {
         std::env::set_current_dir(original).unwrap();
         let _ = fs::remove_dir_all(dir);
         assert_eq!(completions, vec!["./Documents/"]);
+    }
+
+    #[test]
+    fn expands_current_user_tilde_paths() {
+        let home = dirs::home_dir().unwrap();
+
+        assert_eq!(expand_user_path("~"), home);
+        assert_eq!(expand_user_path("~/.zshrc"), home.join(".zshrc"));
+    }
+
+    #[test]
+    fn leaves_relative_and_named_user_tilde_paths_literal() {
+        assert_eq!(
+            expand_user_path("relative/path"),
+            Path::new("relative/path")
+        );
+        assert_eq!(expand_user_path("~other/file"), Path::new("~other/file"));
     }
 }

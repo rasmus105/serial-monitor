@@ -76,7 +76,7 @@ impl CompletionState {
         self.kind = CompletionKind::Command;
     }
 
-    /// Move to the next completion option (Tab).
+    /// Move to the next completion option.
     pub fn next(&mut self) {
         if self.options.is_empty() {
             return;
@@ -85,7 +85,7 @@ impl CompletionState {
         self.ensure_visible();
     }
 
-    /// Move to the previous completion option (Shift+Tab).
+    /// Move to the previous completion option.
     pub fn prev(&mut self) {
         if self.options.is_empty() {
             return;
@@ -188,7 +188,7 @@ impl Widget for CompletionPopup<'_> {
             .unwrap_or(0);
 
         // Width: longest option + padding + scroll indicator space
-        let hint_text = "[Tab]/[S-Tab]";
+        let hint_text = "[Up/Down]/[C-j/k] [C-g]";
         let max_popup_width = area.width.saturating_sub(1).max(1) as usize;
         let content_width = max_option_len.max(hint_text.len());
         let popup_width = (content_width + 4).min(max_popup_width) as u16;
@@ -288,9 +288,11 @@ impl Widget for CompletionPopup<'_> {
         };
         let hint_line = Line::from(vec![
             Span::raw(" "),
-            Span::styled("[Tab]", keybind_style),
+            Span::styled("[Up/Down]", keybind_style),
             Span::styled("/", Theme::muted()),
-            Span::styled("[S-Tab]", keybind_style),
+            Span::styled("[C-j/k]", keybind_style),
+            Span::raw(" "),
+            Span::styled("[C-g]", keybind_style),
         ]);
         let hint_area = Rect::new(popup_area.x, hint_y, popup_area.width, 1);
 

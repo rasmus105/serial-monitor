@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
@@ -32,7 +32,7 @@ use crate::{
     widget::{
         CompletionKind, CompletionPopup, CompletionState, ConfigPanel, ConnectionPanel, Toast,
         format_bytes, handle_config_key,
-        text_input::{TextInputState, find_path_completions},
+        text_input::{TextInputState, expand_user_path, find_path_completions},
     },
 };
 
@@ -1194,16 +1194,10 @@ impl FileSenderView {
     fn handle_file_path_key(&mut self, key: KeyEvent) -> Option<FileSenderAction> {
         match key.code {
             KeyCode::Enter => {
-                // If completion is visible, apply the selected completion
-                if self.file_path_completion.visible {
-                    self.apply_file_path_completion();
-                    self.file_path_completion.hide();
-                    return None;
-                }
-                // Otherwise, confirm the path
+                // Confirm the path.
                 let path_str = self.file_path_input.content().to_string();
                 if !path_str.is_empty() {
-                    let path = PathBuf::from(&path_str);
+                    let path = expand_user_path(&path_str);
                     if path.exists() && path.is_file() {
                         self.config.file_path = path_str;
                         self.load_preview(&path);
@@ -1225,19 +1219,40 @@ impl FileSenderView {
                     self.file_path_input.clear();
                 }
             }
-            KeyCode::Tab => {
+            KeyCode::Down => {
                 if !self.file_path_completion.visible {
                     self.update_file_path_completions();
                 } else {
                     self.file_path_completion.next();
                 }
-                self.apply_file_path_completion();
             }
-            KeyCode::BackTab => {
+            KeyCode::Up => {
+                if !self.file_path_completion.visible {
+                    self.update_file_path_completions();
+                }
                 if self.file_path_completion.visible {
                     self.file_path_completion.prev();
-                    self.apply_file_path_completion();
                 }
+            }
+            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if !self.file_path_completion.visible {
+                    self.update_file_path_completions();
+                } else {
+                    self.file_path_completion.next();
+                }
+            }
+            KeyCode::Char('k')
+                if self.file_path_completion.visible
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.file_path_completion.prev();
+            }
+            KeyCode::Char('g')
+                if self.file_path_completion.visible
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.apply_file_path_completion();
+                self.file_path_completion.hide();
             }
             _ => {
                 self.file_path_input.handle_key(key);

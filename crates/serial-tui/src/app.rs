@@ -766,18 +766,33 @@ impl App {
                             }
                             self.completion.hide();
                         }
-                        KeyCode::Tab => {
+                        KeyCode::Down | KeyCode::Char('j')
+                            if key.code == KeyCode::Down
+                                || key.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
                             if !self.completion.visible {
                                 self.update_completions();
                             } else {
                                 self.completion.next();
                             }
-                            self.apply_completion();
                         }
-                        KeyCode::BackTab => {
+                        KeyCode::Up | KeyCode::Char('k')
+                            if self.completion.visible
+                                && (key.code == KeyCode::Up
+                                    || key.modifiers.contains(KeyModifiers::CONTROL)) =>
+                        {
+                            self.completion.prev();
+                        }
+                        KeyCode::Up => {
+                            self.update_completions();
                             if self.completion.visible {
                                 self.completion.prev();
+                            }
+                        }
+                        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            if self.completion.visible {
                                 self.apply_completion();
+                                self.completion.hide();
                             }
                         }
                         _ => {
@@ -1148,8 +1163,8 @@ impl App {
                     self.toasts.error("Usage: :save <file_path>");
                     return;
                 }
-                let path = parts[1];
-                self.save_buffer(path).await;
+                let path = crate::widget::text_input::expand_user_path(parts[1]);
+                self.save_buffer(&path).await;
             }
             "clear" => {
                 self.clear_buffer();
@@ -1188,7 +1203,7 @@ impl App {
         }
     }
 
-    async fn save_buffer(&mut self, path: &str) {
+    async fn save_buffer(&mut self, path: &std::path::Path) {
         if let Some(SessionState::Connected(state)) = self.sessions.active_state() {
             let buffer = state.handle.buffer();
             let mut content = String::new();
@@ -1201,8 +1216,11 @@ impl App {
             }
             match std::fs::write(path, &content) {
                 Ok(()) => {
-                    self.toasts
-                        .success(format!("Saved {} bytes to {}", content.len(), path));
+                    self.toasts.success(format!(
+                        "Saved {} bytes to {}",
+                        content.len(),
+                        path.display()
+                    ));
                 }
                 Err(e) => {
                     self.toasts.error(format!("Failed to save: {}", e));
@@ -1851,7 +1869,6 @@ fn build_user_save_config(
 ) -> serial_core::UserSaveConfig {
     use chrono::{DateTime, Utc};
     use serial_core::{DirectionFilter, Encoding, SaveFormat, SaveScope, UserSaveConfig};
-    use std::path::PathBuf;
     use std::time::SystemTime;
 
     // Generate filename with timestamp
@@ -1891,7 +1908,7 @@ fn build_user_save_config(
     };
 
     let filename = format!("{}-{}.{}", clean_port_name, timestamp, extension);
-    let path = PathBuf::from(directory).join(filename);
+    let path = crate::widget::text_input::expand_user_path(directory).join(filename);
 
     UserSaveConfig {
         path,

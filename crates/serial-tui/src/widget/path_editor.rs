@@ -1,6 +1,6 @@
 //! Focused path editor overlay with path completion.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Rect},
@@ -53,15 +53,7 @@ impl PathEditorState {
         }
 
         match key.code {
-            KeyCode::Enter => {
-                if self.completion.visible {
-                    self.apply_completion();
-                    self.completion.hide();
-                    PathEditorAction::None
-                } else {
-                    PathEditorAction::Applied
-                }
-            }
+            KeyCode::Enter => PathEditorAction::Applied,
             KeyCode::Esc => {
                 if self.completion.visible {
                     self.completion.hide();
@@ -70,20 +62,42 @@ impl PathEditorState {
                     PathEditorAction::Cancelled
                 }
             }
-            KeyCode::Tab => {
+            KeyCode::Down => {
                 if !self.completion.visible {
                     self.update_completions();
                 } else {
                     self.completion.next();
                 }
-                self.apply_completion();
                 PathEditorAction::None
             }
-            KeyCode::BackTab => {
+            KeyCode::Up => {
+                if !self.completion.visible {
+                    self.update_completions();
+                }
                 if self.completion.visible {
                     self.completion.prev();
-                    self.apply_completion();
                 }
+                PathEditorAction::None
+            }
+            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if !self.completion.visible {
+                    self.update_completions();
+                } else {
+                    self.completion.next();
+                }
+                PathEditorAction::None
+            }
+            KeyCode::Char('k')
+                if self.completion.visible && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.completion.prev();
+                PathEditorAction::None
+            }
+            KeyCode::Char('g')
+                if self.completion.visible && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.apply_completion();
+                self.completion.hide();
                 PathEditorAction::None
             }
             _ => {
@@ -173,8 +187,12 @@ impl Widget for PathEditor<'_> {
             Theme::keybind()
         };
         let hints = Line::from(vec![
-            Span::styled("[Tab]", key_style),
-            Span::raw(" Complete  "),
+            Span::styled("[Up/Down]", key_style),
+            Span::raw("/"),
+            Span::styled("[C-j/k]", key_style),
+            Span::raw(" Suggest  "),
+            Span::styled("[C-g]", key_style),
+            Span::raw(" Select  "),
             Span::styled("[Enter]", key_style),
             Span::raw(" Apply  "),
             Span::styled("[Esc]", key_style),
@@ -188,5 +206,70 @@ impl Widget for PathEditor<'_> {
         CompletionPopup::new(&self.state.completion, input_area.y, input_area.x)
             .disconnected(self.disconnected)
             .render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        sync::{Mutex, MutexGuard},
+    };
+
+    use crossterm::event::KeyModifiers;
+
+    use super::*;
+
+    static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    fn enter_temp_dir(name: &str) -> (MutexGuard<'static, ()>, std::path::PathBuf) {
+        let guard = CURRENT_DIR_LOCK.lock().unwrap();
+        let original = std::env::current_dir().unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "serial-tui-path-editor-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        (guard, original)
+    }
+
+    #[test]
+    fn ctrl_g_accepts_selected_completion_after_down() {
+        let (_guard, original) = enter_temp_dir("accept-down");
+        fs::create_dir("Documents").unwrap();
+        fs::write("Downloads", "file").unwrap();
+
+        let mut editor = PathEditorState::default();
+        editor.open("Do");
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            PathEditorAction::None
+        );
+        assert_eq!(editor.content(), "Do");
+        assert_eq!(
+            editor.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+            PathEditorAction::None
+        );
+
+        std::env::set_current_dir(original).unwrap();
+        assert_eq!(editor.content(), "Documents/");
+    }
+
+    #[test]
+    fn up_opens_completion_at_previous_item() {
+        let (_guard, original) = enter_temp_dir("up-wraps");
+        fs::create_dir("Documents").unwrap();
+        fs::write("Downloads", "file").unwrap();
+
+        let mut editor = PathEditorState::default();
+        editor.open("Do");
+        editor.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        editor.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+
+        std::env::set_current_dir(original).unwrap();
+        assert_eq!(editor.content(), "Downloads");
     }
 }

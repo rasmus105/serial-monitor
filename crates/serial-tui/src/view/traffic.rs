@@ -34,7 +34,7 @@ use crate::{
     widget::{
         CompletionKind, CompletionPopup, CompletionState, ConfigKeyResult, ConfigPanel,
         ConnectionPanel, InputHistory, TextInput, handle_config_key,
-        text_input::{TextInputState, find_path_completions},
+        text_input::{TextInputState, expand_user_path, find_path_completions},
     },
 };
 
@@ -2009,12 +2009,12 @@ impl TrafficView {
 
     /// Validate the save directory. Returns Some(error_message) if invalid, None if valid.
     fn validate_save_directory(&self) -> Option<String> {
-        let path = std::path::Path::new(&self.config.file_save_directory);
+        let path = expand_user_path(&self.config.file_save_directory);
 
         // Check if directory exists
         if !path.exists() {
             // Try to create it
-            if let Err(e) = std::fs::create_dir_all(path) {
+            if let Err(e) = std::fs::create_dir_all(&path) {
                 return Some(format!("Cannot create directory: {}", e));
             }
         }
@@ -2387,13 +2387,7 @@ impl TrafficView {
     fn handle_dir_path_key(&mut self, key: KeyEvent) -> Option<TrafficAction> {
         match key.code {
             KeyCode::Enter => {
-                // If completion is visible, apply the selected completion
-                if self.dir_path_completion.visible {
-                    self.apply_dir_path_completion();
-                    self.dir_path_completion.hide();
-                    return None;
-                }
-                // Apply directory path and exit input mode
+                // Apply directory path and exit input mode.
                 self.config.file_save_directory = self.dir_path_input.content().to_string();
                 self.dir_path_focused = false;
                 return Some(TrafficAction::FileSaveDirectoryChanged(
@@ -2411,19 +2405,40 @@ impl TrafficView {
                     return Some(TrafficAction::RequestClear);
                 }
             }
-            KeyCode::Tab => {
+            KeyCode::Down => {
                 if !self.dir_path_completion.visible {
                     self.update_dir_path_completions();
                 } else {
                     self.dir_path_completion.next();
                 }
-                self.apply_dir_path_completion();
             }
-            KeyCode::BackTab => {
+            KeyCode::Up => {
+                if !self.dir_path_completion.visible {
+                    self.update_dir_path_completions();
+                }
                 if self.dir_path_completion.visible {
                     self.dir_path_completion.prev();
-                    self.apply_dir_path_completion();
                 }
+            }
+            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if !self.dir_path_completion.visible {
+                    self.update_dir_path_completions();
+                } else {
+                    self.dir_path_completion.next();
+                }
+            }
+            KeyCode::Char('k')
+                if self.dir_path_completion.visible
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.dir_path_completion.prev();
+            }
+            KeyCode::Char('g')
+                if self.dir_path_completion.visible
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.apply_dir_path_completion();
+                self.dir_path_completion.hide();
             }
             _ => {
                 self.dir_path_input.handle_key(key);
