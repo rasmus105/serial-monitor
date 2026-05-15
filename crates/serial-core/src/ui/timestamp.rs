@@ -75,7 +75,8 @@ mod tests {
 
     #[test]
     fn formats_absolute_timestamp_with_local_milliseconds() {
-        let time = UNIX_EPOCH + Duration::from_secs(12 * 3600 + 34 * 60 + 56) + Duration::from_millis(789);
+        let time =
+            UNIX_EPOCH + Duration::from_secs(12 * 3600 + 34 * 60 + 56) + Duration::from_millis(789);
         let expected = DateTime::<Local>::from(time)
             .format("%H:%M:%S%.3f")
             .to_string();

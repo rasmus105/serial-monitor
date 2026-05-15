@@ -432,9 +432,7 @@ impl GraphView {
                 GraphMode::PacketRate => " Graph (RX/TX Rate) ",
             })
             .borders(Borders::ALL)
-            .border_style(if !connected {
-                Theme::border_error()
-            } else if focus == Focus::Main {
+            .border_style(if focus == Focus::Main {
                 Theme::border_focused()
             } else {
                 Theme::border()
@@ -882,7 +880,7 @@ impl GraphView {
             .border_style(if !connected {
                 Theme::border_error()
             } else {
-                Theme::border()
+                Theme::border_connected()
             });
 
         ConnectionPanel::new(handle.port_name(), serial_config, handle.statistics())
@@ -895,9 +893,7 @@ impl GraphView {
         let config_block = Block::default()
             .title(" Settings ")
             .borders(Borders::ALL)
-            .border_style(if !connected {
-                Theme::border_error()
-            } else if settings_focused {
+            .border_style(if settings_focused {
                 Theme::border_focused()
             } else {
                 Theme::border()
@@ -920,7 +916,7 @@ impl GraphView {
 
         // Series visibility section (both modes)
         if series_height > 0 {
-            self.draw_series_section(chunks[3], buf, buffer, focus, connected);
+            self.draw_series_section(chunks[3], buf, buffer, focus);
         }
     }
 
@@ -930,16 +926,13 @@ impl GraphView {
         buf: &mut Buffer,
         buffer: &serial_core::DataBuffer,
         focus: Focus,
-        connected: bool,
     ) {
         let is_focused = focus == Focus::Config && self.config_sub_focus == ConfigSubFocus::Series;
 
         let block = Block::default()
             .title(" Series ")
             .borders(Borders::ALL)
-            .border_style(if !connected {
-                Theme::border_error()
-            } else if is_focused {
+            .border_style(if is_focused {
                 Theme::border_focused()
             } else {
                 Theme::border()

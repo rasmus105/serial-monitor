@@ -704,7 +704,7 @@ impl TrafficView {
         };
 
         // Draw traffic
-        self.draw_traffic(main_chunks[0], buf, handle, focus, connected);
+        self.draw_traffic(main_chunks[0], buf, handle, focus);
 
         // Draw input bar if active
         if show_input_bar {
@@ -724,14 +724,7 @@ impl TrafficView {
         }
     }
 
-    fn draw_traffic(
-        &mut self,
-        area: Rect,
-        buf: &mut Buffer,
-        handle: &SessionHandle,
-        focus: Focus,
-        connected: bool,
-    ) {
+    fn draw_traffic(&mut self, area: Rect, buf: &mut Buffer, handle: &SessionHandle, focus: Focus) {
         // Update search matches before we get an immutable borrow
         // This ensures matches are current for highlighting
         let _ = handle.buffer_mut().matches();
@@ -739,15 +732,13 @@ impl TrafficView {
         let buffer = handle.buffer();
         let current_match = buffer.current_match().copied();
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(if !connected {
-                Theme::border_error()
-            } else if focus == Focus::Main && !self.is_input_mode() {
+        let block = Block::default().borders(Borders::ALL).border_style(
+            if focus == Focus::Main && !self.is_input_mode() {
                 Theme::border_focused()
             } else {
                 Theme::border()
-            });
+            },
+        );
 
         let inner = block.inner(area);
 
@@ -1523,7 +1514,7 @@ impl TrafficView {
             .border_style(if !connected {
                 Theme::border_error()
             } else {
-                Theme::border()
+                Theme::border_connected()
             });
 
         ConnectionPanel::new(handle.port_name(), serial_config, handle.statistics())
@@ -1534,9 +1525,7 @@ impl TrafficView {
         let config_block = Block::default()
             .title(" Settings ")
             .borders(Borders::ALL)
-            .border_style(if !connected {
-                Theme::border_error()
-            } else if focus == Focus::Config {
+            .border_style(if focus == Focus::Config {
                 Theme::border_focused()
             } else {
                 Theme::border()

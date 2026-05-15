@@ -71,6 +71,10 @@ impl Theme {
         Style::default().fg(Self::BORDER_FOCUSED)
     }
 
+    pub fn border_connected() -> Style {
+        Style::default().fg(Self::SUCCESS)
+    }
+
     pub fn border_disconnected() -> Style {
         Style::default().fg(Self::BORDER_DISCONNECTED)
     }
