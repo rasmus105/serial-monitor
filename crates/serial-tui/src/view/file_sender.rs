@@ -757,7 +757,7 @@ impl FileSenderView {
     ) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(8), Constraint::Min(5)])
+            .constraints([Constraint::Length(6), Constraint::Min(5)])
             .split(area);
 
         // Connection info with statistics

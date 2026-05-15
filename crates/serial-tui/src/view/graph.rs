@@ -900,7 +900,7 @@ impl GraphView {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(8),             // Connection
+                Constraint::Length(6),             // Connection
                 Constraint::Min(5),                // Settings
                 Constraint::Length(hint_height),   // Hint (if editing)
                 Constraint::Length(series_height), // Series (if any)

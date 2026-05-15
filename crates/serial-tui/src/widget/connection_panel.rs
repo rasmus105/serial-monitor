@@ -2,13 +2,13 @@
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
 };
 use serial_core::{SerialConfig, Statistics};
 
-use super::util::{format_bytes, format_rate};
+use super::util::{format_bytes, format_flow_control, format_serial_config_compact};
 use crate::theme::Theme;
 
 /// Widget displaying connection info (port config + statistics).
@@ -50,133 +50,51 @@ impl Widget for ConnectionPanel<'_> {
             area
         };
 
-        // Split horizontally: left for config, right for statistics
-        // Use a vertical line as separator
-        let chunks = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(inner);
-
-        let left_area = chunks[0];
-        let right_area = chunks[1];
-
-        // Draw vertical separator line
-        if right_area.x > 0 {
-            let sep_x = right_area.x.saturating_sub(1);
-            for y in inner.y..inner.y.saturating_add(inner.height) {
-                if sep_x >= inner.x && sep_x < inner.x + inner.width {
-                    buf[(sep_x, y)].set_symbol("│").set_style(Theme::border());
-                }
-            }
-        }
-
-        // Left side: Connection config
-        let config_lines = vec![
-            Line::from(vec![
-                Span::styled("Port:   ", Theme::muted()),
-                Span::styled(self.port_name, Theme::base()),
-            ]),
-            Line::from(vec![
-                Span::styled("Baud:   ", Theme::muted()),
-                Span::styled(self.serial_config.baud_rate.to_string(), Theme::base()),
-            ]),
-            Line::from(vec![
-                Span::styled("Data:   ", Theme::muted()),
-                Span::styled(format!("{:?}", self.serial_config.data_bits), Theme::base()),
-            ]),
-            Line::from(vec![
-                Span::styled("Parity: ", Theme::muted()),
-                Span::styled(format!("{:?}", self.serial_config.parity), Theme::base()),
-            ]),
-            Line::from(vec![
-                Span::styled("Stop:   ", Theme::muted()),
-                Span::styled(format!("{:?}", self.serial_config.stop_bits), Theme::base()),
-            ]),
-            Line::from(vec![
-                Span::styled("Flow:   ", Theme::muted()),
-                Span::styled(
-                    format!("{:?}", self.serial_config.flow_control),
-                    Theme::base(),
-                ),
-            ]),
-        ];
-
-        for (i, line) in config_lines.into_iter().enumerate() {
-            if i >= left_area.height as usize {
-                break;
-            }
-            Paragraph::new(line).render(
-                Rect::new(
-                    left_area.x,
-                    left_area.y + i as u16,
-                    left_area.width.saturating_sub(1),
-                    1,
-                ),
-                buf,
-            );
-        }
-
-        // Right side: Statistics
         let duration = self.statistics.duration();
         let hours = duration.as_secs() / 3600;
         let mins = (duration.as_secs() % 3600) / 60;
         let secs = duration.as_secs() % 60;
         let time_str = format!("{:02}:{:02}:{:02}", hours, mins, secs);
 
-        let stats_lines = vec![
+        let lines = vec![
             Line::from(vec![
-                Span::styled("RX: ", Theme::muted()),
-                Span::styled(format_bytes(self.statistics.bytes_rx()), Theme::base()),
+                Span::styled("Port:   ", Theme::muted()),
+                Span::styled(self.port_name, Theme::base()),
             ]),
             Line::from(vec![
-                Span::styled("TX: ", Theme::muted()),
+                Span::styled("Config: ", Theme::muted()),
+                Span::styled(
+                    format_serial_config_compact(self.serial_config),
+                    Theme::base(),
+                ),
+                Span::styled(", Flow: ", Theme::muted()),
+                Span::styled(
+                    format_flow_control(self.serial_config.flow_control),
+                    Theme::base(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Bytes:  ", Theme::muted()),
+                Span::styled("RX", Theme::rx()),
+                Span::styled(": ", Theme::muted()),
+                Span::styled(format_bytes(self.statistics.bytes_rx()), Theme::base()),
+                Span::styled(", ", Theme::muted()),
+                Span::styled("TX", Theme::tx()),
+                Span::styled(": ", Theme::muted()),
                 Span::styled(format_bytes(self.statistics.bytes_tx()), Theme::base()),
             ]),
             Line::from(vec![
-                Span::styled("Time: ", Theme::muted()),
+                Span::styled("Time:   ", Theme::muted()),
                 Span::styled(time_str, Theme::base()),
-            ]),
-            Line::from(vec![
-                Span::styled("Avg RX: ", Theme::muted()),
-                Span::styled(
-                    format_rate(self.statistics.avg_bytes_rx_per_sec()),
-                    Theme::base(),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Avg TX: ", Theme::muted()),
-                Span::styled(
-                    format_rate(self.statistics.avg_bytes_tx_per_sec()),
-                    Theme::base(),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Packets (rx/tx): ", Theme::muted()),
-                Span::styled(
-                    format!(
-                        "{}/{}",
-                        self.statistics.packets_rx(),
-                        self.statistics.packets_tx()
-                    ),
-                    Theme::base(),
-                ),
             ]),
         ];
 
-        // Add 1 to x to add spacing after separator
-        let stats_area = Rect::new(
-            right_area.x + 1,
-            right_area.y,
-            right_area.width.saturating_sub(1),
-            right_area.height,
-        );
-
-        for (i, line) in stats_lines.into_iter().enumerate() {
-            if i >= stats_area.height as usize {
+        for (i, line) in lines.into_iter().enumerate() {
+            if i >= inner.height as usize {
                 break;
             }
-            Paragraph::new(line).render(
-                Rect::new(stats_area.x, stats_area.y + i as u16, stats_area.width, 1),
-                buf,
-            );
+            Paragraph::new(line)
+                .render(Rect::new(inner.x, inner.y + i as u16, inner.width, 1), buf);
         }
     }
 }

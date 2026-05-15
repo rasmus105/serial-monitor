@@ -4,11 +4,14 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Rect},
+    style::Modifier,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
-use super::util::{format_bytes, format_duration};
+use super::util::{
+    format_bytes, format_duration, format_flow_control, format_rate, format_serial_config_compact,
+};
 use crate::{
     app::{SessionEntry, SessionState},
     theme::Theme,
@@ -131,9 +134,15 @@ impl Widget for SessionsModal<'_> {
         }
 
         // Calculate overlay size (centered, reasonable size)
-        let width = 60.min(area.width.saturating_sub(4));
-        // Height: border + sessions + blank + hint + border
-        let content_height = self.sessions.len() as u16 + 2; // sessions + hint lines
+        let width = 88.min(area.width.saturating_sub(4));
+        // Height: border + session detail lines + blank + hint + border
+        let content_height = self
+            .sessions
+            .iter()
+            .map(session_line_count)
+            .sum::<u16>()
+            .saturating_sub(1)
+            + 2;
         let height = (content_height + 2)
             .min(area.height.saturating_sub(4))
             .max(8);
@@ -162,13 +171,16 @@ impl Widget for SessionsModal<'_> {
             let is_selected = idx == self.state.selected;
             let is_active = Some(idx) == self.active_index;
 
-            let line = build_session_line(
+            lines.extend(build_session_lines(
                 entry,
                 is_selected,
                 is_active,
                 self.state.confirming_disconnect,
-            );
-            lines.push(line);
+            ));
+
+            if idx + 1 < self.sessions.len() {
+                lines.push(Line::from(""));
+            }
         }
 
         // Add empty line before hints
@@ -199,13 +211,13 @@ impl Widget for SessionsModal<'_> {
     }
 }
 
-/// Build a line for a single session entry.
-fn build_session_line(
+/// Build lines for a single session entry.
+fn build_session_lines(
     entry: &SessionEntry,
     is_selected: bool,
     is_active: bool,
     confirming_disconnect: bool,
-) -> Line<'static> {
+) -> Vec<Line<'static>> {
     let mut spans: Vec<Span> = Vec::new();
 
     // Selection/active marker
@@ -231,7 +243,6 @@ fn build_session_line(
 
     spans.push(Span::styled(marker.to_string(), marker_style));
 
-    // Session content based on state
     match &entry.state {
         SessionState::PreConnect(_) => {
             let text = "New Connection";
@@ -241,34 +252,81 @@ fn build_session_line(
                 Theme::muted()
             };
             spans.push(Span::styled(text.to_string(), style));
+
+            vec![
+                Line::from(spans),
+                Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled("State:  ", label_style()),
+                    Span::styled("Not connected", Theme::muted()),
+                ]),
+            ]
         }
         SessionState::Connected(state) => {
-            // Port name
             let port_name = state.handle.port_name();
             let name_style = if is_selected {
                 Theme::highlight()
+            } else if !state.connected {
+                Theme::error()
             } else {
                 Theme::base()
             };
             spans.push(Span::styled(port_name.to_string(), name_style));
 
-            // Stats - show chunk count and buffer size
-            let buffer = state.handle.buffer();
-            let chunk_count = buffer.len();
-            let buffer_size = buffer.size() as u64;
-            let stats_str = format!("  {} chunks  {}", chunk_count, format_bytes(buffer_size),);
-            let stats_style = Theme::muted();
-            spans.push(Span::styled(stats_str, stats_style));
+            let statistics = state.handle.statistics();
+            let duration = format_duration(statistics.duration().as_secs());
+            let config = &state.serial_config;
 
-            // Duration if we have session start time
-            if let Some(start) = state.traffic.session_start
-                && let Ok(elapsed) = start.elapsed()
-            {
-                let duration_str = format!("  {}", format_duration(elapsed.as_secs()));
-                spans.push(Span::styled(duration_str, stats_style));
-            }
+            vec![
+                Line::from(spans),
+                Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled("Config: ", label_style()),
+                    Span::styled(format_serial_config_compact(config), Theme::base()),
+                    Span::styled(", Flow: ", Theme::muted()),
+                    Span::styled(format_flow_control(config.flow_control), Theme::base()),
+                ]),
+                Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled("RX:     ", Theme::rx().add_modifier(Modifier::BOLD)),
+                    Span::styled(format_bytes(statistics.bytes_rx()), Theme::base()),
+                    Span::styled(", ", Theme::muted()),
+                    Span::styled(format!("{} pkts", statistics.packets_rx()), Theme::base()),
+                    Span::styled(", ", Theme::muted()),
+                    Span::styled(
+                        format_rate(statistics.avg_bytes_rx_per_sec()),
+                        Theme::base(),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled("TX:     ", Theme::tx().add_modifier(Modifier::BOLD)),
+                    Span::styled(format_bytes(statistics.bytes_tx()), Theme::base()),
+                    Span::styled(", ", Theme::muted()),
+                    Span::styled(format!("{} pkts", statistics.packets_tx()), Theme::base()),
+                    Span::styled(", ", Theme::muted()),
+                    Span::styled(
+                        format_rate(statistics.avg_bytes_tx_per_sec()),
+                        Theme::base(),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled("Time:   ", label_style()),
+                    Span::styled(duration, Theme::base()),
+                ]),
+            ]
         }
     }
+}
 
-    Line::from(spans)
+fn session_line_count(entry: &SessionEntry) -> u16 {
+    match entry.state {
+        SessionState::PreConnect(_) => 3,
+        SessionState::Connected(_) => 6,
+    }
+}
+
+fn label_style() -> ratatui::style::Style {
+    Theme::muted().add_modifier(Modifier::BOLD)
 }
