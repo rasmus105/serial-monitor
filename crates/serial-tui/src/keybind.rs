@@ -235,6 +235,11 @@ pub fn all_keybinds() -> Vec<Keybind> {
         // Cursor/visual mode
         Keybind::new(
             key(KeyCode::Char('v')),
+            "Exit cursor/selection",
+            KeyContext::Visual,
+        ),
+        Keybind::new(
+            key(KeyCode::Char(' ')),
             "Start/stop visual selection",
             KeyContext::Visual,
         ),

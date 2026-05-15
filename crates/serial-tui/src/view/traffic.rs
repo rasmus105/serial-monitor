@@ -1789,6 +1789,11 @@ impl TrafficView {
                 _ => self.exit_cursor_mode(),
             },
             KeyCode::Char('v') => match self.cursor_mode {
+                TrafficCursorMode::Normal => self.enter_cursor_mode(handle),
+                TrafficCursorMode::Cursor { .. } => self.exit_cursor_mode(),
+                TrafficCursorMode::Visual { .. } => self.exit_cursor_mode(),
+            },
+            KeyCode::Char(' ') => match self.cursor_mode {
                 TrafficCursorMode::Cursor { row } => {
                     self.cursor_mode = TrafficCursorMode::Visual {
                         anchor: row,
