@@ -1255,8 +1255,11 @@ impl FileSenderView {
                 self.file_path_completion.hide();
             }
             _ => {
-                self.file_path_input.handle_key(key);
-                self.file_path_completion.hide();
+                if self.file_path_input.handle_key(key) {
+                    self.update_file_path_completions();
+                } else {
+                    self.file_path_completion.hide();
+                }
             }
         }
         None

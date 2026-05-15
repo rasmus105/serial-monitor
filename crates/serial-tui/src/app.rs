@@ -797,8 +797,11 @@ impl App {
                         }
                         _ => {
                             self.command_history.reset_navigation();
-                            self.command_input.handle_key(key);
-                            self.completion.hide();
+                            if self.command_input.handle_key(key) {
+                                self.update_completions();
+                            } else {
+                                self.completion.hide();
+                            }
                         }
                     }
                     return;
@@ -1795,6 +1798,49 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+    use crate::event::AppEvent;
+
+    #[tokio::test]
+    async fn command_completion_appears_while_typing() {
+        let mut app = App::new();
+        app.command_mode = true;
+
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::NONE,
+        )))
+        .await;
+
+        assert!(app.completion.visible);
+        assert_eq!(app.completion.options, vec!["save", "sessions", "settings"]);
+    }
+
+    #[tokio::test]
+    async fn ctrl_g_accepts_visible_command_completion() {
+        let mut app = App::new();
+        app.command_mode = true;
+
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::NONE,
+        )))
+        .await;
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Char('g'),
+            KeyModifiers::CONTROL,
+        )))
+        .await;
+
+        assert_eq!(app.command_input.content(), "save ");
+        assert!(!app.completion.visible);
     }
 }
 

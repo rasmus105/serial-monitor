@@ -101,8 +101,11 @@ impl PathEditorState {
                 PathEditorAction::None
             }
             _ => {
-                self.input.handle_key(key);
-                self.completion.hide();
+                if self.input.handle_key(key) {
+                    self.update_completions();
+                } else {
+                    self.completion.hide();
+                }
                 PathEditorAction::None
             }
         }
@@ -256,6 +259,22 @@ mod tests {
 
         std::env::set_current_dir(original).unwrap();
         assert_eq!(editor.content(), "Documents/");
+    }
+
+    #[test]
+    fn completion_appears_while_typing() {
+        let (_guard, original) = enter_temp_dir("typing-opens");
+        fs::create_dir("Documents").unwrap();
+        fs::write("Downloads", "file").unwrap();
+
+        let mut editor = PathEditorState::default();
+        editor.open("");
+        editor.handle_key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::NONE));
+        editor.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+
+        std::env::set_current_dir(original).unwrap();
+        assert!(editor.completion.visible);
+        assert_eq!(editor.content(), "Do");
     }
 
     #[test]
