@@ -405,6 +405,7 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
 
 impl<T: 'static> Widget for ConfigPanel<'_, T> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let has_block = self.block.is_some();
         let inner = if let Some(ref block) = self.block {
             let inner = block.inner(area);
             block.clone().render(area, buf);
@@ -419,7 +420,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
 
         let content_height = self.content_height();
         let is_scrollable = content_height > inner.height as usize;
-        let content_area = if is_scrollable {
+        let content_area = if is_scrollable && !has_block {
             Rect::new(
                 inner.x,
                 inner.y,
@@ -658,7 +659,16 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
         }
 
         if is_scrollable {
-            let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+            let scrollbar_area = if has_block {
+                Rect::new(
+                    area.x + area.width - 1,
+                    area.y + 1,
+                    1,
+                    area.height.saturating_sub(2),
+                )
+            } else {
+                Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height)
+            };
             let mut scrollbar_state = ScrollbarState::new(content_height)
                 .position(scroll)
                 .viewport_content_length(content_area.height as usize);
@@ -889,7 +899,11 @@ fn is_descendant_of<T>(
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+    use ratatui::{
+        buffer::Buffer,
+        layout::Rect,
+        widgets::{Block, Borders, Widget},
+    };
     use serial_core::ui::config::{ConfigNav, FieldDef, FieldValue, Section};
 
     use super::ConfigPanel;
@@ -973,6 +987,21 @@ mod tests {
         assert_eq!(right_edge_symbol(&tall_buf, tall_area, 2), "]");
     }
 
+    #[test]
+    fn renders_bordered_scrollbar_on_right_border() {
+        let config = TestConfig;
+        let nav = ConfigNav::default();
+        let area = Rect::new(0, 0, 30, 6);
+        let mut buf = Buffer::empty(area);
+
+        ConfigPanel::new(SECTIONS, &config, &nav)
+            .block(Block::default().borders(Borders::ALL))
+            .render(area, &mut buf);
+
+        assert_ne!(right_edge_symbol(&buf, area, 2), "│");
+        assert_eq!(symbol_at(&buf, area.width - 2, 2), "─");
+    }
+
     fn line_text(buf: &Buffer, area: Rect, y: u16) -> String {
         (area.x..area.x + area.width)
             .map(|x| buf[(x, area.y + y)].symbol())
@@ -982,5 +1011,9 @@ mod tests {
     fn right_edge_symbol(buf: &Buffer, area: Rect, y: u16) -> &str {
         let x = area.x + area.width - 1;
         buf[(x, area.y + y)].symbol()
+    }
+
+    fn symbol_at(buf: &Buffer, x: u16, y: u16) -> &str {
+        buf[(x, y)].symbol()
     }
 }
