@@ -1,7 +1,8 @@
 //! Timestamp formatting utilities
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
+use chrono::{DateTime, Local};
 use strum::{Display, EnumIter, VariantArray};
 
 /// Format for displaying timestamps in traffic views
@@ -34,27 +35,54 @@ impl TimestampFormat {
                 format!("+{:.3}s", secs)
             }
             TimestampFormat::AbsoluteMillis => {
-                let (hours, minutes, seconds, millis) = time_of_day_parts(time);
-                format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+                let local_time = DateTime::<Local>::from(time);
+                local_time.format("%H:%M:%S%.3f").to_string()
             }
             TimestampFormat::Absolute => {
-                let (hours, minutes, seconds, _) = time_of_day_parts(time);
-                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+                let local_time = DateTime::<Local>::from(time);
+                local_time.format("%H:%M:%S").to_string()
             }
         }
     }
 }
 
-/// Extract hours, minutes, seconds, and milliseconds from a SystemTime
-fn time_of_day_parts(time: SystemTime) -> (u64, u64, u64, u64) {
-    let duration = time.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO);
-    let total_secs = duration.as_secs();
-    let millis = duration.subsec_millis() as u64;
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, UNIX_EPOCH};
 
-    let time_of_day = total_secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
+    use chrono::{DateTime, Local};
 
-    (hours, minutes, seconds, millis)
+    use super::TimestampFormat;
+
+    #[test]
+    fn formats_relative_timestamp_from_session_start() {
+        let session_start = UNIX_EPOCH + Duration::from_secs(10);
+        let time = session_start + Duration::from_millis(1234);
+
+        assert_eq!(
+            TimestampFormat::Relative.format(time, session_start),
+            "+1.234s"
+        );
+    }
+
+    #[test]
+    fn formats_absolute_timestamp_in_local_time() {
+        let time = UNIX_EPOCH + Duration::from_secs(12 * 3600 + 34 * 60 + 56);
+        let expected = DateTime::<Local>::from(time).format("%H:%M:%S").to_string();
+
+        assert_eq!(TimestampFormat::Absolute.format(time, UNIX_EPOCH), expected);
+    }
+
+    #[test]
+    fn formats_absolute_timestamp_with_local_milliseconds() {
+        let time = UNIX_EPOCH + Duration::from_secs(12 * 3600 + 34 * 60 + 56) + Duration::from_millis(789);
+        let expected = DateTime::<Local>::from(time)
+            .format("%H:%M:%S%.3f")
+            .to_string();
+
+        assert_eq!(
+            TimestampFormat::AbsoluteMillis.format(time, UNIX_EPOCH),
+            expected
+        );
+    }
 }
