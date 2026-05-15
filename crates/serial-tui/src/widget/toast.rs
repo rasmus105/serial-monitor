@@ -104,7 +104,7 @@ impl Toasts {
     pub fn new() -> Self {
         Self {
             toasts: VecDeque::new(),
-            max_visible: 5,
+            max_visible: 1,
         }
     }
 
@@ -162,7 +162,12 @@ impl Widget for ToastsWidget<'_> {
             return;
         }
 
-        let visible = self.toasts.toasts.iter().take(self.toasts.max_visible);
+        let visible = self
+            .toasts
+            .toasts
+            .iter()
+            .rev()
+            .take(self.toasts.max_visible);
 
         let mut y = area.y + 1;
         for toast in visible {
@@ -220,4 +225,36 @@ impl Widget for ToastsWidget<'_> {
 /// Render toasts as an overlay.
 pub fn render_toasts(toasts: &Toasts, area: Rect, buf: &mut Buffer) {
     ToastsWidget::new(toasts).render(area, buf);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_one_visible_toast() {
+        let toasts = Toasts::new();
+
+        assert_eq!(toasts.max_visible, 1);
+    }
+
+    #[test]
+    fn renders_newest_toast_when_multiple_are_queued() {
+        let mut toasts = Toasts::new();
+        toasts.info("old notification");
+        toasts.success("new notification");
+
+        let area = Rect::new(0, 0, 50, 10);
+        let mut buffer = Buffer::empty(area);
+        render_toasts(&toasts, area, &mut buffer);
+
+        let rendered = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("new notification"));
+        assert!(!rendered.contains("old notification"));
+    }
 }
