@@ -791,10 +791,20 @@ impl App {
                         }
                         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             if self.completion.visible {
+                                let kind = self.completion.kind;
                                 self.apply_completion();
-                                self.completion.hide();
+                                match kind {
+                                    CompletionKind::Command => self.update_completions(),
+                                    CompletionKind::Argument
+                                        if self.command_input.content().ends_with('/') =>
+                                    {
+                                        self.update_completions();
+                                    }
+                                    CompletionKind::Argument => self.completion.hide(),
+                                }
                             }
                         }
+                        KeyCode::Tab | KeyCode::BackTab => {}
                         _ => {
                             self.command_history.reset_navigation();
                             if self.command_input.handle_key(key) {
@@ -1843,7 +1853,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ctrl_g_accepts_visible_command_completion() {
+    async fn ctrl_g_accepts_visible_command_completion_and_shows_argument_completion() {
         let mut app = App::new();
         app.command_mode = true;
 
@@ -1859,7 +1869,28 @@ mod tests {
         .await;
 
         assert_eq!(app.command_input.content(), "save ");
-        assert!(!app.completion.visible);
+        assert!(app.completion.visible);
+        assert_eq!(app.completion.kind, CompletionKind::Argument);
+    }
+
+    #[tokio::test]
+    async fn tab_does_not_close_visible_command_completion() {
+        let mut app = App::new();
+        app.command_mode = true;
+
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::NONE,
+        )))
+        .await;
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+        )))
+        .await;
+
+        assert_eq!(app.command_input.content(), "s");
+        assert!(app.completion.visible);
     }
 
     #[test]

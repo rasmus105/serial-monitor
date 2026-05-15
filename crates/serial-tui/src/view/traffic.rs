@@ -2533,8 +2533,13 @@ impl TrafficView {
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 self.apply_dir_path_completion();
-                self.dir_path_completion.hide();
+                if self.dir_path_input.content().ends_with('/') {
+                    self.update_dir_path_completions();
+                } else {
+                    self.dir_path_completion.hide();
+                }
             }
+            KeyCode::Tab | KeyCode::BackTab => {}
             _ => {
                 if self.dir_path_input.handle_key(key) {
                     self.update_dir_path_completions();

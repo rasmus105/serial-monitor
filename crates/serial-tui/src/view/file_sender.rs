@@ -1252,8 +1252,13 @@ impl FileSenderView {
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 self.apply_file_path_completion();
-                self.file_path_completion.hide();
+                if self.file_path_input.content().ends_with('/') {
+                    self.update_file_path_completions();
+                } else {
+                    self.file_path_completion.hide();
+                }
             }
+            KeyCode::Tab | KeyCode::BackTab => {}
             _ => {
                 if self.file_path_input.handle_key(key) {
                     self.update_file_path_completions();

@@ -97,9 +97,14 @@ impl PathEditorState {
                 if self.completion.visible && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 self.apply_completion();
-                self.completion.hide();
+                if self.input.content().ends_with('/') {
+                    self.update_completions();
+                } else {
+                    self.completion.hide();
+                }
                 PathEditorAction::None
             }
+            KeyCode::Tab | KeyCode::BackTab => PathEditorAction::None,
             _ => {
                 if self.input.handle_key(key) {
                     self.update_completions();

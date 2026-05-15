@@ -295,14 +295,12 @@ impl Widget for TextInput<'_> {
 /// - Prefix matching for partial paths
 /// - Trailing slash appended to directory completions
 pub fn find_path_completions(input: &str) -> Vec<String> {
-    if input.is_empty() {
-        return Vec::new();
-    }
-
     let expanded = expand_user_path(input);
 
     // Determine parent directory and prefix to match
-    let (parent, prefix) = if expanded.is_dir() && input.ends_with('/') {
+    let (parent, prefix) = if input.is_empty() {
+        (Path::new(".").to_path_buf(), String::new())
+    } else if expanded.is_dir() && input.ends_with('/') {
         // Input is a directory ending with /, list its contents
         (expanded.clone(), String::new())
     } else if let Some(parent) = expanded.parent() {
@@ -454,6 +452,19 @@ mod tests {
         std::env::set_current_dir(original).unwrap();
         let _ = fs::remove_dir_all(dir);
         assert_eq!(completions, vec!["./Documents/"]);
+    }
+
+    #[test]
+    fn completes_empty_path_from_current_directory() {
+        let (_guard, original, dir) = enter_temp_dir("empty-path");
+        fs::create_dir("Documents").unwrap();
+        fs::write("notes.txt", "file").unwrap();
+
+        let completions = find_path_completions("");
+
+        std::env::set_current_dir(original).unwrap();
+        let _ = fs::remove_dir_all(dir);
+        assert_eq!(completions, vec!["Documents/", "notes.txt"]);
     }
 
     #[test]
