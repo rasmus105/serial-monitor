@@ -168,11 +168,11 @@ pub struct GraphSettings {
     pub show_rx: bool,
     /// Show TX rate (for rate mode).
     pub show_tx: bool,
-    /// Time range preset index.
+    /// Legacy time range preset index: 0=All, 1=1 Hour, 2=5 Min, 3=Custom.
     pub time_range_index: usize,
-    /// Custom time value.
+    /// Time range value.
     pub custom_time_value: usize,
-    /// Custom time unit index.
+    /// Time range unit index: 0=seconds, 1=minutes, 2=hours.
     pub custom_time_unit_index: usize,
 }
 
@@ -191,6 +191,20 @@ impl Default for GraphSettings {
             time_range_index: 0, // All
             custom_time_value: 60,
             custom_time_unit_index: 1, // minutes
+        }
+    }
+}
+
+impl GraphSettings {
+    /// Return the persisted graph time range as value plus unit.
+    pub fn time_range_value_and_unit(&self) -> (usize, usize) {
+        match self.time_range_index {
+            1 => (1, 2), // 1 hour
+            2 => (5, 1), // 5 minutes
+            _ => (
+                self.custom_time_value.max(1),
+                self.custom_time_unit_index.min(2),
+            ),
         }
     }
 }

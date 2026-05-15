@@ -116,12 +116,10 @@ pub struct GraphConfig {
     pub show_tx: bool,
 
     // --- Time range options (both modes) ---
-    /// Time range preset: 0=All, 1=1 Hour, 2=5 Min, 3=Custom
-    pub time_range_index: usize,
-    /// Custom time value (used when time_range_index == 3)
-    pub custom_time_value: usize,
-    /// Custom time unit: 0=seconds, 1=minutes, 2=hours
-    pub custom_time_unit_index: usize,
+    /// Time range value.
+    pub time_range_value: usize,
+    /// Time range unit: 0=seconds, 1=minutes, 2=hours
+    pub time_range_unit_index: usize,
 }
 
 impl Default for GraphConfig {
@@ -136,9 +134,8 @@ impl Default for GraphConfig {
             parse_tx: false,
             show_rx: true,
             show_tx: true,
-            time_range_index: 0, // All
-            custom_time_value: 60,
-            custom_time_unit_index: 1, // minutes
+            time_range_value: 60,
+            time_range_unit_index: 1, // minutes
         }
     }
 }
@@ -201,26 +198,15 @@ impl GraphConfig {
         }
     }
 
-    /// Get the time range as a Duration, or None for "All".
-    pub fn time_range(&self) -> Option<Duration> {
-        match self.time_range_index {
-            0 => None,                            // All
-            1 => Some(Duration::from_secs(3600)), // 1 hour
-            2 => Some(Duration::from_secs(300)),  // 5 min
-            3 => {
-                // Custom
-                let multiplier = match self.custom_time_unit_index {
-                    0 => 1,    // seconds
-                    1 => 60,   // minutes
-                    2 => 3600, // hours
-                    _ => 60,
-                };
-                Some(Duration::from_secs(
-                    self.custom_time_value as u64 * multiplier,
-                ))
-            }
-            _ => None,
-        }
+    /// Get the configured time range as a duration.
+    pub fn time_range(&self) -> Duration {
+        let multiplier = match self.time_range_unit_index {
+            0 => 1,    // seconds
+            1 => 60,   // minutes
+            2 => 3600, // hours
+            _ => 60,
+        };
+        Duration::from_secs(self.time_range_value as u64 * multiplier)
     }
 }
 
@@ -231,7 +217,6 @@ impl GraphConfig {
 const MODE_OPTIONS: &[&str] = &["Parse Data", "RX/TX Rate"];
 const PARSER_TYPE_OPTIONS: &[&str] = &["Smart", "CSV", "JSON", "Regex"];
 const CSV_DELIMITER_OPTIONS: &[&str] = &["Comma (,)", "Semicolon (;)", "Tab", "Space", "Pipe (|)"];
-const TIME_RANGE_OPTIONS: &[&str] = &["All", "1 Hour", "5 Min", "Custom"];
 const TIME_UNIT_OPTIONS: &[&str] = &["seconds", "minutes", "hours"];
 
 static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
@@ -258,13 +243,14 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
             FieldDef {
                 id: "time_range",
                 label: "Time Range",
-                kind: FieldKind::Select {
-                    options: TIME_RANGE_OPTIONS,
+                kind: FieldKind::NumericInput {
+                    min: Some(1),
+                    max: Some(9999),
                 },
-                get: |c| FieldValue::OptionIndex(c.time_range_index),
+                get: |c| FieldValue::Usize(c.time_range_value),
                 set: |c, v| {
-                    if let FieldValue::OptionIndex(i) = v {
-                        c.time_range_index = i;
+                    if let FieldValue::Usize(n) = v {
+                        c.time_range_value = n;
                     }
                 },
                 visible: always_visible,
@@ -273,37 +259,19 @@ static GRAPH_CONFIG_SECTIONS: &[Section<GraphConfig>] = &[
                 validate: always_valid,
             },
             FieldDef {
-                id: "custom_time_value",
-                label: "Custom Value",
-                kind: FieldKind::NumericInput {
-                    min: Some(1),
-                    max: Some(9999),
-                },
-                get: |c| FieldValue::Usize(c.custom_time_value),
-                set: |c, v| {
-                    if let FieldValue::Usize(n) = v {
-                        c.custom_time_value = n;
-                    }
-                },
-                visible: always_visible,
-                enabled: |c| c.time_range_index == 3, // Custom
-                parent_id: Some("time_range"),
-                validate: always_valid,
-            },
-            FieldDef {
-                id: "custom_time_unit",
-                label: "Custom Unit",
+                id: "time_range_unit",
+                label: "Unit",
                 kind: FieldKind::Select {
                     options: TIME_UNIT_OPTIONS,
                 },
-                get: |c| FieldValue::OptionIndex(c.custom_time_unit_index),
+                get: |c| FieldValue::OptionIndex(c.time_range_unit_index),
                 set: |c, v| {
                     if let FieldValue::OptionIndex(i) = v {
-                        c.custom_time_unit_index = i;
+                        c.time_range_unit_index = i;
                     }
                 },
                 visible: always_visible,
-                enabled: |c| c.time_range_index == 3, // Custom
+                enabled: always_enabled,
                 parent_id: Some("time_range"),
                 validate: always_valid,
             },
@@ -455,7 +423,7 @@ impl GraphView {
     ) {
         let buffer = handle.buffer();
         let mode = self.config.mode();
-        let time_range = self.config.time_range();
+        let time_range = Some(self.config.time_range());
 
         // Draw chart area
         let chart_block = Block::default()
@@ -1492,9 +1460,9 @@ impl GraphView {
         self.config.parse_tx = settings.parse_tx;
         self.config.show_rx = settings.show_rx;
         self.config.show_tx = settings.show_tx;
-        self.config.time_range_index = settings.time_range_index;
-        self.config.custom_time_value = settings.custom_time_value;
-        self.config.custom_time_unit_index = settings.custom_time_unit_index;
+        let (value, unit_index) = settings.time_range_value_and_unit();
+        self.config.time_range_value = value;
+        self.config.time_range_unit_index = unit_index;
     }
 
     /// Extract settings for saving to disk.
@@ -1509,9 +1477,9 @@ impl GraphView {
             parse_tx: self.config.parse_tx,
             show_rx: self.config.show_rx,
             show_tx: self.config.show_tx,
-            time_range_index: self.config.time_range_index,
-            custom_time_value: self.config.custom_time_value,
-            custom_time_unit_index: self.config.custom_time_unit_index,
+            time_range_index: 3,
+            custom_time_value: self.config.time_range_value,
+            custom_time_unit_index: self.config.time_range_unit_index,
         }
     }
 }
