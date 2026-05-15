@@ -6,7 +6,10 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        StatefulWidget, Widget, Wrap,
+    },
 };
 use serial_core::ui::config::{ConfigNav, FieldDef, FieldKind, FieldValue, Section};
 use serial_core::ui::slice_by_display_width;
@@ -363,6 +366,24 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
         None
     }
 
+    fn content_height(&self) -> usize {
+        self.sections
+            .iter()
+            .enumerate()
+            .map(|(section_idx, section)| {
+                let header_height = usize::from(section.header.is_some()) * 2;
+                let fields_height = section
+                    .fields
+                    .iter()
+                    .filter(|field| (field.visible)(self.data))
+                    .count();
+                let spacing = usize::from(section_idx < self.sections.len() - 1);
+
+                header_height + fields_height + spacing
+            })
+            .sum()
+    }
+
     fn effective_scroll(&self, viewport_height: usize) -> usize {
         if viewport_height == 0 {
             return self.nav.scroll;
@@ -396,10 +417,27 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
             return;
         }
 
-        let scroll = self.effective_scroll(inner.height as usize);
+        let content_height = self.content_height();
+        let is_scrollable = content_height > inner.height as usize;
+        let content_area = if is_scrollable {
+            Rect::new(
+                inner.x,
+                inner.y,
+                inner.width.saturating_sub(1),
+                inner.height,
+            )
+        } else {
+            inner
+        };
+
+        if content_area.width < 4 {
+            return;
+        }
+
+        let scroll = self.effective_scroll(content_area.height as usize);
 
         // Get dropdown info before iterating (needed for overlay)
-        let dropdown_info = self.get_dropdown_info(inner, scroll);
+        let dropdown_info = self.get_dropdown_info(content_area, scroll);
 
         let mut row = 0usize;
         let mut field_index = 0;
@@ -421,7 +459,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
         for (section_idx, section) in self.sections.iter().enumerate() {
             // Render section header if present
             if let Some(header) = &section.header {
-                if let Some(y) = visible_y(inner, row, scroll) {
+                if let Some(y) = visible_y(content_area, row, scroll) {
                     let header_style = if self.read_only {
                         Theme::muted()
                     } else if self.disconnected {
@@ -431,16 +469,17 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     };
 
                     let line = Line::from(vec![Span::styled(header.to_string(), header_style)]);
-                    Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
+                    Paragraph::new(line)
+                        .render(Rect::new(content_area.x, y, content_area.width, 1), buf);
                 }
                 row += 1;
 
                 // Separator line
-                if let Some(y) = visible_y(inner, row, scroll) {
-                    let sep = "─".repeat(inner.width as usize);
+                if let Some(y) = visible_y(content_area, row, scroll) {
+                    let sep = "─".repeat(content_area.width as usize);
                     Paragraph::new(sep)
                         .style(Theme::muted())
-                        .render(Rect::new(inner.x, y, inner.width, 1), buf);
+                        .render(Rect::new(content_area.x, y, content_area.width, 1), buf);
                 }
                 row += 1;
             }
@@ -454,7 +493,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
 
             // Render fields
             for (field_in_section_idx, field) in visible_fields.iter().enumerate() {
-                let y = visible_y(inner, row, scroll);
+                let y = visible_y(content_area, row, scroll);
 
                 let is_selected = self.focused && self.nav.selected == field_index;
                 let is_dropdown_open = is_selected && self.nav.edit_mode.is_dropdown();
@@ -567,7 +606,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                 // Calculate layout: tree_prefix + label on left, value on right.
                 // Both sides use display-width-aware truncation so long UTF-8 paths stay visible.
                 let label = field.label;
-                let available = inner.width as usize;
+                let available = content_area.width as usize;
                 let min_gap = usize::from(available > tree_prefix_width);
                 let max_value_width = available.saturating_sub(tree_prefix_width + min_gap);
                 let preferred_value_width = value_str.width().min(available / 2);
@@ -595,7 +634,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     // Only highlight if selected AND enabled
                     if is_selected && is_enabled {
                         // Highlight the entire row
-                        let highlight_area = Rect::new(inner.x, y, inner.width, 1);
+                        let highlight_area = Rect::new(content_area.x, y, content_area.width, 1);
                         for x in highlight_area.x..highlight_area.x + highlight_area.width {
                             if let Some(cell) = buf.cell_mut((x, y)) {
                                 cell.set_bg(Theme::SELECTION);
@@ -605,7 +644,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
 
                     Paragraph::new(line)
                         .wrap(Wrap { trim: false })
-                        .render(Rect::new(inner.x, y, inner.width, 1), buf);
+                        .render(Rect::new(content_area.x, y, content_area.width, 1), buf);
                 }
 
                 row += 1;
@@ -618,9 +657,27 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
             }
         }
 
+        if is_scrollable {
+            let scrollbar_area = Rect::new(inner.x + inner.width - 1, inner.y, 1, inner.height);
+            let mut scrollbar_state = ScrollbarState::new(content_height)
+                .position(scroll)
+                .viewport_content_length(content_area.height as usize);
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .render(scrollbar_area, buf, &mut scrollbar_state);
+        }
+
         // Render dropdown overlay if open
         if let Some((field_y, options, selected_idx, disconnected)) = dropdown_info {
-            render_dropdown_overlay(buf, inner, field_y, options, selected_idx, disconnected);
+            render_dropdown_overlay(
+                buf,
+                content_area,
+                field_y,
+                options,
+                selected_idx,
+                disconnected,
+            );
         }
     }
 }
@@ -900,9 +957,30 @@ mod tests {
         assert!(line_text(&buf, area, 2).contains("Field 1"));
     }
 
+    #[test]
+    fn renders_scrollbar_only_when_content_overflows() {
+        let config = TestConfig;
+        let nav = ConfigNav::default();
+        let narrow_area = Rect::new(0, 0, 30, 4);
+        let tall_area = Rect::new(0, 0, 30, 8);
+        let mut narrow_buf = Buffer::empty(narrow_area);
+        let mut tall_buf = Buffer::empty(tall_area);
+
+        ConfigPanel::new(SECTIONS, &config, &nav).render(narrow_area, &mut narrow_buf);
+        ConfigPanel::new(SECTIONS, &config, &nav).render(tall_area, &mut tall_buf);
+
+        assert_ne!(right_edge_symbol(&narrow_buf, narrow_area, 2), "]");
+        assert_eq!(right_edge_symbol(&tall_buf, tall_area, 2), "]");
+    }
+
     fn line_text(buf: &Buffer, area: Rect, y: u16) -> String {
         (area.x..area.x + area.width)
             .map(|x| buf[(x, area.y + y)].symbol())
             .collect::<String>()
+    }
+
+    fn right_edge_symbol(buf: &Buffer, area: Rect, y: u16) -> &str {
+        let x = area.x + area.width - 1;
+        buf[(x, area.y + y)].symbol()
     }
 }
