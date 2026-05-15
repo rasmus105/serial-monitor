@@ -1,6 +1,6 @@
 //! Traffic view: main data display with search and send functionality.
 
-use std::time::SystemTime;
+use std::{path::Path, time::SystemTime};
 
 use unicode_width::UnicodeWidthStr;
 
@@ -37,6 +37,144 @@ use crate::{
         text_input::{TextInputState, expand_user_path, find_path_completions},
     },
 };
+
+const SEARCH_ICON: &str = "";
+const FILTER_ICON: &str = "";
+
+fn traffic_search_segment(buffer: &serial_core::buffer::DataBuffer) -> Option<String> {
+    buffer.search_pattern()?;
+    let match_total = buffer.match_count();
+    match buffer.current_match_index() {
+        Some(idx) => Some(format!("{} {}/{}", SEARCH_ICON, idx + 1, match_total)),
+        None if match_total > 0 => Some(format!("{} -/{}", SEARCH_ICON, match_total)),
+        None => None,
+    }
+}
+
+fn traffic_filter_segment(buffer: &serial_core::buffer::DataBuffer) -> Option<String> {
+    buffer.filter_pattern()?;
+    Some(format!(
+        "{} {}/{}",
+        FILTER_ICON,
+        buffer.len(),
+        buffer.total_len()
+    ))
+}
+
+fn save_segment(path: &Path, max_title_width: usize, previous_segments: &[String]) -> String {
+    let prefix = "Saving to ";
+    let reserved_width =
+        spaced_segments_width(previous_segments) + if previous_segments.is_empty() { 0 } else { 2 };
+    let available_path_width = max_title_width
+        .saturating_sub(2) // leading and trailing title padding
+        .saturating_sub(reserved_width)
+        .saturating_sub(prefix.width());
+
+    format!("{}{}", prefix, display_path(path, available_path_width))
+}
+
+fn format_title_segments(segments: &[String], max_width: usize) -> String {
+    let mut visible_count = segments.len();
+    let mut title = format!(" {} ", segments[..visible_count].join("  "));
+
+    while title.width() > max_width && visible_count > 1 {
+        visible_count -= 1;
+        title = format!(" {} ", segments[..visible_count].join("  "));
+    }
+
+    title
+}
+
+fn spaced_segments_width(segments: &[String]) -> usize {
+    segments
+        .iter()
+        .map(|segment| segment.width())
+        .sum::<usize>()
+        + segments.len().saturating_sub(1) * 2
+}
+
+fn display_path(path: &Path, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let display = path_with_home(path);
+    if display.width() <= max_width {
+        return display;
+    }
+
+    let shortened = shorten_path_components(&display);
+    if shortened.width() <= max_width {
+        return shortened;
+    }
+
+    truncate_middle(&shortened, max_width)
+}
+
+fn path_with_home(path: &Path) -> String {
+    if let Some(home) = dirs::home_dir()
+        && let Ok(stripped) = path.strip_prefix(&home)
+    {
+        if stripped.as_os_str().is_empty() {
+            return "~".to_string();
+        }
+        return format!("~/{}", stripped.display());
+    }
+
+    path.display().to_string()
+}
+
+fn shorten_path_components(path: &str) -> String {
+    let (prefix, rest) = if let Some(rest) = path.strip_prefix("~/") {
+        ("~/", rest)
+    } else if let Some(rest) = path.strip_prefix('/') {
+        ("/", rest)
+    } else {
+        ("", path)
+    };
+
+    let parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.len() <= 1 {
+        return path.to_string();
+    }
+
+    let mut shortened = String::from(prefix);
+    for (idx, part) in parts.iter().enumerate() {
+        if idx > 0 {
+            shortened.push('/');
+        }
+
+        if idx == parts.len() - 1 {
+            shortened.push_str(part);
+        } else if let Some(first_char) = part.chars().next() {
+            shortened.push(first_char);
+        }
+    }
+
+    shortened
+}
+
+fn truncate_middle(value: &str, max_width: usize) -> String {
+    if value.width() <= max_width {
+        return value.to_string();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+
+    let left_width = (max_width - 3) / 2;
+    let right_width = max_width - 3 - left_width;
+    let (left_start, left_end) = slice_by_display_width(value, 0, left_width);
+    let value_width = value.width();
+    let (right_start, right_end) =
+        slice_by_display_width(value, value_width - right_width, value_width);
+
+    format!(
+        "{}...{}",
+        &value[left_start..left_end],
+        &value[right_start..right_end]
+    )
+}
 
 /// Traffic view state.
 pub struct TrafficView {
@@ -906,6 +1044,45 @@ impl TrafficView {
         self.last_first_sequence = chunks.first().map(|chunk| chunk.sequence);
     }
 
+    fn traffic_title(
+        &self,
+        buffer: &serial_core::buffer::DataBuffer,
+        top_line: usize,
+        width: u16,
+    ) -> String {
+        let max_width = width.saturating_sub(2) as usize;
+        let mut segments = vec![format!("Traffic Line {}", top_line)];
+
+        if let Some(search_info) = traffic_search_segment(buffer) {
+            segments.push(search_info);
+        }
+        if let Some(filter_info) = traffic_filter_segment(buffer) {
+            segments.push(filter_info);
+        }
+
+        if let Some(save_path) = buffer.save_path() {
+            segments.push(save_segment(save_path, max_width, &segments));
+        }
+
+        if let Some(mode) = self.cursor_mode_segment() {
+            segments.push(mode);
+        }
+
+        format_title_segments(&segments, max_width)
+    }
+
+    fn cursor_mode_segment(&self) -> Option<String> {
+        match self.cursor_mode {
+            TrafficCursorMode::Normal => None,
+            TrafficCursorMode::Cursor { row } => Some(format!("CURSOR {}", row + 1)),
+            TrafficCursorMode::Visual { anchor, cursor } => Some(format!(
+                "VISUAL {}-{}",
+                anchor.min(cursor) + 1,
+                anchor.max(cursor) + 1
+            )),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_traffic_truncated(
         &mut self,
@@ -953,52 +1130,9 @@ impl TrafficView {
         // Update at_bottom based on final scroll position (using padded max)
         self.at_bottom = total == 0 || scroll >= max_scroll;
 
-        // Render block with title
-        let filter_info = if buffer.filter_pattern().is_some() {
-            let total_unfiltered = buffer.total_len();
-            format!(" | filter: {}/{}", total, total_unfiltered)
-        } else {
-            String::new()
-        };
-        let lock_indicator = if self.config.lock_to_bottom {
-            " [LOCKED]"
-        } else {
-            ""
-        };
-        let save_indicator = if buffer.is_saving() { " [SAVING]" } else { "" };
-        let search_info = if buffer.search_pattern().is_some() {
-            let match_total = buffer.match_count();
-            match buffer.current_match_index() {
-                Some(idx) => format!(" [{}/{}]", idx + 1, match_total),
-                None if match_total > 0 => format!(" [-/{}]", match_total),
-                None => String::new(),
-            }
-        } else {
-            String::new()
-        };
         // Cap displayed scroll position at content max (don't show padding in title)
         let display_scroll = scroll.min(max_scroll_content);
-        let mode_indicator = match self.cursor_mode {
-            TrafficCursorMode::Normal => String::new(),
-            TrafficCursorMode::Cursor { row } => format!(" [CURSOR {}]", row + 1),
-            TrafficCursorMode::Visual { anchor, cursor } => {
-                format!(
-                    " [VISUAL {}-{}]",
-                    anchor.min(cursor) + 1,
-                    anchor.max(cursor) + 1
-                )
-            }
-        };
-        let block = block.title(format!(
-            " Traffic [{}/{}]{}{}{}{}{} ",
-            display_scroll + 1,
-            total.max(1),
-            filter_info,
-            search_info,
-            lock_indicator,
-            save_indicator,
-            mode_indicator,
-        ));
+        let block = block.title(self.traffic_title(buffer, display_scroll + 1, area.width));
         block.render(area, buf);
 
         // Render chunks
@@ -1128,53 +1262,9 @@ impl TrafficView {
         // Update at_bottom based on final scroll position (using padded max)
         self.at_bottom = total_display_lines == 0 || scroll >= max_scroll;
 
-        // Render block with title showing display line position
         // Cap displayed scroll position at content max (don't show padding in title)
         let display_scroll = scroll.min(max_scroll_content);
-        let filter_info = if buffer.filter_pattern().is_some() {
-            let total_unfiltered = buffer.total_len();
-            let filtered_chunks = buffer.len();
-            format!(" | filter: {}/{}", filtered_chunks, total_unfiltered)
-        } else {
-            String::new()
-        };
-        let lock_indicator = if self.config.lock_to_bottom {
-            " [LOCKED]"
-        } else {
-            ""
-        };
-        let save_indicator = if buffer.is_saving() { " [SAVING]" } else { "" };
-        let search_info = if buffer.search_pattern().is_some() {
-            let match_total = buffer.match_count();
-            match buffer.current_match_index() {
-                Some(idx) => format!(" [{}/{}]", idx + 1, match_total),
-                None if match_total > 0 => format!(" [-/{}]", match_total),
-                None => String::new(),
-            }
-        } else {
-            String::new()
-        };
-        let mode_indicator = match self.cursor_mode {
-            TrafficCursorMode::Normal => String::new(),
-            TrafficCursorMode::Cursor { row } => format!(" [CURSOR {}]", row + 1),
-            TrafficCursorMode::Visual { anchor, cursor } => {
-                format!(
-                    " [VISUAL {}-{}]",
-                    anchor.min(cursor) + 1,
-                    anchor.max(cursor) + 1
-                )
-            }
-        };
-        let block = block.title(format!(
-            " Traffic [{}/{}]{}{}{}{}{} ",
-            display_scroll + 1,
-            total_display_lines.max(1),
-            filter_info,
-            search_info,
-            lock_indicator,
-            save_indicator,
-            mode_indicator,
-        ));
+        let block = block.title(self.traffic_title(buffer, display_scroll + 1, area.width));
         block.render(area, buf);
 
         // Render display lines starting from scroll position
@@ -2583,5 +2673,25 @@ mod tests {
         assert_eq!(line.spans[1].style, Theme::muted());
         assert_eq!(line.spans[2].content.as_ref(), "payload");
         assert_eq!(line.spans[2].style, Theme::traffic_payload());
+    }
+
+    #[test]
+    fn path_shortening_keeps_filename_and_abbreviates_directories() {
+        assert_eq!(
+            shorten_path_components("/home/rasmus105/Documents/001.log"),
+            "/h/r/D/001.log"
+        );
+        assert_eq!(
+            shorten_path_components("~/Documents/001.log"),
+            "~/D/001.log"
+        );
+    }
+
+    #[test]
+    fn middle_truncation_respects_display_width() {
+        let truncated = truncate_middle("~/Documents/serial-monitor/001.log", 12);
+
+        assert!(truncated.width() <= 12);
+        assert!(truncated.contains("..."));
     }
 }
