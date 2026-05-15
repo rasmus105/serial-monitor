@@ -287,30 +287,23 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
     fn get_dropdown_info(
         &self,
         inner: Rect,
+        scroll: usize,
     ) -> Option<(u16, &'static [&'static str], usize, bool)> {
         let dropdown_index = self.nav.edit_mode.dropdown_index()?;
         if !self.focused {
             return None;
         }
 
-        let mut y = inner.y;
+        let mut row = 0usize;
         let mut field_index = 0;
 
         for section in self.sections {
-            if y >= inner.y + inner.height {
-                break;
-            }
-
             // Account for section header
             if section.header.is_some() {
-                y += 2; // header + separator
+                row += 2; // header + separator
             }
 
             for field in section.fields {
-                if y >= inner.y + inner.height {
-                    break;
-                }
-
                 if !(field.visible)(self.data) {
                     continue;
                 }
@@ -318,17 +311,74 @@ impl<'a, T: 'static> ConfigPanel<'a, T> {
                 if self.nav.selected == field_index
                     && let FieldKind::Select { options } = &field.kind
                 {
-                    return Some((y, options, dropdown_index, self.disconnected));
+                    let visible_row = row.checked_sub(scroll)?;
+                    if visible_row >= inner.height as usize {
+                        return None;
+                    }
+                    return Some((
+                        inner.y + visible_row as u16,
+                        options,
+                        dropdown_index,
+                        self.disconnected,
+                    ));
                 }
 
-                y += 1;
+                row += 1;
                 field_index += 1;
             }
 
-            y += 1; // spacing between sections
+            row += 1; // spacing between sections
         }
 
         None
+    }
+
+    fn selected_row(&self) -> Option<usize> {
+        let mut row = 0usize;
+        let mut field_index = 0;
+
+        for (section_idx, section) in self.sections.iter().enumerate() {
+            if section.header.is_some() {
+                row += 2;
+            }
+
+            for field in section.fields {
+                if !(field.visible)(self.data) {
+                    continue;
+                }
+
+                if field_index == self.nav.selected {
+                    return Some(row);
+                }
+
+                row += 1;
+                field_index += 1;
+            }
+
+            if section_idx < self.sections.len() - 1 {
+                row += 1;
+            }
+        }
+
+        None
+    }
+
+    fn effective_scroll(&self, viewport_height: usize) -> usize {
+        if viewport_height == 0 {
+            return self.nav.scroll;
+        }
+
+        let Some(selected_row) = self.selected_row() else {
+            return self.nav.scroll;
+        };
+
+        if selected_row < self.nav.scroll {
+            selected_row
+        } else if selected_row >= self.nav.scroll + viewport_height {
+            selected_row.saturating_sub(viewport_height.saturating_sub(1))
+        } else {
+            self.nav.scroll
+        }
     }
 }
 
@@ -346,10 +396,12 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
             return;
         }
 
-        // Get dropdown info before iterating (needed for overlay)
-        let dropdown_info = self.get_dropdown_info(inner);
+        let scroll = self.effective_scroll(inner.height as usize);
 
-        let mut y = inner.y;
+        // Get dropdown info before iterating (needed for overlay)
+        let dropdown_info = self.get_dropdown_info(inner, scroll);
+
+        let mut row = 0usize;
         let mut field_index = 0;
 
         // Track which fields have visible children (for tree connector rendering)
@@ -367,32 +419,30 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
         }
 
         for (section_idx, section) in self.sections.iter().enumerate() {
-            if y >= inner.y + inner.height {
-                break;
-            }
-
             // Render section header if present
             if let Some(header) = &section.header {
-                let header_style = if self.read_only {
-                    Theme::muted()
-                } else if self.disconnected {
-                    Theme::title_disconnected()
-                } else {
-                    Theme::title()
-                };
+                if let Some(y) = visible_y(inner, row, scroll) {
+                    let header_style = if self.read_only {
+                        Theme::muted()
+                    } else if self.disconnected {
+                        Theme::title_disconnected()
+                    } else {
+                        Theme::title()
+                    };
 
-                let line = Line::from(vec![Span::styled(header.to_string(), header_style)]);
-                Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
-                y += 1;
+                    let line = Line::from(vec![Span::styled(header.to_string(), header_style)]);
+                    Paragraph::new(line).render(Rect::new(inner.x, y, inner.width, 1), buf);
+                }
+                row += 1;
 
                 // Separator line
-                if y < inner.y + inner.height {
+                if let Some(y) = visible_y(inner, row, scroll) {
                     let sep = "─".repeat(inner.width as usize);
                     Paragraph::new(sep)
                         .style(Theme::muted())
                         .render(Rect::new(inner.x, y, inner.width, 1), buf);
-                    y += 1;
                 }
+                row += 1;
             }
 
             // Collect visible fields for this section to determine last child
@@ -404,9 +454,7 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
 
             // Render fields
             for (field_in_section_idx, field) in visible_fields.iter().enumerate() {
-                if y >= inner.y + inner.height {
-                    break;
-                }
+                let y = visible_y(inner, row, scroll);
 
                 let is_selected = self.focused && self.nav.selected == field_index;
                 let is_dropdown_open = is_selected && self.nav.edit_mode.is_dropdown();
@@ -543,28 +591,30 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
                     Span::styled(value_display, value_style),
                 ]);
 
-                // Only highlight if selected AND enabled
-                if is_selected && is_enabled {
-                    // Highlight the entire row
-                    let highlight_area = Rect::new(inner.x, y, inner.width, 1);
-                    for x in highlight_area.x..highlight_area.x + highlight_area.width {
-                        if let Some(cell) = buf.cell_mut((x, y)) {
-                            cell.set_bg(Theme::SELECTION);
+                if let Some(y) = y {
+                    // Only highlight if selected AND enabled
+                    if is_selected && is_enabled {
+                        // Highlight the entire row
+                        let highlight_area = Rect::new(inner.x, y, inner.width, 1);
+                        for x in highlight_area.x..highlight_area.x + highlight_area.width {
+                            if let Some(cell) = buf.cell_mut((x, y)) {
+                                cell.set_bg(Theme::SELECTION);
+                            }
                         }
                     }
+
+                    Paragraph::new(line)
+                        .wrap(Wrap { trim: false })
+                        .render(Rect::new(inner.x, y, inner.width, 1), buf);
                 }
 
-                Paragraph::new(line)
-                    .wrap(Wrap { trim: false })
-                    .render(Rect::new(inner.x, y, inner.width, 1), buf);
-
-                y += 1;
+                row += 1;
                 field_index += 1;
             }
 
             // Add spacing between sections (but not after last section)
             if section_idx < self.sections.len() - 1 {
-                y += 1;
+                row += 1;
             }
         }
 
@@ -573,6 +623,14 @@ impl<T: 'static> Widget for ConfigPanel<'_, T> {
             render_dropdown_overlay(buf, inner, field_y, options, selected_idx, disconnected);
         }
     }
+}
+
+fn visible_y(inner: Rect, row: usize, scroll: usize) -> Option<u16> {
+    let visible_row = row.checked_sub(scroll)?;
+    if visible_row >= inner.height as usize {
+        return None;
+    }
+    Some(inner.y + visible_row as u16)
 }
 
 fn truncate_with_ellipsis(value: &str, max_width: usize) -> String {
@@ -770,4 +828,81 @@ fn is_descendant_of<T>(
             .and_then(|f| f.parent_id);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+    use serial_core::ui::config::{ConfigNav, FieldDef, FieldValue, Section};
+
+    use super::ConfigPanel;
+
+    #[derive(Default)]
+    struct TestConfig;
+
+    static FIELDS: &[FieldDef<TestConfig>] = &[
+        field("field_1", "Field 1"),
+        field("field_2", "Field 2"),
+        field("field_3", "Field 3"),
+        field("field_4", "Field 4"),
+        field("field_5", "Field 5"),
+        field("field_6", "Field 6"),
+    ];
+
+    static SECTIONS: &[Section<TestConfig>] = &[Section {
+        header: Some("Test"),
+        fields: FIELDS,
+    }];
+
+    const fn field(id: &'static str, label: &'static str) -> FieldDef<TestConfig> {
+        FieldDef {
+            id,
+            label,
+            get: |_| FieldValue::Bool(false),
+            ..FieldDef::DEFAULT
+        }
+    }
+
+    #[test]
+    fn renders_selected_field_when_panel_is_shorter_than_content() {
+        let config = TestConfig;
+        let nav = ConfigNav {
+            selected: 5,
+            ..ConfigNav::default()
+        };
+        let area = Rect::new(0, 0, 30, 4);
+        let mut buf = Buffer::empty(area);
+
+        ConfigPanel::new(SECTIONS, &config, &nav)
+            .focused(true)
+            .render(area, &mut buf);
+
+        assert!(!line_text(&buf, area, 0).contains("Field 1"));
+        assert!(line_text(&buf, area, 0).contains("Field 3"));
+        assert!(line_text(&buf, area, 3).contains("Field 6"));
+    }
+
+    #[test]
+    fn keeps_header_visible_when_selected_field_fits_without_scrolling() {
+        let config = TestConfig;
+        let nav = ConfigNav {
+            selected: 0,
+            ..ConfigNav::default()
+        };
+        let area = Rect::new(0, 0, 30, 4);
+        let mut buf = Buffer::empty(area);
+
+        ConfigPanel::new(SECTIONS, &config, &nav)
+            .focused(true)
+            .render(area, &mut buf);
+
+        assert!(line_text(&buf, area, 0).contains("Test"));
+        assert!(line_text(&buf, area, 2).contains("Field 1"));
+    }
+
+    fn line_text(buf: &Buffer, area: Rect, y: u16) -> String {
+        (area.x..area.x + area.width)
+            .map(|x| buf[(x, area.y + y)].symbol())
+            .collect::<String>()
+    }
 }
