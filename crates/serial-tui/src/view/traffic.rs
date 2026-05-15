@@ -40,6 +40,7 @@ use crate::{
 
 const SEARCH_ICON: &str = "";
 const FILTER_ICON: &str = "";
+const TITLE_SEPARATOR: &str = " | ";
 
 fn traffic_search_segment(buffer: &serial_core::buffer::DataBuffer) -> Option<String> {
     buffer.search_pattern()?;
@@ -63,8 +64,12 @@ fn traffic_filter_segment(buffer: &serial_core::buffer::DataBuffer) -> Option<St
 
 fn save_segment(path: &Path, max_title_width: usize, previous_segments: &[String]) -> String {
     let prefix = "Saving to ";
-    let reserved_width =
-        spaced_segments_width(previous_segments) + if previous_segments.is_empty() { 0 } else { 2 };
+    let reserved_width = spaced_segments_width(previous_segments)
+        + if previous_segments.is_empty() {
+            0
+        } else {
+            TITLE_SEPARATOR.width()
+        };
     let available_path_width = max_title_width
         .saturating_sub(2) // leading and trailing title padding
         .saturating_sub(reserved_width)
@@ -75,11 +80,11 @@ fn save_segment(path: &Path, max_title_width: usize, previous_segments: &[String
 
 fn format_title_segments(segments: &[String], max_width: usize) -> String {
     let mut visible_count = segments.len();
-    let mut title = format!(" {} ", segments[..visible_count].join("  "));
+    let mut title = format!(" {} ", segments[..visible_count].join(TITLE_SEPARATOR));
 
     while title.width() > max_width && visible_count > 1 {
         visible_count -= 1;
-        title = format!(" {} ", segments[..visible_count].join("  "));
+        title = format!(" {} ", segments[..visible_count].join(TITLE_SEPARATOR));
     }
 
     title
@@ -90,7 +95,7 @@ fn spaced_segments_width(segments: &[String]) -> usize {
         .iter()
         .map(|segment| segment.width())
         .sum::<usize>()
-        + segments.len().saturating_sub(1) * 2
+        + segments.len().saturating_sub(1) * TITLE_SEPARATOR.width()
 }
 
 fn display_path(path: &Path, max_width: usize) -> String {
@@ -2693,5 +2698,15 @@ mod tests {
 
         assert!(truncated.width() <= 12);
         assert!(truncated.contains("..."));
+    }
+
+    #[test]
+    fn title_segments_are_separated() {
+        let segments = vec!["Traffic Line 4".to_string(), format!("{} 2/7", SEARCH_ICON)];
+
+        assert_eq!(
+            format_title_segments(&segments, 80),
+            format!(" Traffic Line 4 | {} 2/7 ", SEARCH_ICON)
+        );
     }
 }
