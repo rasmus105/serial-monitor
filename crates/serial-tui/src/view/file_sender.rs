@@ -1212,12 +1212,9 @@ impl FileSenderView {
                 self.file_path_focused = false;
             }
             KeyCode::Esc => {
-                if self.file_path_completion.visible {
-                    self.file_path_completion.hide();
-                } else {
-                    self.file_path_focused = false;
-                    self.file_path_input.clear();
-                }
+                self.file_path_focused = false;
+                self.file_path_input.clear();
+                self.file_path_completion.hide();
             }
             KeyCode::Down => {
                 if !self.file_path_completion.visible {

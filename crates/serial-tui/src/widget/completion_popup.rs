@@ -6,8 +6,9 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph, Widget},
+    widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -176,7 +177,8 @@ impl Widget for CompletionPopup<'_> {
         // Calculate popup dimensions
         let visible_count = self.state.options.len().min(MAX_VISIBLE_OPTIONS);
         let hint_line = 1; // For navigation hint
-        let popup_height = visible_count as u16 + hint_line;
+        let border_height = 2;
+        let popup_height = visible_count as u16 + hint_line + border_height;
 
         // Find the longest option for width calculation
         let max_option_len = self
@@ -191,7 +193,7 @@ impl Widget for CompletionPopup<'_> {
         let hint_text = "[Up/Down]/[C-j/k] [C-g]";
         let max_popup_width = area.width.saturating_sub(1).max(1) as usize;
         let content_width = max_option_len.max(hint_text.len());
-        let popup_width = (content_width + 4).min(max_popup_width) as u16;
+        let popup_width = (content_width + 6).min(max_popup_width) as u16;
 
         // Position popup based on direction
         let popup_x = self.input_x.min(area.width.saturating_sub(popup_width));
@@ -216,6 +218,12 @@ impl Widget for CompletionPopup<'_> {
         }
 
         let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+        let popup_style = Style::default().fg(Theme::FG).bg(Color::Indexed(235));
+        let border_style = if self.disconnected {
+            Theme::border_disconnected()
+        } else {
+            Theme::border_focused()
+        };
 
         // Clear background
         Clear.render(popup_area, buf);
@@ -224,10 +232,18 @@ impl Widget for CompletionPopup<'_> {
         for y in popup_area.y..popup_area.y + popup_area.height {
             for x in popup_area.x..popup_area.x + popup_area.width {
                 if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_style(Theme::base());
+                    cell.set_style(popup_style);
                 }
             }
         }
+
+        let block = Block::default()
+            .title(" Suggestions ")
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .style(popup_style);
+        let inner = block.inner(popup_area);
+        block.render(popup_area, buf);
 
         // Render options
         let visible_options: Vec<&String> = self
@@ -239,15 +255,19 @@ impl Widget for CompletionPopup<'_> {
             .collect();
 
         for (i, option) in visible_options.iter().enumerate() {
-            let y = popup_area.y + i as u16;
+            let y = inner.y + i as u16;
             let is_selected = self.state.scroll_offset + i == self.state.selected;
 
             // Build the line with padding
-            let display_text = format!(" {} ", option);
+            let display_text = if is_selected {
+                format!(" > {} ", option)
+            } else {
+                format!("   {} ", option)
+            };
             let style = if is_selected {
                 Theme::selected()
             } else {
-                Theme::base()
+                popup_style
             };
 
             // Check if we need scroll indicators
@@ -265,11 +285,11 @@ impl Widget for CompletionPopup<'_> {
             }
 
             let line = Line::from(spans);
-            let line_area = Rect::new(popup_area.x, y, popup_area.width, 1);
+            let line_area = Rect::new(inner.x, y, inner.width, 1);
 
             // Fill background for selected item
             if is_selected {
-                for x in popup_area.x..popup_area.x + popup_area.width {
+                for x in inner.x..inner.x + inner.width {
                     if let Some(cell) = buf.cell_mut((x, y)) {
                         cell.set_style(Theme::selected());
                     }
@@ -280,7 +300,7 @@ impl Widget for CompletionPopup<'_> {
         }
 
         // Render navigation hint at the bottom
-        let hint_y = popup_area.y + visible_count as u16;
+        let hint_y = inner.y + visible_count as u16;
         let keybind_style = if self.disconnected {
             Theme::keybind_disconnected()
         } else {
@@ -294,12 +314,12 @@ impl Widget for CompletionPopup<'_> {
             Span::raw(" "),
             Span::styled("[C-g]", keybind_style),
         ]);
-        let hint_area = Rect::new(popup_area.x, hint_y, popup_area.width, 1);
+        let hint_area = Rect::new(inner.x, hint_y, inner.width, 1);
 
         // Muted background for hint line
-        for x in popup_area.x..popup_area.x + popup_area.width {
+        for x in inner.x..inner.x + inner.width {
             if let Some(cell) = buf.cell_mut((x, hint_y)) {
-                cell.set_style(Theme::muted());
+                cell.set_style(popup_style.fg(Theme::MUTED));
             }
         }
 

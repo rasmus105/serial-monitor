@@ -2490,15 +2490,12 @@ impl TrafficView {
                 ));
             }
             KeyCode::Esc => {
-                if self.dir_path_completion.visible {
-                    self.dir_path_completion.hide();
-                } else {
-                    // Cancel and exit without saving
-                    self.dir_path_focused = false;
-                    self.dir_path_input.clear();
-                    // Layout changed - request clear to avoid artifacts
-                    return Some(TrafficAction::RequestClear);
-                }
+                // Cancel and exit without saving.
+                self.dir_path_focused = false;
+                self.dir_path_input.clear();
+                self.dir_path_completion.hide();
+                // Layout changed - request clear to avoid artifacts.
+                return Some(TrafficAction::RequestClear);
             }
             KeyCode::Down => {
                 if !self.dir_path_completion.visible {

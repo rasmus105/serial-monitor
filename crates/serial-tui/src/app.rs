@@ -575,7 +575,7 @@ impl App {
                 Some(SessionState::PreConnect(_)) | None => true,
                 Some(SessionState::Connected(state)) => !state.connected,
             };
-            let input_y = cmd_area.y;
+            let input_y = cmd_area.y.saturating_sub(1);
             let input_x = cmd_area.x + 2; // After border + ":" prefix
             CompletionPopup::new(&self.completion, input_y, input_x)
                 .disconnected(is_disconnected)
@@ -1918,6 +1918,27 @@ mod tests {
         assert_eq!(settings.pre_connect.file_save_format_index, 1);
         assert_eq!(settings.pre_connect.file_save_encoding_index, 0);
         assert_eq!(settings.pre_connect.file_save_directory, "/new");
+    }
+
+    #[tokio::test]
+    async fn esc_closes_command_prompt_when_completion_is_visible() {
+        let mut app = App::new();
+        app.command_mode = true;
+
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::NONE,
+        )))
+        .await;
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )))
+        .await;
+
+        assert!(!app.command_mode);
+        assert!(app.command_input.content().is_empty());
+        assert!(!app.completion.visible);
     }
 }
 

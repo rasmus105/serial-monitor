@@ -54,14 +54,7 @@ impl PathEditorState {
 
         match key.code {
             KeyCode::Enter => PathEditorAction::Applied,
-            KeyCode::Esc => {
-                if self.completion.visible {
-                    self.completion.hide();
-                    PathEditorAction::None
-                } else {
-                    PathEditorAction::Cancelled
-                }
-            }
+            KeyCode::Esc => PathEditorAction::Cancelled,
             KeyCode::Down => {
                 if !self.completion.visible {
                     self.update_completions();
@@ -280,6 +273,21 @@ mod tests {
         std::env::set_current_dir(original).unwrap();
         assert!(editor.completion.visible);
         assert_eq!(editor.content(), "Do");
+    }
+
+    #[test]
+    fn esc_cancels_editor_when_completion_is_visible() {
+        let (_guard, original) = enter_temp_dir("esc-cancels");
+        fs::create_dir("Documents").unwrap();
+
+        let mut editor = PathEditorState::default();
+        editor.open("Do");
+        editor.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let action = editor.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        std::env::set_current_dir(original).unwrap();
+        assert_eq!(action, PathEditorAction::Cancelled);
+        assert!(editor.completion.visible);
     }
 
     #[test]
