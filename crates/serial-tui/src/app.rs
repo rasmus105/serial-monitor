@@ -1334,6 +1334,12 @@ impl App {
                     if let Err(e) = buffer.save(save_config, &runtime) {
                         drop(buffer);
                         state.traffic.config.file_save_enabled = false;
+                        self.settings.traffic = state.traffic.to_settings();
+                        sync_preconnect_file_save_from_traffic(&mut self.settings, &state.traffic);
+                        if let Err(e) = self.settings.save() {
+                            self.toasts
+                                .error(format!("Failed to save file saving setting: {}", e));
+                        }
                         self.toasts
                             .error(format!("Failed to start file saving: {}", e));
                     } else {
@@ -1342,13 +1348,25 @@ impl App {
                             .map(|p| p.display().to_string())
                             .unwrap_or_default();
                         drop(buffer);
+                        self.settings.traffic = state.traffic.to_settings();
+                        sync_preconnect_file_save_from_traffic(&mut self.settings, &state.traffic);
+                        if let Err(e) = self.settings.save() {
+                            self.toasts
+                                .error(format!("Failed to save file saving setting: {}", e));
+                        }
                         self.toasts.success(format!("Saving to {}", path));
                     }
                 }
             }
             TrafficAction::StopFileSaving => {
-                if let Some(SessionState::Connected(state)) = self.sessions.active_state() {
+                if let Some(SessionState::Connected(state)) = self.sessions.active_state_mut() {
                     state.handle.buffer_mut().stop_saving();
+                    self.settings.traffic = state.traffic.to_settings();
+                    sync_preconnect_file_save_from_traffic(&mut self.settings, &state.traffic);
+                    if let Err(e) = self.settings.save() {
+                        self.toasts
+                            .error(format!("Failed to save file saving setting: {}", e));
+                    }
                     self.toasts.info("File saving stopped");
                 }
             }
@@ -1778,6 +1796,7 @@ impl App {
             Some(SessionState::PreConnect(_)) => {}
             Some(SessionState::Connected(state)) => {
                 self.settings.traffic = state.traffic.to_settings();
+                sync_preconnect_file_save_from_traffic(&mut self.settings, &state.traffic);
                 self.settings.graph = state.graph.to_settings();
                 self.settings.file_sender = state.file_sender.to_settings();
             }
@@ -1842,6 +1861,33 @@ mod tests {
         assert_eq!(app.command_input.content(), "save ");
         assert!(!app.completion.visible);
     }
+
+    #[test]
+    fn connected_file_save_setting_becomes_next_connect_default() {
+        let mut settings = TuiSettings {
+            pre_connect: PreConnectSettings {
+                file_save_enabled: true,
+                file_save_format_index: 0,
+                file_save_encoding_index: 2,
+                file_save_directory: "/old".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut traffic = TrafficView::new();
+
+        traffic.config.file_save_enabled = false;
+        traffic.config.file_save_format_index = 1;
+        traffic.config.file_save_encoding_index = 0;
+        traffic.config.file_save_directory = "/new".to_string();
+
+        sync_preconnect_file_save_from_traffic(&mut settings, &traffic);
+
+        assert!(!settings.pre_connect.file_save_enabled);
+        assert_eq!(settings.pre_connect.file_save_format_index, 1);
+        assert_eq!(settings.pre_connect.file_save_encoding_index, 0);
+        assert_eq!(settings.pre_connect.file_save_directory, "/new");
+    }
 }
 
 fn connect_modal_config_from_settings(settings: &PreConnectSettings) -> ConnectModalConfig {
@@ -1872,6 +1918,13 @@ fn preconnect_settings_from_connect_modal(config: &ConnectModalConfig) -> PreCon
         file_save_encoding_index: config.file_save_encoding_index,
         file_save_directory: config.file_save_directory.clone(),
     }
+}
+
+fn sync_preconnect_file_save_from_traffic(settings: &mut TuiSettings, traffic: &TrafficView) {
+    settings.pre_connect.file_save_enabled = traffic.config.file_save_enabled;
+    settings.pre_connect.file_save_format_index = traffic.config.file_save_format_index;
+    settings.pre_connect.file_save_encoding_index = traffic.config.file_save_encoding_index;
+    settings.pre_connect.file_save_directory = traffic.config.file_save_directory.clone();
 }
 
 /// Actions from pre-connect view.
