@@ -20,6 +20,8 @@ use crate::theme::Theme;
 // Re-export ConfigKeyResult for convenience
 pub use serial_core::ui::config::ConfigKeyResult;
 
+const CONFIG_PAGE_JUMP_FIELDS: usize = 10;
+
 /// Handle a key event for a config panel.
 ///
 /// This is a helper function that handles the common config panel key bindings.
@@ -63,6 +65,18 @@ pub fn handle_config_key<T: 'static>(
         }
         KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
             nav.prev_field(sections, config);
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Char('d') if has_ctrl => {
+            for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                nav.next_field(sections, config);
+            }
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Char('u') if has_ctrl => {
+            for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                nav.prev_field(sections, config);
+            }
             ConfigKeyResult::Handled
         }
         KeyCode::Char('h') | KeyCode::Left => {
@@ -125,6 +139,18 @@ fn handle_dropdown_key<T: 'static>(
         }
         KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
             nav.dropdown_prev(sections, config);
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Char('d') if has_ctrl => {
+            for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                nav.dropdown_next(sections, config);
+            }
+            ConfigKeyResult::Handled
+        }
+        KeyCode::Char('u') if has_ctrl => {
+            for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                nav.dropdown_prev(sections, config);
+            }
             ConfigKeyResult::Handled
         }
         KeyCode::Enter | KeyCode::Char(' ') => {
@@ -899,14 +925,15 @@ fn is_descendant_of<T>(
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{
         buffer::Buffer,
         layout::Rect,
         widgets::{Block, Borders, Widget},
     };
-    use serial_core::ui::config::{ConfigNav, FieldDef, FieldValue, Section};
+    use serial_core::ui::config::{ConfigNav, EditMode, FieldDef, FieldKind, FieldValue, Section};
 
-    use super::ConfigPanel;
+    use super::{CONFIG_PAGE_JUMP_FIELDS, ConfigKeyResult, ConfigPanel, handle_config_key};
 
     #[derive(Default)]
     struct TestConfig;
@@ -923,6 +950,24 @@ mod tests {
     static SECTIONS: &[Section<TestConfig>] = &[Section {
         header: Some("Test"),
         fields: FIELDS,
+    }];
+
+    static SELECT_FIELDS: &[FieldDef<TestConfig>] = &[FieldDef {
+        id: "select",
+        label: "Select",
+        kind: FieldKind::Select {
+            options: &[
+                "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                "eleven", "twelve",
+            ],
+        },
+        get: |_| FieldValue::OptionIndex(0),
+        ..FieldDef::DEFAULT
+    }];
+
+    static SELECT_SECTIONS: &[Section<TestConfig>] = &[Section {
+        header: None,
+        fields: SELECT_FIELDS,
     }];
 
     const fn field(id: &'static str, label: &'static str) -> FieldDef<TestConfig> {
@@ -1000,6 +1045,61 @@ mod tests {
 
         assert_ne!(right_edge_symbol(&buf, area, 2), "│");
         assert_eq!(symbol_at(&buf, area.width - 2, 2), "─");
+    }
+
+    #[test]
+    fn ctrl_d_and_ctrl_u_jump_selected_config_field() {
+        let mut config = TestConfig;
+        let mut nav = ConfigNav::default();
+
+        let result = handle_config_key(
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            &mut nav,
+            SECTIONS,
+            &mut config,
+        );
+
+        assert_eq!(result, ConfigKeyResult::Handled);
+        assert_eq!(nav.selected, CONFIG_PAGE_JUMP_FIELDS % FIELDS.len());
+
+        let result = handle_config_key(
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            &mut nav,
+            SECTIONS,
+            &mut config,
+        );
+
+        assert_eq!(result, ConfigKeyResult::Handled);
+        assert_eq!(nav.selected, 0);
+    }
+
+    #[test]
+    fn ctrl_d_and_ctrl_u_jump_dropdown_selection() {
+        let mut config = TestConfig;
+        let mut nav = ConfigNav {
+            edit_mode: EditMode::Dropdown { index: 0 },
+            ..ConfigNav::default()
+        };
+
+        let result = handle_config_key(
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            &mut nav,
+            SELECT_SECTIONS,
+            &mut config,
+        );
+
+        assert_eq!(result, ConfigKeyResult::Handled);
+        assert!(matches!(nav.edit_mode, EditMode::Dropdown { index: 10 }));
+
+        let result = handle_config_key(
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            &mut nav,
+            SELECT_SECTIONS,
+            &mut config,
+        );
+
+        assert_eq!(result, ConfigKeyResult::Handled);
+        assert!(matches!(nav.edit_mode, EditMode::Dropdown { index: 0 }));
     }
 
     fn line_text(buf: &Buffer, area: Rect, y: u16) -> String {

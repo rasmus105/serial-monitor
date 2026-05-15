@@ -21,6 +21,8 @@ use crate::{
     widget::ConfigPanel,
 };
 
+const CONFIG_PAGE_JUMP_FIELDS: usize = 10;
+
 /// Re-export GlobalSettings as AppSettings for backward compatibility within this module.
 pub type AppSettings = GlobalSettings;
 
@@ -522,14 +524,28 @@ impl HelpOverlayState {
             return self.handle_settings_dropdown_key(key);
         }
 
+        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
                 self.settings_nav
                     .next_field(SETTINGS_SECTIONS, &self.settings);
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
                 self.settings_nav
                     .prev_field(SETTINGS_SECTIONS, &self.settings);
+            }
+            KeyCode::Char('d') if has_ctrl => {
+                for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                    self.settings_nav
+                        .next_field(SETTINGS_SECTIONS, &self.settings);
+                }
+            }
+            KeyCode::Char('u') if has_ctrl => {
+                for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                    self.settings_nav
+                        .prev_field(SETTINGS_SECTIONS, &self.settings);
+                }
             }
             KeyCode::Char('h') | KeyCode::Left
                 if !key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -592,14 +608,28 @@ impl HelpOverlayState {
     }
 
     fn handle_settings_dropdown_key(&mut self, key: KeyEvent) -> bool {
+        let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Char('j') | KeyCode::Down if !has_ctrl => {
                 self.settings_nav
                     .dropdown_next(SETTINGS_SECTIONS, &self.settings);
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
                 self.settings_nav
                     .dropdown_prev(SETTINGS_SECTIONS, &self.settings);
+            }
+            KeyCode::Char('d') if has_ctrl => {
+                for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                    self.settings_nav
+                        .dropdown_next(SETTINGS_SECTIONS, &self.settings);
+                }
+            }
+            KeyCode::Char('u') if has_ctrl => {
+                for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                    self.settings_nav
+                        .dropdown_prev(SETTINGS_SECTIONS, &self.settings);
+                }
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
                 let _ = self

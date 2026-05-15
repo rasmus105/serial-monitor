@@ -26,6 +26,8 @@ use crate::{
     widget::{ConfigPanel, PathEditor, PathEditorAction, PathEditorState},
 };
 
+const CONFIG_PAGE_JUMP_FIELDS: usize = 10;
+
 /// Action returned from connect modal key handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectModalAction {
@@ -426,6 +428,18 @@ impl ConnectModalState {
                 self.nav.prev_field(CONNECT_MODAL_SECTIONS, &self.config);
                 ConnectModalAction::None
             }
+            KeyCode::Char('d') if has_ctrl => {
+                for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                    self.nav.next_field(CONNECT_MODAL_SECTIONS, &self.config);
+                }
+                ConnectModalAction::None
+            }
+            KeyCode::Char('u') if has_ctrl => {
+                for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                    self.nav.prev_field(CONNECT_MODAL_SECTIONS, &self.config);
+                }
+                ConnectModalAction::None
+            }
             KeyCode::Char('h') | KeyCode::Left => {
                 if let Some(field) = self.nav.current_field(CONNECT_MODAL_SECTIONS, &self.config) {
                     if matches!(field.kind, FieldKind::Toggle) {
@@ -509,6 +523,16 @@ impl ConnectModalState {
             }
             KeyCode::Char('k') | KeyCode::Up if !has_ctrl => {
                 self.nav.dropdown_prev(CONNECT_MODAL_SECTIONS, &self.config);
+            }
+            KeyCode::Char('d') if has_ctrl => {
+                for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                    self.nav.dropdown_next(CONNECT_MODAL_SECTIONS, &self.config);
+                }
+            }
+            KeyCode::Char('u') if has_ctrl => {
+                for _ in 0..CONFIG_PAGE_JUMP_FIELDS {
+                    self.nav.dropdown_prev(CONNECT_MODAL_SECTIONS, &self.config);
+                }
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
                 let _ = self
