@@ -58,6 +58,8 @@ pub struct FileSenderView {
     pub config_nav: ConfigNav,
     /// Active send handle.
     pub send_handle: Option<FileSendHandle>,
+    /// A stop has been requested and we are waiting for the sender task to acknowledge it.
+    pub stop_requested: bool,
     /// Latest progress.
     pub progress: Option<FileSendProgress>,
     /// Current scroll position (in display lines).
@@ -465,6 +467,7 @@ impl FileSenderView {
             config: FileSenderConfig::default(),
             config_nav: ConfigNav::new(),
             send_handle: None,
+            stop_requested: false,
             progress: None,
             scroll: 0,
             last_visible_height: 0,
@@ -478,6 +481,10 @@ impl FileSenderView {
     }
 
     pub fn is_sending(&self) -> bool {
+        self.send_handle.is_some() && !self.stop_requested
+    }
+
+    fn has_active_send(&self) -> bool {
         self.send_handle.is_some()
     }
 
@@ -506,6 +513,7 @@ impl FileSenderView {
         if complete {
             self.send_handle = None;
             self.config.is_sending = false;
+            self.stop_requested = false;
 
             // Return error toast if there was an error (but not for cancellation)
             if let Some(err) = error
@@ -1132,7 +1140,7 @@ impl FileSenderView {
                 self.scroll = max_scroll;
             }
             KeyCode::Enter => {
-                if self.selected_path.is_some() && !self.is_sending() {
+                if self.selected_path.is_some() && !self.has_active_send() {
                     return Some(FileSenderAction::StartSending);
                 }
             }
@@ -1181,6 +1189,12 @@ impl FileSenderView {
                 if self.selected_path.is_none() {
                     self.config.is_sending = false; // Revert
                     return Some(FileSenderAction::Toast(Toast::error("No file selected")));
+                }
+                if self.has_active_send() {
+                    self.config.is_sending = false;
+                    return Some(FileSenderAction::Toast(Toast::info(
+                        "Waiting for current send to stop",
+                    )));
                 }
                 return Some(FileSenderAction::StartSending);
             } else {
@@ -1333,6 +1347,10 @@ impl FileSenderView {
         &mut self,
         handle: &SessionHandle,
     ) -> Result<(), serial_core::Error> {
+        if self.has_active_send() {
+            return Ok(());
+        }
+
         if let Some(path) = &self.selected_path {
             // Build chunk mode
             let chunk_mode = if self.config.chunk_mode_index == 0 {
@@ -1357,6 +1375,14 @@ impl FileSenderView {
             let chunk_delay = TimeUnit::from_index(self.config.delay_unit_index)
                 .to_duration(self.config.delay_value as u64);
 
+            let start_offset = self
+                .progress
+                .as_ref()
+                .and_then(|progress| {
+                    (progress.bytes_sent < progress.total_bytes).then_some(progress.bytes_sent)
+                })
+                .unwrap_or(0);
+
             let config = FileSendConfig {
                 chunk_mode,
                 include_delimiter: self.config.include_delimiter,
@@ -1364,25 +1390,30 @@ impl FileSenderView {
                 chunk_suffix,
                 chunk_delay,
                 repeat: self.config.repeat,
+                start_offset,
             };
 
             let send_handle = send_file(handle, path, config).await?;
             self.send_handle = Some(send_handle);
+            self.stop_requested = false;
             self.config.is_sending = true;
-            self.progress = None;
+            if start_offset == 0 {
+                self.progress = None;
+            }
         }
         Ok(())
     }
 
     pub fn cancel_sending(&mut self) {
-        if let Some(handle) = self.send_handle.take() {
+        if let Some(handle) = &self.send_handle {
             // Spawn task to cancel - we don't need to wait for it
+            let handle = handle.clone();
             tokio::spawn(async move {
                 handle.cancel().await;
             });
         }
         self.config.is_sending = false;
-        self.progress = None;
+        self.stop_requested = self.send_handle.is_some();
     }
 }
 

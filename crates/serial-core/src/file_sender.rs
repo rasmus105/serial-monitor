@@ -15,7 +15,7 @@ use std::time::Duration;
 use memchr::memmem;
 use strum::{IntoStaticStr, VariantArray};
 use tokio::fs::File;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::{mpsc, watch};
 
 use crate::error::Result;
@@ -71,6 +71,8 @@ pub struct FileSendConfig {
     pub chunk_delay: Duration,
     #[builder(default)]
     pub repeat: bool,
+    #[builder(default)]
+    pub start_offset: u64,
 }
 
 impl Default for FileSendConfig {
@@ -100,6 +102,7 @@ impl FileSendProgress {
 }
 
 /// Handle for controlling an ongoing file send operation
+#[derive(Clone)]
 pub struct FileSendHandle {
     /// Channel to receive progress updates (latest value semantics)
     progress_rx: watch::Receiver<FileSendProgress>,
@@ -134,6 +137,7 @@ pub async fn send_file(
 
     let (progress_tx, progress_rx) = watch::channel(FileSendProgress {
         total_bytes,
+        bytes_sent: config.start_offset.min(total_bytes),
         ..Default::default()
     });
     let (cancel_tx, cancel_rx) = mpsc::channel(1);
@@ -168,12 +172,16 @@ async fn send_file_task(
 ) {
     let mut progress = FileSendProgress {
         total_bytes,
+        bytes_sent: config.start_offset.min(total_bytes),
         ..Default::default()
     };
+    let mut next_start_offset = progress.bytes_sent;
 
     loop {
-        progress.bytes_sent = 0;
+        let start_offset = next_start_offset.min(total_bytes);
+        progress.bytes_sent = start_offset;
         progress.chunks_sent = 0;
+        next_start_offset = 0;
 
         match &config.chunk_mode {
             ChunkMode::Bytes(chunk_size) => {
@@ -181,6 +189,7 @@ async fn send_file_task(
                     &session,
                     &path,
                     *chunk_size,
+                    start_offset,
                     &config,
                     &mut progress,
                     &progress_tx,
@@ -196,6 +205,7 @@ async fn send_file_task(
                     &session,
                     &path,
                     delimiter,
+                    start_offset,
                     &config,
                     &mut progress,
                     &progress_tx,
@@ -209,6 +219,7 @@ async fn send_file_task(
         }
 
         progress.loops_completed += 1;
+        progress.bytes_sent = total_bytes;
 
         if !config.repeat {
             progress.complete = true;
@@ -224,6 +235,7 @@ async fn send_bytes_chunked(
     session: &mpsc::Sender<crate::session::SessionCommand>,
     path: &std::path::Path,
     chunk_size: usize,
+    start_offset: u64,
     config: &FileSendConfig,
     progress: &mut FileSendProgress,
     progress_tx: &watch::Sender<FileSendProgress>,
@@ -239,8 +251,17 @@ async fn send_bytes_chunked(
         }
     };
 
+    if start_offset > 0 {
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(start_offset)).await {
+            progress.error = Some(e.to_string());
+            progress.complete = true;
+            let _ = progress_tx.send(progress.clone());
+            return false;
+        }
+    }
+
     let mut buffer = vec![0u8; chunk_size];
-    let mut bytes_consumed: u64 = 0;
+    let mut bytes_consumed: u64 = start_offset;
 
     loop {
         if cancel_rx.try_recv().is_ok() {
@@ -250,8 +271,16 @@ async fn send_bytes_chunked(
             return false;
         }
 
-        // Read a chunk
-        let n = match file.read(&mut buffer).await {
+        let read = file.read(&mut buffer);
+        let n = tokio::select! {
+            biased;
+            _ = cancel_rx.recv() => {
+                progress.complete = true;
+                progress.error = Some("Cancelled".to_string());
+                let _ = progress_tx.send(progress.clone());
+                return false;
+            }
+            result = read => match result {
             Ok(0) => break, // EOF
             Ok(n) => n,
             Err(e) => {
@@ -260,20 +289,22 @@ async fn send_bytes_chunked(
                 let _ = progress_tx.send(progress.clone());
                 return false;
             }
-        };
+        }};
 
         bytes_consumed += n as u64;
 
         // Add optional suffix
         let chunk = build_chunk(&buffer[..n], config);
 
-        if !send_chunk(session, chunk, progress, progress_tx, bytes_consumed).await {
+        if !send_chunk(session, chunk, progress, progress_tx, cancel_rx, bytes_consumed).await {
             return false;
         }
 
         // Delay between chunks
         if config.chunk_delay > Duration::ZERO {
-            tokio::time::sleep(config.chunk_delay).await;
+            if !sleep_or_cancel(config.chunk_delay, progress, progress_tx, cancel_rx).await {
+                return false;
+            }
         }
     }
 
@@ -289,6 +320,7 @@ async fn send_delimiter_chunked(
     session: &mpsc::Sender<crate::session::SessionCommand>,
     path: &std::path::Path,
     delimiter: &Delimiter,
+    start_offset: u64,
     config: &FileSendConfig,
     progress: &mut FileSendProgress,
     progress_tx: &watch::Sender<FileSendProgress>,
@@ -303,6 +335,15 @@ async fn send_delimiter_chunked(
             return false;
         }
     };
+
+    if start_offset > 0 {
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(start_offset)).await {
+            progress.error = Some(e.to_string());
+            progress.complete = true;
+            let _ = progress_tx.send(progress.clone());
+            return false;
+        }
+    }
 
     let delimiter_bytes = delimiter.as_bytes();
     let finder = memmem::Finder::new(delimiter_bytes);
@@ -319,7 +360,7 @@ async fn send_delimiter_chunked(
     let mut units_in_buffer = 0;
 
     // Track bytes consumed from file (for accurate progress)
-    let mut bytes_consumed: u64 = 0;
+    let mut bytes_consumed: u64 = start_offset;
 
     loop {
         // Check for cancellation
@@ -337,7 +378,16 @@ async fn send_delimiter_chunked(
         let prev_len = pending.len();
         pending.resize(prev_len + STREAM_BUFFER_SIZE, 0);
 
-        let n = match file.read(&mut pending[prev_len..]).await {
+        let read = file.read(&mut pending[prev_len..]);
+        let n = tokio::select! {
+            biased;
+            _ = cancel_rx.recv() => {
+                progress.complete = true;
+                progress.error = Some("Cancelled".to_string());
+                let _ = progress_tx.send(progress.clone());
+                return false;
+            }
+            result = read => match result {
             Ok(0) => {
                 pending.truncate(prev_len);
                 if !pending.is_empty() {
@@ -346,7 +396,9 @@ async fn send_delimiter_chunked(
                 }
                 if !chunk_buffer.is_empty() {
                     let chunk = build_chunk(&chunk_buffer, config);
-                    if !send_chunk(session, chunk, progress, progress_tx, bytes_consumed).await {
+                    if !send_chunk(session, chunk, progress, progress_tx, cancel_rx, bytes_consumed)
+                        .await
+                    {
                         return false;
                     }
                 }
@@ -359,7 +411,7 @@ async fn send_delimiter_chunked(
                 let _ = progress_tx.send(progress.clone());
                 return false;
             }
-        };
+        }};
 
         pending.truncate(prev_len + n);
 
@@ -390,12 +442,16 @@ async fn send_delimiter_chunked(
             if units_in_buffer >= units_per_chunk {
                 let chunk = build_chunk(&chunk_buffer, config);
 
-                if !send_chunk(session, chunk, progress, progress_tx, bytes_consumed).await {
+                if !send_chunk(session, chunk, progress, progress_tx, cancel_rx, bytes_consumed)
+                    .await
+                {
                     return false;
                 }
 
                 if config.chunk_delay > Duration::ZERO {
-                    tokio::time::sleep(config.chunk_delay).await;
+                    if !sleep_or_cancel(config.chunk_delay, progress, progress_tx, cancel_rx).await {
+                        return false;
+                    }
                 }
 
                 chunk_buffer.clear();
@@ -427,17 +483,26 @@ async fn send_chunk(
     chunk: Cow<'_, [u8]>,
     progress: &mut FileSendProgress,
     progress_tx: &watch::Sender<FileSendProgress>,
+    cancel_rx: &mut mpsc::Receiver<()>,
     bytes_consumed: u64,
 ) -> bool {
-    if session
-        .send(SessionCommand::Send(chunk.into_owned()))
-        .await
-        .is_err()
-    {
-        progress.complete = true;
-        progress.error = Some("Session closed".to_string());
-        let _ = progress_tx.send(progress.clone());
-        return false;
+    let command = SessionCommand::Send(chunk.into_owned());
+    tokio::select! {
+        biased;
+        _ = cancel_rx.recv() => {
+            progress.complete = true;
+            progress.error = Some("Cancelled".to_string());
+            let _ = progress_tx.send(progress.clone());
+            return false;
+        }
+        result = session.send(command) => {
+            if result.is_err() {
+                progress.complete = true;
+                progress.error = Some("Session closed".to_string());
+                let _ = progress_tx.send(progress.clone());
+                return false;
+            }
+        }
     }
 
     progress.bytes_sent = bytes_consumed;
@@ -446,4 +511,123 @@ async fn send_chunk(
     let _ = progress_tx.send(progress.clone());
 
     true
+}
+
+async fn sleep_or_cancel(
+    delay: Duration,
+    progress: &mut FileSendProgress,
+    progress_tx: &watch::Sender<FileSendProgress>,
+    cancel_rx: &mut mpsc::Receiver<()>,
+) -> bool {
+    tokio::select! {
+        biased;
+        _ = cancel_rx.recv() => {
+            progress.complete = true;
+            progress.error = Some("Cancelled".to_string());
+            let _ = progress_tx.send(progress.clone());
+            false
+        }
+        _ = tokio::time::sleep(delay) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use tokio::sync::{mpsc, watch};
+
+    use super::*;
+
+    fn temp_file(name: &str, contents: &[u8]) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "serial-monitor-{name}-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn sends_from_start_offset() {
+        let path = temp_file("resume", b"abcdef");
+        let (command_tx, mut command_rx) = mpsc::channel(8);
+        let (progress_tx, progress_rx) = watch::channel(FileSendProgress::default());
+        let (_cancel_tx, cancel_rx) = mpsc::channel(1);
+
+        send_file_task(
+            command_tx,
+            path.clone(),
+            FileSendConfig {
+                chunk_mode: ChunkMode::Bytes(2),
+                chunk_delay: Duration::ZERO,
+                start_offset: 2,
+                ..Default::default()
+            },
+            6,
+            progress_tx,
+            cancel_rx,
+        )
+        .await;
+
+        let sent: Vec<Vec<u8>> = std::iter::from_fn(|| command_rx.try_recv().ok())
+            .filter_map(|command| match command {
+                SessionCommand::Send(data) => Some(data),
+                SessionCommand::Disconnect => None,
+            })
+            .collect();
+
+        assert_eq!(sent, vec![b"cd".to_vec(), b"ef".to_vec()]);
+        let progress = progress_rx.borrow().clone();
+        assert_eq!(progress.bytes_sent, 6);
+        assert_eq!(progress.chunks_sent, 2);
+        assert!(progress.complete);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn cancel_interrupts_chunk_delay_and_preserves_progress() {
+        let path = temp_file("cancel", b"abcdef");
+        let (command_tx, mut command_rx) = mpsc::channel(8);
+        let (progress_tx, mut progress_rx) = watch::channel(FileSendProgress::default());
+        let (cancel_tx, cancel_rx) = mpsc::channel(1);
+
+        let task = tokio::spawn(send_file_task(
+            command_tx,
+            path.clone(),
+            FileSendConfig {
+                chunk_mode: ChunkMode::Bytes(2),
+                chunk_delay: Duration::from_secs(60 * 60),
+                ..Default::default()
+            },
+            6,
+            progress_tx,
+            cancel_rx,
+        ));
+
+        let first = tokio::time::timeout(Duration::from_secs(1), command_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(first, SessionCommand::Send(data) if data == b"ab"));
+
+        cancel_tx.send(()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap();
+
+        progress_rx.changed().await.unwrap();
+        let progress = progress_rx.borrow().clone();
+        assert_eq!(progress.bytes_sent, 2);
+        assert!(progress.complete);
+        assert_eq!(progress.error.as_deref(), Some("Cancelled"));
+
+        let _ = std::fs::remove_file(path);
+    }
 }

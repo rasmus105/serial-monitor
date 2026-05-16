@@ -79,7 +79,7 @@ pub fn handle_config_key<T: 'static>(
             }
             ConfigKeyResult::Handled
         }
-        KeyCode::Char('h') | KeyCode::Left => {
+        KeyCode::Char('h') | KeyCode::Left if !has_ctrl => {
             if let Some(field) = nav.current_field(sections, config) {
                 if matches!(field.kind, FieldKind::Toggle) {
                     let _ = nav.toggle_current(sections, config);
@@ -91,7 +91,7 @@ pub fn handle_config_key<T: 'static>(
             }
             ConfigKeyResult::Handled
         }
-        KeyCode::Char('l') | KeyCode::Right => {
+        KeyCode::Char('l') | KeyCode::Right if !has_ctrl => {
             if let Some(field) = nav.current_field(sections, config) {
                 if matches!(field.kind, FieldKind::Toggle) {
                     let _ = nav.toggle_current(sections, config);

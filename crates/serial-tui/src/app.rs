@@ -984,9 +984,11 @@ impl App {
                         self.command_input.clear();
                         return;
                     }
-                    // Ctrl+h moves focus left (to Main panel)
-                    KeyCode::Char('h')
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                    // Ctrl+h moves focus left (to Main panel). Some terminals report
+                    // Ctrl+h as Backspace, so handle both outside input modes.
+                    KeyCode::Char('h') | KeyCode::Backspace
+                        if (key.modifiers.contains(KeyModifiers::CONTROL)
+                            || matches!(key.code, KeyCode::Backspace))
                             && !self.is_input_mode() =>
                     {
                         // Close dropdowns when switching focus
